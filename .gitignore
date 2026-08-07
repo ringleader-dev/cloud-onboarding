@@ -1,0 +1,11 @@
+# Terraform working files
+**/.terraform/
+**/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Real variable values (keep only the *.example files)
+terraform.tfvars
+*.auto.tfvars

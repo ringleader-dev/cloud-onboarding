@@ -1,0 +1,256 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Ringleader AWS onboarding (OIDC federation, keyless). Creates an IAM OIDC identity
+  provider trusting Ringleader's per-org issuer, an IAM role Ringleader assumes via
+  AssumeRoleWithWebIdentity (trust pinned to your org's aud AND sub, permissions limited
+  to the EC2 workstation lifecycle), and optionally a public-subnet landing-pad network.
+
+# ---------------------------------------------------------------------------------------
+# NOTE ON THE TWO CONDITION KEYS. CloudFormation cannot build an object KEY from a
+# parameter, and the IAM trust-policy condition keys are "<issuer-host+path>:aud" and
+# ":sub" -- which embed your org. So this template carries the placeholder token
+# __OIDC_PROVIDER__ in exactly those two keys, and the deploy wrapper (deploy.sh) does a
+# single text substitution of it with your issuer host+path (e.g.
+# oidc-app.ringleader.dev/org/<org-id>) before `aws cloudformation deploy`. If you deploy by
+# hand, replace __OIDC_PROVIDER__ first. Everything else is a real parameter.
+# ---------------------------------------------------------------------------------------
+
+Parameters:
+  IssuerUrl:
+    Type: String
+    Description: >-
+      Your org-specific issuer: <ringleader-issuer-origin>/org/<org-id>, e.g.
+      https://oidc-app.ringleader.dev/org/<org-id>. This is the OIDC provider Url and
+      the assertion's iss claim.
+    AllowedPattern: "^https://[a-zA-Z0-9.-]+/org/[0-9a-f-]{36}$"
+
+  Audience:
+    Type: String
+    Description: >-
+      The OIDC client id (the assertion's aud claim): <IssuerUrl>/aws.
+    AllowedPattern: "^https://[a-zA-Z0-9.-]+/org/[0-9a-f-]{36}/aws$"
+
+  Subject:
+    Type: String
+    Description: "The assertion's sub claim: org:<org-id>."
+    AllowedPattern: "^org:[0-9a-f-]{36}$"
+
+  # HARDCODED DEFAULT, and deliberately safe to let go stale. Creating an IAM OIDC provider
+  # requires a ThumbprintList, but since 2023 AWS validates an IdP served from a well-known
+  # public CA against its own trust store and IGNORES this value -- so onboarding still
+  # succeeds if Ringleader's issuer moves to a different CA. deploy.sh always overrides it
+  # with the value it computes from the live TLS chain, so this default is reached only by a
+  # by-hand deploy that passes no Thumbprint. See README.md -> "About the Thumbprint default"
+  # for how to compute your own.
+  Thumbprint:
+    Type: String
+    Default: "08745487e891c19e3078c1f2a07e452950ef36f6"
+    Description: >-
+      SHA-1 thumbprint of the CA at the top of the issuer's TLS chain. AWS ignores it for an
+      IdP served from a well-known public CA (Ringleader's issuer is), but the API requires
+      the field. deploy.sh recomputes it from the live chain; this default is Google Trust
+      Services Root R1, Ringleader's issuer CA at the time of writing.
+    AllowedPattern: "^[0-9a-fA-F]{40}$"
+
+  RoleName:
+    Type: String
+    Default: "ringleader-workstations"
+    Description: "Name of the IAM role Ringleader assumes. Its ARN is what you hand back."
+
+  AllowedRegion:
+    Type: String
+    Default: ""
+    Description: >-
+      Optional. If set, the role may only act in this region (aws:RequestedRegion). Empty
+      places no region condition (the account is the boundary).
+
+  CreateNetwork:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: "Create a VPC + public subnet + internet gateway + security group landing pad."
+
+  VpcCidr:
+    Type: String
+    Default: "10.60.0.0/16"
+
+  SubnetCidr:
+    Type: String
+    Default: "10.60.0.0/20"
+
+  SshSourceCidr:
+    Type: String
+    Default: ""
+    Description: >-
+      A single CIDR allowed to SSH to workstations (when CreateNetwork=true). Empty opens
+      no inbound rule (private reach only). rl shell/tmux/port-forwards all dial the
+      workstation on 22 directly -- there is no bastion.
+
+Conditions:
+  HasRegionCondition: !Not [!Equals [!Ref AllowedRegion, ""]]
+  WantNetwork: !Equals [!Ref CreateNetwork, "true"]
+  WantSsh: !And
+    - !Condition WantNetwork
+    - !Not [!Equals [!Ref SshSourceCidr, ""]]
+
+Resources:
+  RingleaderOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: !Ref IssuerUrl
+      ClientIdList:
+        - !Ref Audience
+      ThumbprintList:
+        - !Ref Thumbprint
+
+  RingleaderRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      Description: "Least-privilege role Ringleader federates into to manage workstation EC2 instances."
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: RingleaderOrgFederation
+            Effect: Allow
+            Principal:
+              Federated: !Ref RingleaderOidcProvider
+            Action: "sts:AssumeRoleWithWebIdentity"
+            Condition:
+              StringEquals:
+                # deploy.sh replaces __OIDC_PROVIDER__ with your issuer host+path.
+                "__OIDC_PROVIDER__:aud": !Ref Audience
+                "__OIDC_PROVIDER__:sub": !Ref Subject
+      Policies:
+        - PolicyName: ringleader-workstations
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: Ec2Describe
+                Effect: Allow
+                Action:
+                  - "ec2:DescribeInstances"
+                  - "ec2:DescribeInstanceStatus"
+                  - "ec2:DescribeInstanceTypes"
+                  - "ec2:DescribeImages"
+                  - "ec2:DescribeSubnets"
+                  - "ec2:DescribeSecurityGroups"
+                  - "ec2:DescribeVpcs"
+                  - "ec2:DescribeVolumes"
+                  - "ec2:DescribeNetworkInterfaces"
+                  - "ec2:DescribeTags"
+                  - "ec2:DescribeAvailabilityZones"
+                Resource: "*"
+              - Sid: Ec2Lifecycle
+                Effect: Allow
+                Action:
+                  - "ec2:RunInstances"
+                  - "ec2:TerminateInstances"
+                  - "ec2:StartInstances"
+                  - "ec2:StopInstances"
+                  - "ec2:CreateTags"
+                  - "ec2:DeleteTags"
+                Resource: "*"
+                Condition: !If
+                  - HasRegionCondition
+                  - StringEquals:
+                      "aws:RequestedRegion": !Ref AllowedRegion
+                  - !Ref AWS::NoValue
+              - Sid: SsmPublicParameterRead
+                Effect: Allow
+                Action:
+                  - "ssm:GetParameters"
+                  - "ssm:GetParameter"
+                Resource: "arn:aws:ssm:*::parameter/aws/service/*"
+
+  # --- Optional landing-pad network -----------------------------------------------------
+  Vpc:
+    Type: AWS::EC2::VPC
+    Condition: WantNetwork
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: ringleader-workstations }]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Condition: WantNetwork
+    Properties:
+      Tags: [{ Key: Name, Value: ringleader-workstations }]
+
+  VpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Condition: WantNetwork
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  Subnet:
+    Type: AWS::EC2::Subnet
+    Condition: WantNetwork
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref SubnetCidr
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: ringleader-workstations }]
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Condition: WantNetwork
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: ringleader-workstations }]
+
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    Condition: WantNetwork
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: WantNetwork
+    Properties:
+      SubnetId: !Ref Subnet
+      RouteTableId: !Ref RouteTable
+
+  WorkstationsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: WantNetwork
+    Properties:
+      GroupName: ringleader-workstations
+      GroupDescription: "Ringleader workstations: egress out; inbound SSH only from SshSourceCidr."
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: "0.0.0.0/0"
+          Description: "All egress (a workstation reaching the Ringleader control plane)."
+      SecurityGroupIngress: !If
+        - WantSsh
+        - - IpProtocol: tcp
+            FromPort: 22
+            ToPort: 22
+            CidrIp: !Ref SshSourceCidr
+            Description: "SSH from your ranges."
+        - !Ref AWS::NoValue
+      Tags: [{ Key: Name, Value: ringleader-workstations }]
+
+Outputs:
+  TargetRoleArn:
+    Description: "Hand back to Ringleader: spec.aws.targetRoleArn on the CloudAccount."
+    Value: !GetAtt RingleaderRole.Arn
+  OidcProviderArn:
+    Description: "The IAM OIDC provider ARN (for your reference)."
+    Value: !Ref RingleaderOidcProvider
+  SubnetId:
+    Condition: WantNetwork
+    Description: "providerConfig.aws.subnetId."
+    Value: !Ref Subnet
+  SecurityGroupId:
+    Condition: WantNetwork
+    Description: "providerConfig.aws.securityGroupIds."
+    Value: !GetAtt WorkstationsSecurityGroup.GroupId

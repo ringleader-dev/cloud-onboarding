@@ -1,0 +1,20 @@
+# Copy to terraform.tfvars and edit. Ringleader gives you issuer_url and org_uid.
+subscription_id       = "00000000-0000-0000-0000-000000000000"
+resource_group_name   = "ringleader-workstations"
+ringleader_issuer_url = "https://oidc-app.ringleader.dev"
+org_uid               = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
+
+# Set true only if you do NOT already have a subnet for the VMs. On Azure a workstation has NO
+# public IP unless you ask for one, so without a NAT gateway it has no egress and will never
+# come up -- this landing pad provides it:
+# create_network = true
+
+# WHO CAN SSH IN. Ringleader has no bastion: `rl shell`, tmux, port-forwards and VS Code Web all
+# dial the workstation on TCP 22. With this empty, workstations come up and report Ready but
+# NOBODY can open them -- correct only if you reach the VNet privately
+# (VPN / ExpressRoute / peering).
+# ssh_source_ranges = ["203.0.113.0/24"]   # the CIDRs your engineers connect from
+
+# Let Ringleader provision a per-user managed identity per workstation and assign roles to it.
+# Adds Microsoft.Authorization/roleAssignments/write, which built-in Contributor does NOT have.
+# enable_workstation_identities = true

@@ -1,0 +1,18 @@
+# Copy to terraform.tfvars and edit. Ringleader gives you issuer_url and org_uid.
+project_id            = "my-company-dev-workstations"
+ringleader_issuer_url = "https://oidc-app.ringleader.dev"
+org_uid               = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
+
+# Set true only if you do NOT already have a subnet for the VMs:
+# create_network = true
+
+# WHO CAN SSH IN. Ringleader has no bastion: `rl shell`, tmux, port-forwards and VS Code Web all
+# dial the workstation on TCP 22. With this empty, workstations come up and report Ready but
+# NOBODY can open them -- correct only if you reach the subnet privately
+# (VPN / Interconnect / peering).
+# ssh_source_ranges = ["203.0.113.0/24"]   # the CIDRs your engineers connect from
+
+# Let Ringleader provision a per-user service account per workstation and bind roles to it.
+# WARNING: grants roles/resourcemanager.projectIamAdmin, which can grant ANY role in this project
+# to ANY principal (including roles/owner to itself). Dedicated projects only.
+# enable_workstation_identities = true

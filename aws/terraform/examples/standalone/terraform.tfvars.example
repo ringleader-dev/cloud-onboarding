@@ -1,0 +1,14 @@
+# Copy to terraform.tfvars and fill in. The two required values come from Ringleader.
+
+# Ringleader's OIDC issuer origin (no trailing slash), from Ringleader.
+ringleader_issuer_url = "https://oidc-app.ringleader.dev"
+
+# Your Ringleader organization id (a lowercase UUID), from Ringleader.
+org_uid = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
+
+# Region for the landing-pad network and your workstations.
+region = "us-east-1"
+
+# CIDRs allowed to SSH to workstations. Empty opens nothing (private reach only).
+# Example: your office / VPN egress. 0.0.0.0/0 is accepted but is a decision.
+ssh_source_ranges = []
