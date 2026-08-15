@@ -1,9 +1,14 @@
 # GCP onboarding — Terraform module
 
 A reusable module that creates, in one of your projects: a least-privilege
-service account, two predefined Compute roles, and a **Workload Identity Pool +
+service account, three predefined roles, and a **Workload Identity Pool +
 OIDC provider** trusting Ringleader's per-org issuer — plus, optionally, a
 network landing pad (egress via Cloud NAT; inbound SSH only from the CIDRs you name).
+
+The three roles are `roles/compute.instanceAdmin.v1`, `roles/compute.networkUser` and
+`roles/iam.serviceAccountUser`. The last one is required, not optional: every workstation
+VM runs as a service account (its own, or the project default compute one) and attaching
+one needs `actAs`. See [`../README.md`](../README.md#every-workstation-runs-as-a-service-account).
 
 It declares **no provider block**, so you can reference it from your own
 Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standalone/).
@@ -19,7 +24,7 @@ Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standal
 | `sa_display_name` | `Ringleader Workstations` | Display name of the onboarding SA. |
 | `pool_id` | `ringleader` | WIF pool id. |
 | `provider_id` | `oidc` | WIF provider id. |
-| `enable_workstation_identities` | `false` | Let Ringleader provision a per-user SA and bind roles to it. **Grants `roles/resourcemanager.projectIamAdmin` — which can grant any role in the project to anyone, including `roles/owner` to itself.** Dedicated projects only. |
+| `enable_workstation_identities` | `false` | Let Ringleader **create** a per-user SA and bind roles to it (workstations run as a service account either way). **Grants `roles/resourcemanager.projectIamAdmin` — which can grant any role in the project to anyone, including `roles/owner` to itself.** Dedicated projects only. |
 | `create_network` | `false` | Also create a VPC + subnet + Cloud NAT (egress out; inbound only via `ssh_source_ranges`). |
 | `ssh_source_ranges` | `[]` | CIDRs allowed to reach workstations on **TCP 22**. Empty creates **no inbound rule** — workstations come up but nobody can open a shell on them (there is no bastion). Set it unless you reach the subnet privately. |
 | `workstation_network_tag` | `ringleader-workstation` | Network tag the inbound-SSH rule targets; put the same tag on your workstations. |

@@ -14,22 +14,46 @@ Workload Identity Pool + OIDC provider in YOUR project
   |  admits ONLY sub = org:<org-id>  +  the per-org audience
   v
 ringleader-workstations@<your-project>   (the service account you create)
-  |  roles/compute.instanceAdmin.v1  +  roles/compute.networkUser   (project-scoped)
+  |  roles/compute.instanceAdmin.v1  +  roles/compute.networkUser
+  |  +  roles/iam.serviceAccountUser                               (project-scoped)
   v
 creates / manages / deletes workstation VMs in YOUR project
 ```
 
 - **Keyless.** No service-account key is created. Ringleader exchanges its signed token
   for a short-lived federated token and impersonates your service account, bounded by
-  the two IAM grants below. Delete the pool and access stops.
+  the three IAM grants below. Delete the pool and access stops.
 - **Pinned to your org.** The provider trusts Ringleader's issuer **and** requires the
   token's subject to be exactly `org:<org-id>` — never a pool-wide wildcard. A
   token minted for any other customer is refused at the token exchange.
 - **Least privilege.** The onboarding service account holds only
-  `roles/compute.instanceAdmin.v1` (instances and disks) and `roles/compute.networkUser`
-  (attach a NIC to your subnets). No `owner`, `editor`, IAM, billing, or storage access.
-  The VMs it boots have **no attached service account** unless an admin explicitly
-  declares a runtime identity (see below).
+  `roles/compute.instanceAdmin.v1` (instances and disks), `roles/compute.networkUser`
+  (attach a NIC to your subnets) and `roles/iam.serviceAccountUser` (attach a service
+  account to a VM it creates — see the next section). No `owner`, `editor`, project-IAM,
+  billing, or storage access.
+
+## Every workstation runs as a service account
+
+A GCE workstation proves who it is to Ringleader with a **Google-signed instance identity
+assertion**, and the metadata server mints one only for a VM that **has an attached
+service account**. So Ringleader attaches one to every workstation it creates: the
+service account the workstation declares, or — when it declares none — this project's
+**default compute service account**. Attaching one requires `iam.serviceAccounts.actAs`
+on it, which is why `roles/iam.serviceAccountUser` is in the base grant above and not
+optional: without it the very first create fails with a `403` and no workstation in this
+project can boot.
+
+Two consequences worth acting on, both reasons to give Ringleader a **project of its own**:
+
+- **`roles/iam.serviceAccountUser` is project-scoped**, so it permits acting as any
+  service account in this project. In a project that also holds a powerful service
+  account, this reaches it.
+- **Check what your default compute service account holds.** Projects created before
+  Google changed the default have `roles/editor` on it, so a workstation that declares no
+  identity of its own would run with project editor. Remove that binding if you do not
+  want it, or give workstations a purpose-made service account with **no roles at all**
+  and name it on the workstation (`providerConfig.gcp.serviceAccount`) — Ringleader
+  attaches that one instead, and needs nothing beyond the `actAs` it already has.
 
 ## Before you start
 
@@ -91,22 +115,29 @@ the workstations (`providerConfig.gcp.networkTags: [ringleader-workstation]`).
 Leave `ssh_source_ranges` empty **only** if you reach the subnet privately (VPN /
 Interconnect / peering).
 
-## Optional: workstations that run AS an identity
+## Optional: let Ringleader create the per-user identities
 
-Ringleader can boot each workstation as a dedicated per-user service account and bind
-roles to it. This is **off by default** because it is not free:
+Ringleader can **provision** a dedicated service account per workstation user and **bind
+roles** to it, so one workstation can (say) read one bucket. Every workstation already
+runs as a service account without this (above) — what this adds is Ringleader creating
+those accounts and granting them roles for you. It is **off by default** because it is
+not free:
 
 | capability | role it needs |
 |---|---|
 | create/delete the per-user SA | `roles/iam.serviceAccountAdmin` |
 | bind roles to it on the project | `roles/resourcemanager.projectIamAdmin` |
-| attach it to a VM (`actAs`) | `roles/iam.serviceAccountUser` |
 
 **`roles/resourcemanager.projectIamAdmin` can grant any role in the project to any
 principal — including `roles/owner` to itself.** That is inherent: setting a role
 binding *is* project-IAM administration. Enable it (`enable_workstation_identities =
 true`) **only in a project dedicated to Ringleader workstations**. Left off, the feature
 fails closed with a `403`.
+
+You can get the same end result without granting either: create the service accounts and
+their role bindings yourself, and name one on the workstation
+(`providerConfig.gcp.serviceAccount`). Ringleader attaches an account it did not create
+using the `actAs` it already holds.
 
 ## What you return to Ringleader
 

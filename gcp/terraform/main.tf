@@ -2,7 +2,7 @@
 #
 # Creates, in one of your projects:
 #   - a dedicated least-privilege service account Ringleader acts as,
-#   - two Google-maintained predefined Compute roles on the project,
+#   - three Google-maintained predefined roles on the project,
 #   - a Workload Identity Pool + OIDC provider trusting Ringleader's per-org
 #     issuer, pinned to your org's subject, and
 #   - the workloadIdentityUser binding that lets only that subject impersonate
@@ -80,7 +80,32 @@ resource "google_service_account" "onboarding" {
   depends_on = [google_project_service.iam]
 }
 
-# 2. Two Google-maintained predefined roles, project-scoped -- nothing broader.
+# 2. Three Google-maintained predefined roles, project-scoped -- nothing broader.
+#
+# instanceAdmin.v1 and networkUser are the VM lifecycle itself: create, boot, stop, start and
+# delete instances and their disks, and attach a NIC to your subnets.
+#
+# serviceAccountUser is the third because EVERY workstation VM runs AS some service account, and
+# attaching one to an instance requires iam.serviceAccounts.actAs on it -- a permission neither of
+# the two Compute roles carries. This is NOT the optional runtime-identity feature below: a GCE
+# workstation authenticates to Ringleader with a Google-signed INSTANCE IDENTITY assertion, and the
+# metadata server mints that only for a VM that HAS an attached service account (it is served under
+# service-accounts/default/identity). So Ringleader attaches one on every create -- the
+# workstation's own declared service account, or, when it declares none, this project's DEFAULT
+# COMPUTE service account. Without this role the very first create fails with a 403 on actAs and no
+# workstation in this project can boot.
+#
+# It is project-scoped, so it permits acting as ANY service account in this project -- and a VM
+# running as a service account can use everything that account can. That is exactly why this
+# onboarding asks for a project DEDICATED to Ringleader workstations: in a shared project this
+# reaches whatever else lives there. Two things worth doing in that project:
+#
+#   - check what your default compute service account holds. Projects created before Google
+#     changed the default get roles/editor on it, so a workstation that declares no identity of
+#     its own would inherit project editor. Remove that binding if you do not want it.
+#   - or give workstations a purpose-made service account with no roles at all, per workstation or
+#     fleet-wide (providerConfig.gcp.serviceAccount). Ringleader attaches it instead of the
+#     default; it still needs actAs, which this role grants.
 resource "google_project_iam_member" "instance_admin" {
   project = var.project_id
   role    = "roles/compute.instanceAdmin.v1"
@@ -97,16 +122,36 @@ resource "google_project_iam_member" "network_user" {
   depends_on = [google_project_service.cloudresourcemanager]
 }
 
+resource "google_project_iam_member" "service_account_user" {
+  project = var.project_id
+  role    = "roles/iam.serviceAccountUser"
+  member  = "serviceAccount:${google_service_account.onboarding.email}"
+
+  depends_on = [google_project_service.cloudresourcemanager]
+}
+
+# This grant used to be part of enable_workstation_identities, which is off by default -- so a
+# project onboarded on the documented defaults could not boot a workstation at all. It is now
+# unconditional, and this block carries the existing binding over rather than destroying and
+# recreating it (the two addresses are the same project/role/member, and an arbitrary
+# destroy-after-create ordering would leave the project with no binding at all).
+moved {
+  from = google_project_iam_member.workstation_sa_user[0]
+  to   = google_project_iam_member.service_account_user
+}
+
 # 2b. OPTIONAL: per-workstation RUNTIME identities (off by default).
 #
-# Ringleader can boot each workstation RUNNING AS a dedicated service account it provisions for
-# that user, and bind roles to it (so it can, say, read one bucket). That feature needs three
-# capabilities the two roles above deliberately do NOT grant, so with this off it fails closed
-# with a 403 rather than doing something surprising:
+# Every workstation already runs as a service account (see 2 above). What this adds is letting
+# Ringleader PROVISION one per workstation user and BIND ROLES to it, so a workstation can, say,
+# read one bucket. That needs two capabilities the roles above deliberately do NOT grant, so with
+# this off it fails closed with a 403 rather than doing something surprising:
 #
 #   - create/delete the per-user SA        -> roles/iam.serviceAccountAdmin
 #   - bind roles to it on the project      -> roles/resourcemanager.projectIamAdmin
-#   - attach it to a VM (actAs)            -> roles/iam.serviceAccountUser
+#
+# (Attaching a service account to a VM -- actAs -- is roles/iam.serviceAccountUser, granted
+# unconditionally above because no workstation can boot without it.)
 #
 # READ THIS BEFORE TURNING IT ON. `roles/resourcemanager.projectIamAdmin` lets the holder grant ANY
 # role in this project to ANY principal -- including granting itself `roles/owner`. It is therefore
@@ -114,8 +159,10 @@ resource "google_project_iam_member" "network_user" {
 # needs it because setting a role binding on a project IS project-IAM administration.
 #
 # So enable this ONLY in a project dedicated to Ringleader workstations, never in a project that
-# holds anything else you care about. If you want runtime identities without granting it, ask
-# Ringleader about pre-creating the service accounts yourself -- the VM will still run as them.
+# holds anything else you care about. If you want runtime identities without granting it, create
+# the service accounts and their role bindings yourself and name them on the workstation
+# (providerConfig.gcp.serviceAccount) -- the VM will still run as them, and actAs above is all
+# Ringleader needs to attach one it did not create.
 resource "google_project_iam_member" "workstation_sa_admin" {
   count   = var.enable_workstation_identities ? 1 : 0
   project = var.project_id
@@ -129,15 +176,6 @@ resource "google_project_iam_member" "workstation_project_iam_admin" {
   count   = var.enable_workstation_identities ? 1 : 0
   project = var.project_id
   role    = "roles/resourcemanager.projectIamAdmin"
-  member  = "serviceAccount:${google_service_account.onboarding.email}"
-
-  depends_on = [google_project_service.cloudresourcemanager]
-}
-
-resource "google_project_iam_member" "workstation_sa_user" {
-  count   = var.enable_workstation_identities ? 1 : 0
-  project = var.project_id
-  role    = "roles/iam.serviceAccountUser"
   member  = "serviceAccount:${google_service_account.onboarding.email}"
 
   depends_on = [google_project_service.cloudresourcemanager]

@@ -38,7 +38,7 @@ account. More on the trust model: <https://docs.ringleader.dev/cloud-onboarding/
 
 | Cloud | Boundary | What you create | Assets |
 |---|---|---|---|
-| **[Google Cloud](gcp/)** | one **project** | a least-privilege **service account** + two Compute roles + a **Workload Identity Federation** trust | [`terraform/`](gcp/terraform/), [`gcloud/`](gcp/gcloud/) |
+| **[Google Cloud](gcp/)** | one **project** | a least-privilege **service account** + three project roles + a **Workload Identity Federation** trust | [`terraform/`](gcp/terraform/), [`gcloud/`](gcp/gcloud/) |
 | **[Microsoft Azure](azure/)** | one **resource group** | an Entra app + service principal, a **custom role narrower than Contributor**, and a **federated identity credential** | [`terraform/`](azure/terraform/), [`arm/`](azure/arm/) |
 | **[AWS](aws/)** | one **account** (optionally one **region**) | an **IAM OIDC provider** + a least-privilege **IAM role**, assumed keyless via `AssumeRoleWithWebIdentity` | [`terraform/`](aws/terraform/), [`cloudformation/`](aws/cloudformation/) |
 
@@ -51,16 +51,27 @@ provider's resource name, an application client id, a tenant id are all public
 identifiers. Naming a principal grants nothing — the authority is the short-lived token
 Ringleader signs, whose subject your trust configuration pins to your organization.
 
-## Workstations hold no cloud identity by default
+## What a workstation itself can do in your cloud
 
-The VMs Ringleader boots have **no** attached service account or managed identity
-unless an administrator explicitly declares a runtime identity. Without that, nothing
-inside a workstation can act as any cloud principal.
+On **Azure** and **AWS** a workstation VM carries no managed identity and no instance
+profile unless an administrator declares one: nothing inside it can act as a cloud
+principal.
 
-Granting that ability costs real permissions (on GCP, the power to administer project
-IAM; on Azure, the power to create role assignments). Each module therefore leaves it
-**off** and the feature fails closed with a `403` rather than quietly working — see
-`enable_workstation_identities` in each cloud's module, and read its warning before
+**GCP is different, and by necessity.** A GCE workstation proves its identity to
+Ringleader with a Google-signed instance identity assertion, which the metadata server
+mints only for a VM that has an **attached service account** — so every GCP workstation
+runs as one: the account it declares, or the project's **default compute service
+account**. That is why the GCP module's base grant includes
+`roles/iam.serviceAccountUser`, and why it asks for a project dedicated to Ringleader
+workstations. Check what your default compute service account holds (older projects give
+it `roles/editor`), or give workstations a role-less service account of their own — see
+[`gcp/README.md`](gcp/README.md#every-workstation-runs-as-a-service-account).
+
+Letting Ringleader **create** those per-user identities and **bind roles** to them is a
+separate, optional step, and it costs real permissions (on GCP, the power to administer
+project IAM; on Azure, the power to create role assignments). Each module therefore
+leaves it **off** and the feature fails closed with a `403` rather than quietly working —
+see `enable_workstation_identities` in each cloud's module, and read its warning before
 turning it on.
 
 ## Reaching your workstations

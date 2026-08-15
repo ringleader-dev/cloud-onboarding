@@ -54,3 +54,11 @@ module "ringleader" {
 The custom role is deployed straight from `../arm/azuredeploy.json` (via
 `azurerm_resource_group_template_deployment`), so the action list lives in exactly
 one place — edit the ARM template and both the Terraform and `deploy.sh` paths follow.
+
+Azure stores its own **normalized** copy of that template and echoes it back, and this
+resource compares the echo against the file — so anything Azure rewrites becomes a diff
+on every `plan`, forever. The template is therefore authored in the form Azure stores;
+[`../arm/README.md`](../arm/README.md#editing-this-template) has the three rules to keep
+in mind when editing it. A plan against an unchanged configuration should report **no
+changes**; if it reports a change to `template_content` or `parameters_content`, the
+template has drifted from Azure's normal form, not from your infrastructure.

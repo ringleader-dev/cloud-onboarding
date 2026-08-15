@@ -9,8 +9,8 @@ already exists, so run it once, against a project with no Ringleader network yet
 
 | Script | What it does |
 |---|---|
-| [`onboard.sh`](onboard.sh) | Creates the onboarding SA, grants the two Compute roles, and creates a Workload Identity Pool + OIDC provider trusting Ringleader's issuer for your org, plus the `workloadIdentityUser` binding. |
-| [`verify.sh`](verify.sh) | Prints the SA's project roles, the provider's issuer/audience/condition, and the impersonation binding. |
+| [`onboard.sh`](onboard.sh) | Creates the onboarding SA, grants the three project roles, and creates a Workload Identity Pool + OIDC provider trusting Ringleader's issuer for your org, plus the `workloadIdentityUser` binding. |
+| [`verify.sh`](verify.sh) | Checks the three required roles are present, then prints the provider's issuer/audience/condition and the impersonation binding. |
 | [`revoke.sh`](revoke.sh) | Deletes the WIF pool (cuts federation; default) or also deletes the SA (`FULL=1`). |
 | [`network-landing-pad.sh`](network-landing-pad.sh) | Optional: a minimal VPC + subnet + Cloud NAT, plus an inbound-SSH rule if you set `SSH_RANGES`; prints the subnet self-link. |
 
