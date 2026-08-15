@@ -12,7 +12,9 @@ org_uid               = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
 # (VPN / Interconnect / peering).
 # ssh_source_ranges = ["203.0.113.0/24"]   # the CIDRs your engineers connect from
 
-# Let Ringleader provision a per-user service account per workstation and bind roles to it.
+# Let Ringleader CREATE a service account per workstation user and bind roles to it. Not needed to
+# run workstations as an identity -- every workstation already runs as one (the project's default
+# compute service account, unless it names its own).
 # WARNING: grants roles/resourcemanager.projectIamAdmin, which can grant ANY role in this project
 # to ANY principal (including roles/owner to itself). Dedicated projects only.
 # enable_workstation_identities = true

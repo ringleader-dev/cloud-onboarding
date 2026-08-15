@@ -57,6 +57,22 @@ resource "azuread_application_federated_identity_credential" "ringleader" {
 # templatefile() would wrongly try to interpret as Terraform `${...}`. It has no Terraform
 # interpolation, so file() passes it through verbatim. Resource-group scoped, matching
 # `az deployment group create`.
+#
+# WHY THE TEMPLATE LOOKS SPARE: Azure stores its OWN normalized copy of a template and echoes THAT
+# back, and this resource compares the echo against the file. Anything Azure rewrites therefore
+# shows up as a permanent diff -- `terraform plan` reporting changes on every run, forever, on a
+# step nobody touched -- so azuredeploy.json is authored in the form Azure stores. Three rules,
+# and breaking one costs no apply and no error, only a config that can never be quiet again:
+#
+#   1. no top-level `metadata` block           (Azure drops it; the prose lives in ../arm/README.md)
+#   2. no `outputs` block                      (Azure rewrites the output `type` casing)
+#   3. no parameter with a defaultValue that this resource does not pass explicitly -- Azure
+#      materializes the default into the stored parameters while the file leaves it unset. Hence
+#      the role definition's GUID is a template VARIABLE, not a parameter.
+#
+# Deliberately NO `lifecycle { ignore_changes = [template_content, ...] }`: that would silence the
+# noise by also silencing a real edit to the action list, so bumping the module version would
+# quietly not re-deploy the role.
 resource "azurerm_resource_group_template_deployment" "role" {
   name                = "ringleader-onboarding"
   resource_group_name = var.resource_group_name

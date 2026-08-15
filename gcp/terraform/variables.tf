@@ -59,8 +59,14 @@ variable "enable_workstation_identities" {
   type        = bool
   default     = false
   description = <<-EOT
-    Let Ringleader provision a dedicated service account per workstation user and bind roles to it
-    (a workstation that runs AS an identity, e.g. to read one bucket). Off by default.
+    Let Ringleader PROVISION a dedicated service account per workstation user and BIND ROLES to it
+    (e.g. so one workstation can read one bucket). Off by default.
+
+    This is not what makes a workstation run as an identity -- every workstation already does, on
+    the project's default compute service account. It is only about Ringleader creating those
+    accounts and granting them roles for you. You can get the same result without this by creating
+    the service accounts yourself and naming one on the workstation
+    (providerConfig.gcp.serviceAccount).
 
     SECURITY: this grants roles/resourcemanager.projectIamAdmin, which can grant ANY role in this
     project to ANY principal -- including roles/owner to itself. That is inherent (setting a role

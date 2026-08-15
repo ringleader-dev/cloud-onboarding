@@ -1,9 +1,6 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
-  "metadata": {
-    "description": "Ringleader Azure onboarding: a custom least-privilege role and its assignment, scoped to this resource group. Deploy at resource-group scope. The Entra app + service principal + the OIDC federated credential are created separately (see deploy.sh, or the Terraform module which deploys THIS file); pass the service-principal OBJECT id as principalId. This template is the single source of the action list."
-  },
   "parameters": {
     "principalId": {
       "type": "string",
@@ -18,13 +15,6 @@
         "description": "Display name of the custom role."
       }
     },
-    "roleDefinitionGuid": {
-      "type": "string",
-      "defaultValue": "[guid(resourceGroup().id, parameters('roleName'))]",
-      "metadata": {
-        "description": "Stable GUID name for the custom role definition. Leave as default unless you need a specific id."
-      }
-    },
     "enableWorkstationIdentities": {
       "type": "bool",
       "defaultValue": false,
@@ -34,6 +24,7 @@
     }
   },
   "variables": {
+    "roleDefinitionGuid": "[guid(resourceGroup().id, parameters('roleName'))]",
     "actions": [
       "Microsoft.Compute/virtualMachines/read",
       "Microsoft.Compute/virtualMachines/write",
@@ -62,7 +53,7 @@
       "Microsoft.Resources/subscriptions/resourceGroups/read",
       "Microsoft.Resources/tags/write"
     ],
-    "roleAssignmentGuid": "[guid(resourceGroup().id, parameters('principalId'), parameters('roleDefinitionGuid'))]",
+    "roleAssignmentGuid": "[guid(resourceGroup().id, parameters('principalId'), variables('roleDefinitionGuid'))]",
     "identityActions": [
       "Microsoft.ManagedIdentity/userAssignedIdentities/read",
       "Microsoft.ManagedIdentity/userAssignedIdentities/write",
@@ -79,7 +70,7 @@
     {
       "type": "Microsoft.Authorization/roleDefinitions",
       "apiVersion": "2022-04-01",
-      "name": "[parameters('roleDefinitionGuid')]",
+      "name": "[variables('roleDefinitionGuid')]",
       "properties": {
         "roleName": "[parameters('roleName')]",
         "description": "Least-privilege role for Ringleader workstation VMs.",
@@ -102,19 +93,13 @@
       "apiVersion": "2022-04-01",
       "name": "[variables('roleAssignmentGuid')]",
       "dependsOn": [
-        "[resourceId('Microsoft.Authorization/roleDefinitions', parameters('roleDefinitionGuid'))]"
+        "[resourceId('Microsoft.Authorization/roleDefinitions', variables('roleDefinitionGuid'))]"
       ],
       "properties": {
-        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', parameters('roleDefinitionGuid'))]",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('roleDefinitionGuid'))]",
         "principalId": "[parameters('principalId')]",
         "principalType": "ServicePrincipal"
       }
     }
-  ],
-  "outputs": {
-    "roleDefinitionId": {
-      "type": "string",
-      "value": "[parameters('roleDefinitionGuid')]"
-    }
-  }
+  ]
 }
