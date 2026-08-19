@@ -65,10 +65,15 @@ resource "azuread_application_federated_identity_credential" "ringleader" {
 # and breaking one costs no apply and no error, only a config that can never be quiet again:
 #
 #   1. no top-level `metadata` block           (Azure drops it; the prose lives in ../arm/README.md)
-#   2. no `outputs` block                      (Azure rewrites the output `type` casing)
+#   2. no `outputs` block                      (one less surface Azure rewrites)
 #   3. no parameter with a defaultValue that this resource does not pass explicitly -- Azure
 #      materializes the default into the stored parameters while the file leaves it unset. Hence
 #      the role definition's GUID is a template VARIABLE, not a parameter.
+#   4. every parameter `type` in ARM's CANONICAL CASING -- "String", "Bool", "Int", "Object",
+#      "Array", "SecureString", "SecureObject". ARM accepts the lowercase spellings and the docs
+#      use them, but Azure STORES the capitalized form, so a lowercase `"type": "string"` in this
+#      file is a permanent one-line diff per parameter. Verify what Azure holds with
+#      `az deployment group export -g <rg> -n ringleader-onboarding`.
 #
 # Deliberately NO `lifecycle { ignore_changes = [template_content, ...] }`: that would silence the
 # noise by also silencing a real edit to the action list, so bumping the module version would

@@ -3,20 +3,20 @@
   "contentVersion": "1.0.0.0",
   "parameters": {
     "principalId": {
-      "type": "string",
+      "type": "String",
       "metadata": {
         "description": "Object id of the service principal to grant the role to (az ad sp show --id <appId> --query id -o tsv)."
       }
     },
     "roleName": {
-      "type": "string",
+      "type": "String",
       "defaultValue": "Ringleader Workstation Operator",
       "metadata": {
         "description": "Display name of the custom role."
       }
     },
     "enableWorkstationIdentities": {
-      "type": "bool",
+      "type": "Bool",
       "defaultValue": false,
       "metadata": {
         "description": "Let Ringleader provision a per-user managed identity and assign roles to it. Adds the Microsoft.ManagedIdentity CRUD/assign actions and Microsoft.Authorization roleAssignments write -- which built-in Contributor does NOT have either. Leave false unless you use the feature; left off it fails closed with a 403."
