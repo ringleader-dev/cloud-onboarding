@@ -31,6 +31,8 @@ Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standal
 | `workstation_network_tag` | `ringleader-workstation` | Network tag the inbound-SSH rule targets; put the same tag on your workstations. |
 | `secondary_ssh_source_ranges` | `[]` | **Opt-in.** CIDRs allowed to reach the **secondary SSH port** (TCP 2222) that some workstation types run their own SSH daemon on. Empty creates **no rule** — an existing configuration plans clean. You do not supply the port. |
 | `secondary_ssh_network_tag` | `ringleader-secondary-ssh` | Network tag that rule targets. Put it on the workstations that need the port **alongside** `workstation_network_tag`, never instead of it. |
+| `name_prefix` | `ringleader` | Prefix for the landing pad's resource names. Change it only if those names are already taken in the project; the default reproduces the names this module has always used. |
+| `allow_internal_traffic` | `false` | Let workstations on the subnet reach **each other** (tcp/udp/icmp from the subnet's own range). Off by default: a custom VPC has no rules, so today they cannot, and a compromised box cannot scan its neighbours. Never admits anything from outside the subnet. |
 | `region` | `us-central1` | Region for the optional network. |
 | `subnet_cidr` | `10.60.0.0/20` | Primary range for the optional subnet. |
 

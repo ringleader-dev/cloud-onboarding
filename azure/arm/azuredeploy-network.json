@@ -1,0 +1,171 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "description": "Ringleader Azure onboarding: the OPTIONAL network landing pad (vnet + workstations subnet + NAT gateway + NSG). Deploy at RESOURCE GROUP scope, after azuredeploy.json. Separate from azuredeploy.json on purpose: that file is also deployed by the Terraform module, which compares Azure's normalized echo of it against the file on every plan, so it may carry no outputs block and no parameter default it does not pass. This template is deployed only by az, so it is free to have both."
+  },
+  "parameters": {
+    "namePrefix": {
+      "type": "String",
+      "defaultValue": "ringleader",
+      "metadata": {
+        "description": "Prefix for the created resources (vnet, NSG, NAT gateway, public IP). Change it if those names are already taken in this resource group."
+      }
+    },
+    "location": {
+      "type": "String",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Region for the landing pad. Defaults to the resource group's."
+      }
+    },
+    "vnetCidr": {
+      "type": "String",
+      "defaultValue": "10.70.0.0/16",
+      "metadata": {
+        "description": "Address space for the vnet."
+      }
+    },
+    "subnetCidr": {
+      "type": "String",
+      "defaultValue": "10.70.1.0/24",
+      "metadata": {
+        "description": "Prefix for the workstations subnet."
+      }
+    },
+    "sshSourceCidr": {
+      "type": "String",
+      "defaultValue": "",
+      "metadata": {
+        "description": "A single CIDR allowed inbound on TCP 22. Empty (the default) adds NO inbound rule, which leaves workstations unreachable from outside the VNet -- correct only if you reach it privately (VPN / ExpressRoute / peering). Ringleader ships no bastion and no SSH tunnel: rl shell, tmux, port-forwards and VS Code Web all dial the workstation on 22."
+      }
+    },
+    "secondarySshSourceCidr": {
+      "type": "String",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional, and empty opens nothing. A single CIDR allowed inbound on the SECONDARY SSH port (TCP 2222). Some Ringleader workstation types run their own SSH daemon on that port inside the VM, beside the VM's own sshd on 22, and rl shell dials it instead of 22 for those workstations; others never use it. An NSG covers the whole subnet, so this admits the port to every VM on it."
+      }
+    }
+  },
+  "variables": {
+    "vnetName": "[concat(parameters('namePrefix'), '-vnet')]",
+    "nsgName": "[concat(parameters('namePrefix'), '-workstations-nsg')]",
+    "natName": "[concat(parameters('namePrefix'), '-nat')]",
+    "natPipName": "[concat(parameters('namePrefix'), '-nat-pip')]",
+    "subnetName": "workstations",
+    "sshRules": [
+      {
+        "name": "AllowRingleaderSSHInbound",
+        "properties": {
+          "priority": 1000,
+          "direction": "Inbound",
+          "access": "Allow",
+          "protocol": "Tcp",
+          "sourcePortRange": "*",
+          "destinationPortRange": "22",
+          "sourceAddressPrefix": "[parameters('sshSourceCidr')]",
+          "destinationAddressPrefix": "*"
+        }
+      }
+    ],
+    "secondarySshRules": [
+      {
+        "name": "AllowRingleaderSecondarySSHInbound",
+        "properties": {
+          "priority": 1010,
+          "direction": "Inbound",
+          "access": "Allow",
+          "protocol": "Tcp",
+          "sourcePortRange": "*",
+          "destinationPortRange": "2222",
+          "sourceAddressPrefix": "[parameters('secondarySshSourceCidr')]",
+          "destinationAddressPrefix": "*"
+        }
+      }
+    ],
+    "effectiveSecurityRules": "[concat(if(equals(parameters('sshSourceCidr'), ''), createArray(), variables('sshRules')), if(equals(parameters('secondarySshSourceCidr'), ''), createArray(), variables('secondarySshRules')))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2023-11-01",
+      "name": "[variables('natPipName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Standard"
+      },
+      "properties": {
+        "publicIPAllocationMethod": "Static"
+      }
+    },
+    {
+      "type": "Microsoft.Network/natGateways",
+      "apiVersion": "2023-11-01",
+      "name": "[variables('natName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Standard"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/publicIPAddresses', variables('natPipName'))]"
+      ],
+      "properties": {
+        "publicIpAddresses": [
+          {
+            "id": "[resourceId('Microsoft.Network/publicIPAddresses', variables('natPipName'))]"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "apiVersion": "2023-11-01",
+      "name": "[variables('nsgName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "securityRules": "[variables('effectiveSecurityRules')]"
+      }
+    },
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2023-11-01",
+      "name": "[variables('vnetName')]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]",
+        "[resourceId('Microsoft.Network/natGateways', variables('natName'))]"
+      ],
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[parameters('vnetCidr')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[variables('subnetName')]",
+            "properties": {
+              "addressPrefix": "[parameters('subnetCidr')]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+              },
+              "natGateway": {
+                "id": "[resourceId('Microsoft.Network/natGateways', variables('natName'))]"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "outputs": {
+    "subnetId": {
+      "type": "String",
+      "value": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('subnetName'))]",
+      "metadata": {
+        "description": "Hand back to Ringleader: providerConfig.azure.subnetId."
+      }
+    }
+  }
+}

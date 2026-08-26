@@ -35,11 +35,27 @@ output "handoff" { value = module.ringleader_onboarding.handoff }
 | `ssh_source_ranges` | `[]` | inbound-SSH CIDRs (empty = no inbound rule) |
 | `secondary_ssh_source_ranges` | `[]` | **opt-in** CIDRs for the **secondary SSH port** (TCP 2222) that some workstation types run their own SSH daemon on; empty = no rule, and an existing configuration plans clean. You do not supply the port |
 | `create_nat_gateway` | `false` | add a NAT gateway for private (no-public-IP) workstations (bills hourly) |
+| `max_session_duration` | `3600` | ceiling on the life of the credentials Ringleader mints by assuming the role (AWS bounds: 3600–43200). 3600 is AWS's own default, so setting it changes nothing on an existing role |
 
 ## Outputs
 
 `target_role_arn`, `account_id`, `subnet_id`, `security_group_id`, and `handoff` (all of
 them in one object). Hand `handoff` back to Ringleader.
+
+Three more are for **audit**, and none of them goes back to Ringleader — they exist so the
+security property is something you can verify after applying rather than take on trust:
+
+| Output | Read it back to confirm |
+|---|---|
+| `issuer_url` | the per-org issuer this account now trusts, byte for byte against what Ringleader gave you |
+| `trusted_subject` | the **one** subject the trust policy admits — your org's uid and nothing else |
+| `actions_granted` | every action the role holds, read from the same lists the policy is built from, so it cannot overstate or understate |
+
+## Partitions
+
+Every ARN is built from `data.aws_partition.current`, so the module works unchanged in
+GovCloud (`aws-us-gov`) and China (`aws-cn`). The CloudFormation template uses
+`${AWS::Partition}` for the same reason.
 
 ## Providers
 

@@ -175,7 +175,10 @@ Resources:
                 Action:
                   - "ssm:GetParameters"
                   - "ssm:GetParameter"
-                Resource: "arn:aws:ssm:*::parameter/aws/service/*"
+                # ${AWS::Partition}, not a literal "aws": the same template then works in
+                # GovCloud (aws-us-gov) and China (aws-cn), where a hardcoded partition yields a
+                # policy that is valid and matches nothing.
+                Resource: !Sub "arn:${AWS::Partition}:ssm:*::parameter/aws/service/*"
 
   # --- Optional landing-pad network -----------------------------------------------------
   Vpc:

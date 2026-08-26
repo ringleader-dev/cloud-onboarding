@@ -97,7 +97,7 @@ resource "azurerm_resource_group_template_deployment" "role" {
 
 resource "azurerm_virtual_network" "workstations" {
   count               = var.create_network ? 1 : 0
-  name                = "ringleader-vnet"
+  name                = "${var.name_prefix}-vnet"
   location            = var.location
   resource_group_name = var.resource_group_name
   address_space       = [var.vnet_address_space]
@@ -125,7 +125,7 @@ resource "azurerm_subnet" "workstations" {
 # only if you reach the VNet privately (VPN / ExpressRoute / peering) from wherever you run `rl`.
 resource "azurerm_network_security_group" "workstations" {
   count               = var.create_network ? 1 : 0
-  name                = "ringleader-workstations-nsg"
+  name                = "${var.name_prefix}-workstations-nsg"
   location            = var.location
   resource_group_name = var.resource_group_name
 }
@@ -193,7 +193,7 @@ resource "azurerm_subnet_network_security_group_association" "workstations" {
 
 resource "azurerm_public_ip" "nat" {
   count               = var.create_network ? 1 : 0
-  name                = "ringleader-nat-pip"
+  name                = "${var.name_prefix}-nat-pip"
   location            = var.location
   resource_group_name = var.resource_group_name
   allocation_method   = "Static"
@@ -202,7 +202,7 @@ resource "azurerm_public_ip" "nat" {
 
 resource "azurerm_nat_gateway" "workstations" {
   count               = var.create_network ? 1 : 0
-  name                = "ringleader-nat"
+  name                = "${var.name_prefix}-nat"
   location            = var.location
   resource_group_name = var.resource_group_name
   sku_name            = "Standard"

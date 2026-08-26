@@ -23,6 +23,35 @@ output "security_group_id" {
   description = "Hand back to Ringleader (only when create_network = true; otherwise supply your own): providerConfig.aws.securityGroupIds."
 }
 
+# --- Audit: read these back and confirm they say what you expect ------------------------------
+#
+# None of the three goes back to Ringleader. They exist so the security property of this module is
+# something you can VERIFY after applying, rather than something you take on trust from a diff.
+
+output "issuer_url" {
+  value       = local.issuer
+  description = "The per-org issuer this account now trusts. Confirm it matches the value Ringleader gave you, byte for byte."
+}
+
+output "trusted_subject" {
+  value       = local.subject
+  description = <<-EOT
+    The ONE subject this role's trust policy admits. Confirm it is your org's uid and nothing else:
+    this string, matched with StringEquals, is the entire boundary between your AWS account and
+    every other Ringleader customer.
+  EOT
+}
+
+output "actions_granted" {
+  description = "Every action the role holds, for audit. Read from the same lists the policy is built from, so it cannot overstate or understate what was granted."
+  value = concat(
+    local.describe_actions,
+    local.lifecycle_actions,
+    ["ssm:GetParameter / ssm:GetParameters -- AWS's PUBLIC image-alias parameters only"],
+    var.enable_workstation_identities ? ["iam:PassRole -- roles under ${var.workstation_identity_path}, to ec2.amazonaws.com only"] : [],
+  )
+}
+
 output "handoff" {
   description = "Everything to hand back to Ringleader, in one place."
   value = {

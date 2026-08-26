@@ -226,7 +226,7 @@ resource "google_service_account_iam_member" "workload_identity_user" {
 resource "google_compute_network" "workstations" {
   count                   = var.create_network ? 1 : 0
   project                 = var.project_id
-  name                    = "ringleader-vpc"
+  name                    = "${var.name_prefix}-vpc"
   auto_create_subnetworks = false
 
   depends_on = [google_project_service.compute]
@@ -235,7 +235,7 @@ resource "google_compute_network" "workstations" {
 resource "google_compute_subnetwork" "workstations" {
   count                    = var.create_network ? 1 : 0
   project                  = var.project_id
-  name                     = "ringleader-workstations"
+  name                     = "${var.name_prefix}-workstations"
   region                   = var.region
   network                  = google_compute_network.workstations[0].id
   ip_cidr_range            = var.subnet_cidr
@@ -245,7 +245,7 @@ resource "google_compute_subnetwork" "workstations" {
 resource "google_compute_router" "workstations" {
   count   = var.create_network ? 1 : 0
   project = var.project_id
-  name    = "ringleader-router"
+  name    = "${var.name_prefix}-router"
   region  = var.region
   network = google_compute_network.workstations[0].id
 }
@@ -253,11 +253,20 @@ resource "google_compute_router" "workstations" {
 resource "google_compute_router_nat" "workstations" {
   count                              = var.create_network ? 1 : 0
   project                            = var.project_id
-  name                               = "ringleader-nat"
+  name                               = "${var.name_prefix}-nat"
   region                             = var.region
   router                             = google_compute_router.workstations[0].name
   nat_ip_allocate_option             = "AUTO_ONLY"
   source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
+
+  # ERRORS_ONLY, not ALL: a NAT that exhausts its ports otherwise fails SILENTLY, and the only
+  # symptom is a workstation that comes up and cannot reach the Ringleader control plane -- which
+  # looks like a Ringleader outage from inside the box. Error-only logging is a small, bounded
+  # volume in Cloud Logging; full logging on a busy subnet is not.
+  log_config {
+    enable = true
+    filter = "ERRORS_ONLY"
+  }
 }
 
 # Inbound SSH -- the difference between a workstation that COMES UP and one you can actually USE.
@@ -275,7 +284,7 @@ resource "google_compute_router_nat" "workstations" {
 resource "google_compute_firewall" "ssh" {
   count     = var.create_network && length(var.ssh_source_ranges) > 0 ? 1 : 0
   project   = var.project_id
-  name      = "ringleader-allow-ssh"
+  name      = "${var.name_prefix}-allow-ssh"
   network   = google_compute_network.workstations[0].name
   direction = "INGRESS"
 
@@ -318,7 +327,7 @@ locals {
 resource "google_compute_firewall" "secondary_ssh" {
   count     = var.create_network && length(var.secondary_ssh_source_ranges) > 0 ? 1 : 0
   project   = var.project_id
-  name      = "ringleader-allow-secondary-ssh"
+  name      = "${var.name_prefix}-allow-secondary-ssh"
   network   = google_compute_network.workstations[0].name
   direction = "INGRESS"
 
@@ -329,4 +338,28 @@ resource "google_compute_firewall" "secondary_ssh" {
 
   source_ranges = var.secondary_ssh_source_ranges
   target_tags   = [var.secondary_ssh_network_tag]
+}
+
+# Workstation-to-workstation traffic inside the subnet -- OFF unless you ask for it.
+#
+# A custom-mode VPC has NO firewall rules and GCP denies ingress by default, so today two
+# workstations on this subnet cannot reach each other at all, not even ping. That is a real
+# posture: a compromised box cannot scan its neighbours. It is also a real limit, and which one
+# you want is yours to choose, so this creates nothing unless you set allow_internal_traffic.
+#
+# It admits tcp/udp/icmp from the subnet's OWN range only -- never from the internet. Scoped to
+# the workstation tag like the SSH rule, so anything else you later place in this VPC is unaffected.
+resource "google_compute_firewall" "internal" {
+  count     = var.create_network && var.allow_internal_traffic ? 1 : 0
+  project   = var.project_id
+  name      = "${var.name_prefix}-allow-internal"
+  network   = google_compute_network.workstations[0].name
+  direction = "INGRESS"
+
+  source_ranges = [var.subnet_cidr]
+  target_tags   = [var.workstation_network_tag]
+
+  allow { protocol = "tcp" }
+  allow { protocol = "udp" }
+  allow { protocol = "icmp" }
 }

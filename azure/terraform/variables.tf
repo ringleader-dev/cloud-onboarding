@@ -112,6 +112,19 @@ variable "secondary_ssh_source_ranges" {
   EOT
 }
 
+variable "name_prefix" {
+  type        = string
+  default     = "ringleader"
+  description = <<-EOT
+    Prefix for every resource the optional landing pad creates. The default reproduces the names
+    this module has always used, so changing nothing changes nothing.
+
+    Set it if those names are already taken in this resource group -- a second landing pad, or a
+    ringleader-vnet you built earlier and kept. Without it the apply fails on a name collision with a
+    resource this module does not own.
+  EOT
+}
+
 variable "location" {
   type        = string
   default     = "eastus"
