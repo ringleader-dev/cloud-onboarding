@@ -32,6 +32,31 @@ locals {
   # A region condition is applied only when allowed_regions is non-empty.
   region_condition = length(var.allowed_regions) > 0
 
+  # The two action lists, declared ONCE and used by both the policy below and the actions_granted
+  # output. What we grant and what we tell you we granted cannot drift apart.
+  describe_actions = [
+    "ec2:DescribeInstances",
+    "ec2:DescribeInstanceStatus",
+    "ec2:DescribeInstanceTypes",
+    "ec2:DescribeImages",
+    "ec2:DescribeSubnets",
+    "ec2:DescribeSecurityGroups",
+    "ec2:DescribeVpcs",
+    "ec2:DescribeVolumes",
+    "ec2:DescribeNetworkInterfaces",
+    "ec2:DescribeTags",
+    "ec2:DescribeAvailabilityZones",
+  ]
+
+  lifecycle_actions = [
+    "ec2:RunInstances",
+    "ec2:TerminateInstances",
+    "ec2:StartInstances",
+    "ec2:StopInstances",
+    "ec2:CreateTags",
+    "ec2:DeleteTags",
+  ]
+
   # The SECONDARY SSH port (see the security group below). Fixed by Ringleader, so it is a
   # constant here and NOT a variable: you never have to know the number, and it cannot drift from
   # the port Ringleader actually dials. A wrong value would be an ingress rule that exists, reads
@@ -49,6 +74,12 @@ data "tls_certificate" "issuer" {
   url = var.ringleader_issuer_url
 }
 
+# The partition every ARN below is built in, read from the caller rather than assumed: `aws` in
+# commercial regions, `aws-us-gov` in GovCloud, `aws-cn` in China. A hardcoded "aws" produces
+# policies that are syntactically valid and match nothing outside the commercial partition -- an
+# AccessDenied at box-create that points nowhere near its cause.
+data "aws_partition" "current" {}
+
 resource "aws_iam_openid_connect_provider" "ringleader" {
   url             = local.issuer
   client_id_list  = [local.audience]
@@ -60,6 +91,21 @@ resource "aws_iam_openid_connect_provider" "ringleader" {
 # 2. The role Ringleader assumes. Its trust policy admits ONLY an AssumeRoleWithWebIdentity
 #    call presenting a Ringleader-signed assertion whose aud AND sub match your org -- a token
 #    minted for any other Ringleader customer carries a different subject and is refused here.
+#
+# THE `sub` CONDITION IS THE ENTIRE SECURITY PROPERTY. Read this before editing it.
+#
+#   Every Ringleader customer's assertion is signed by the SAME issuer service. What distinguishes
+#   YOUR org from every other one is the `sub` claim, and the ONLY thing that makes AWS check it is
+#   the StringEquals condition below.
+#
+#   A trust policy that drops the `sub` condition -- or matches it with StringLike and a wildcard --
+#   will happily accept ANOTHER Ringleader customer's assertion and hand them credentials in YOUR
+#   account. That is not a hardening nicety; it is the difference between this design working and
+#   this design being a cross-tenant hole. StringEquals, on a literal subject, always. Do not relax
+#   it, and do not "generalize" it to admit a second org: apply the module again instead.
+#
+#   The industry copy-paste for web-identity trust policies is exactly the wildcard form, which is
+#   why this is spelled out rather than left to review.
 data "aws_iam_policy_document" "trust" {
   statement {
     sid     = "RingleaderOrgFederation"
@@ -90,6 +136,7 @@ resource "aws_iam_role" "ringleader" {
   description          = "Least-privilege role Ringleader federates into (AssumeRoleWithWebIdentity) to manage workstation EC2 instances."
   assume_role_policy   = data.aws_iam_policy_document.trust.json
   permissions_boundary = var.permissions_boundary_arn
+  max_session_duration = var.max_session_duration
 
   tags = merge(var.tags, { "ringleader.dev/managed" = "onboarding" })
 }
@@ -99,37 +146,26 @@ resource "aws_iam_role" "ringleader" {
 #    the mutating actions are on "*" too (RunInstances touches many resource types) but are
 #    optionally bounded to allowed_regions below. SSM read is the public-parameter AMI resolve
 #    (spec.image.distribution/version maps to a resolve:ssm:/aws/service/... alias at launch).
+#
+# SCOPED BY REGION RATHER THAN BY RESOURCE TAG, deliberately. Tag-scoping RunInstances correctly
+# requires conditions across EVERY resource type a launch touches -- instance, volume,
+# network-interface, security-group, subnet, image -- plus a matching ec2:CreateAction condition on
+# CreateTags. It is easy to get subtly wrong, and the failure mode is an opaque
+# UnauthorizedOperation at box-create that looks like a Ringleader bug. A region bound is simple,
+# readable in the console, and already confines the role to where you run workstations. Tighten
+# further if your platform team wants to; this is the floor, not a ceiling.
 data "aws_iam_policy_document" "permissions" {
   statement {
-    sid    = "Ec2Describe"
-    effect = "Allow"
-    actions = [
-      "ec2:DescribeInstances",
-      "ec2:DescribeInstanceStatus",
-      "ec2:DescribeInstanceTypes",
-      "ec2:DescribeImages",
-      "ec2:DescribeSubnets",
-      "ec2:DescribeSecurityGroups",
-      "ec2:DescribeVpcs",
-      "ec2:DescribeVolumes",
-      "ec2:DescribeNetworkInterfaces",
-      "ec2:DescribeTags",
-      "ec2:DescribeAvailabilityZones",
-    ]
+    sid       = "Ec2Describe"
+    effect    = "Allow"
+    actions   = local.describe_actions
     resources = ["*"]
   }
 
   statement {
-    sid    = "Ec2Lifecycle"
-    effect = "Allow"
-    actions = [
-      "ec2:RunInstances",
-      "ec2:TerminateInstances",
-      "ec2:StartInstances",
-      "ec2:StopInstances",
-      "ec2:CreateTags",
-      "ec2:DeleteTags",
-    ]
+    sid       = "Ec2Lifecycle"
+    effect    = "Allow"
+    actions   = local.lifecycle_actions
     resources = ["*"]
 
     dynamic "condition" {
@@ -151,7 +187,7 @@ data "aws_iam_policy_document" "permissions" {
     ]
     # The AWS-owned public AMI parameters the alias table resolves
     # (/aws/service/canonical/..., /aws/service/debian/..., /aws/service/ami-amazon-linux-latest/...).
-    resources = ["arn:aws:ssm:*::parameter/aws/service/*"]
+    resources = ["arn:${data.aws_partition.current.partition}:ssm:*::parameter/aws/service/*"]
   }
 
   # OPTIONAL: pass an instance-profile role to a workstation (runtime identities). Off unless
@@ -162,7 +198,7 @@ data "aws_iam_policy_document" "permissions" {
       sid       = "PassWorkstationInstanceProfileRole"
       effect    = "Allow"
       actions   = ["iam:PassRole"]
-      resources = ["arn:aws:iam::*:role${var.workstation_identity_path}*"]
+      resources = ["arn:${data.aws_partition.current.partition}:iam::*:role${var.workstation_identity_path}*"]
       condition {
         test     = "StringEquals"
         variable = "iam:PassedToService"

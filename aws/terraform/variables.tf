@@ -28,6 +28,29 @@ variable "role_name" {
   type        = string
   default     = "ringleader-workstations"
   description = "Name of the IAM role Ringleader assumes via AssumeRoleWithWebIdentity. Its ARN is what you hand back to Ringleader."
+
+  validation {
+    condition     = can(regex("^[a-zA-Z0-9_+=,.@-]{1,64}$", var.role_name))
+    error_message = "role_name must be a valid IAM role name (1-64 chars of [a-zA-Z0-9_+=,.@-])."
+  }
+}
+
+variable "max_session_duration" {
+  type        = number
+  default     = 3600
+  description = <<-EOT
+    Maximum lifetime, in seconds, of the temporary credentials Ringleader mints by assuming this
+    role. AWS allows 3600-43200; 3600 is both AWS's own default and this module's, so setting it
+    changes nothing on an existing role.
+
+    The short ceiling is deliberate: Ringleader re-mints before expiry, so it costs nothing and it
+    bounds how long a leaked credential is worth anything.
+  EOT
+
+  validation {
+    condition     = var.max_session_duration >= 3600 && var.max_session_duration <= 43200
+    error_message = "max_session_duration must be between 3600 and 43200 seconds (AWS's own bounds)."
+  }
 }
 
 variable "permissions_boundary_arn" {

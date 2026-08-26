@@ -7,7 +7,8 @@
 # Graph directory objects (not ARM resources), this wrapper:
 #   1. creates the app + service principal with az,
 #   2. adds a federated identity credential trusting Ringleader's per-org issuer,
-#   3. deploys the ARM template (custom role + assignment) at resource-group scope.
+#   3. deploys the ARM template (custom role + assignment) at resource-group scope,
+#   4. optionally deploys the network landing pad (CREATE_NETWORK=true).
 #
 # Configure via env vars:
 #   RG           existing resource group you own              (required)
@@ -18,6 +19,14 @@
 #   ROLE_NAME    custom role display name                     (default: Ringleader Workstation Operator)
 #   WORKSTATION_IDENTITIES  1 to also grant the per-workstation runtime-identity
 #                actions (see below)                          (default: unset)
+#   CREATE_NETWORK  true to also deploy the vnet + subnet + NAT
+#                gateway + NSG landing pad                     (default: false)
+#   NAME_PREFIX  prefix for the landing pad's resources        (default: ringleader)
+#   VNET_CIDR / SUBNET_CIDR  its address space / subnet prefix (defaults: 10.70.0.0/16, 10.70.1.0/24)
+#   SSH_SOURCE_CIDR  one CIDR allowed inbound on TCP 22        (default: empty = no inbound rule)
+#   SECONDARY_SSH_SOURCE_CIDR  one CIDR allowed inbound on the
+#                SECONDARY SSH port, for workstation types that
+#                run their own SSH daemon inside the VM        (default: empty = no rule)
 #
 # WORKSTATION_IDENTITIES=1 lets Ringleader provision a dedicated user-assigned managed
 # identity per workstation user and assign roles to it. It adds the Microsoft.ManagedIdentity
@@ -32,6 +41,12 @@ ISSUER_URL="${ISSUER_URL:?set ISSUER_URL to the Ringleader issuer origin, e.g. h
 ORG_UID="${ORG_UID:?set ORG_UID to your Ringleader organization id, a UUID}"
 APP_NAME="${APP_NAME:-ringleader-workstations}"
 ROLE_NAME="${ROLE_NAME:-Ringleader Workstation Operator}"
+CREATE_NETWORK="${CREATE_NETWORK:-false}"
+NAME_PREFIX="${NAME_PREFIX:-ringleader}"
+VNET_CIDR="${VNET_CIDR:-10.70.0.0/16}"
+SUBNET_CIDR="${SUBNET_CIDR:-10.70.1.0/24}"
+SSH_SOURCE_CIDR="${SSH_SOURCE_CIDR:-}"
+SECONDARY_SSH_SOURCE_CIDR="${SECONDARY_SSH_SOURCE_CIDR:-}"
 if [[ "${WORKSTATION_IDENTITIES:-0}" == "1" ]]; then
   ENABLE_IDENTITIES=true
 else
@@ -97,6 +112,27 @@ az deployment group create \
                enableWorkstationIdentities="$ENABLE_IDENTITIES" \
   --query 'properties.provisioningState' -o tsv
 
+# 4. The OPTIONAL network landing pad, from its own template.
+#
+#    A SEPARATE file from azuredeploy.json on purpose: that one is also deployed by the Terraform
+#    module, which compares Azure's normalized echo of it against the file on every plan, so it
+#    may carry no outputs block -- and a network landing pad is useless without one (you need the
+#    subnet id back). Deploying them as two deployments keeps both properties.
+SUBNET_ID=""
+if [ "$CREATE_NETWORK" = "true" ]; then
+  echo ">> deploying the network landing pad (${NAME_PREFIX}-vnet, NAT gateway, NSG)"
+  echo ">>   inbound 22:   ${SSH_SOURCE_CIDR:-<none>}"
+  echo ">>   secondary:    ${SECONDARY_SSH_SOURCE_CIDR:-<none>}"
+  SUBNET_ID="$(az deployment group create \
+    --resource-group "$RG" \
+    --name ringleader-onboarding-network \
+    --template-file "${SCRIPT_DIR}/azuredeploy-network.json" \
+    --parameters namePrefix="$NAME_PREFIX" vnetCidr="$VNET_CIDR" subnetCidr="$SUBNET_CIDR" \
+                 sshSourceCidr="$SSH_SOURCE_CIDR" \
+                 secondarySshSourceCidr="$SECONDARY_SSH_SOURCE_CIDR" \
+    --query 'properties.outputs.subnetId.value' -o tsv)"
+fi
+
 cat <<EOF
 
 ================ hand these back to Ringleader ================
@@ -104,5 +140,8 @@ cat <<EOF
   tenant id        : ${TENANT_ID}
   subscription id  : ${SUBSCRIPTION_ID}
   resource group   : ${RG}
-===============================================================
 EOF
+if [ -n "$SUBNET_ID" ]; then
+  echo "  subnet id        : ${SUBNET_ID}"
+fi
+echo "==============================================================="

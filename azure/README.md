@@ -61,7 +61,7 @@ create returns `SkuNotAvailable`.
 | Path | Creates | Use when |
 |---|---|---|
 | **[Terraform](terraform/)** | app + SP + FIC + custom role + assignment (+ optional network), end to end | you manage infra as code |
-| **[ARM](arm/)** | the custom role + assignment (the app + SP + FIC are created with `az` first) | you prefer ARM / the portal |
+| **[ARM](arm/)** | the custom role + assignment, plus the optional network landing pad (the app + SP + FIC are created with `az` first) | you prefer ARM / the portal |
 
 The Entra **app registration** and its **federated credential** are Microsoft Graph
 directory objects, not ARM resources, so an ARM template cannot create them. The ARM
@@ -134,8 +134,8 @@ that need the port a subnet of their own if that is too broad.
 Leave `secondary_ssh_source_ranges` empty — the default — and **no rule is created**; your VNet
 admits exactly what it admits today. Ringleader tells you whether the workstations you plan to run
 need this port. You never supply the port number: the module carries it, so it cannot drift from
-the port Ringleader dials. (The ARM path creates no network at all, so this applies to Terraform
-only.)
+the port Ringleader dials. On the ARM path it is `SECONDARY_SSH_SOURCE_CIDR` — see
+[`arm/README.md`](arm/README.md#the-optional-network-landing-pad).
 
 ## Optional: workstations that run AS an identity
 

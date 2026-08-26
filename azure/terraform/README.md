@@ -23,6 +23,7 @@ Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standal
 | `create_network` | `false` | Also create a vnet + subnet + NAT gateway + NSG (egress out; inbound only via `ssh_source_ranges`). |
 | `ssh_source_ranges` | `[]` | CIDRs allowed to reach workstations on **TCP 22**. Empty creates **no inbound rule** — workstations come up but nobody can open a shell on them (there is no bastion). Set it unless you reach the VNet privately. |
 | `secondary_ssh_source_ranges` | `[]` | **Opt-in.** CIDRs allowed to reach the **secondary SSH port** (TCP 2222) that some workstation types run their own SSH daemon on. Empty creates **no rule** — an existing configuration plans clean. The rule is subnet-wide (Azure has no per-VM tag), and you do not supply the port. |
+| `name_prefix` | `ringleader` | Prefix for the landing pad's resource names. Change it only if those names are already taken in the resource group; the default reproduces the names this module has always used. |
 | `location` | `eastus` | Region for the optional network. |
 | `vnet_address_space` | `10.70.0.0/16` | Address space for the optional vnet. |
 | `subnet_prefix` | `10.70.1.0/24` | Prefix for the optional workstations subnet. |

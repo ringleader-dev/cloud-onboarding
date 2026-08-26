@@ -2,15 +2,17 @@
 
 For teams that prefer ARM / the portal over Terraform. Because the Entra **app
 registration** and its **federated credential** are Microsoft Graph directory
-objects (not ARM resources), the ARM template covers only the **custom role +
-its assignment**; the app + service principal + federated credential are created
-with `az`. [`deploy.sh`](deploy.sh) does all of it in one idempotent run.
+objects (not ARM resources), the ARM templates here cover the **custom role + its
+assignment** and the optional **network landing pad**; the app + service principal
++ federated credential are created with `az`. [`deploy.sh`](deploy.sh) does all of
+it in one idempotent run.
 
 ## Files
 
 | File | What it is |
 |---|---|
 | [`azuredeploy.json`](azuredeploy.json) | ARM template: the custom least-privilege role definition + a role assignment, scoped to the resource group. Deploy at **resource-group scope**. Takes the service-principal **object id** as `principalId`. It is the single source of the action list — the [Terraform module](../terraform/) deploys this same file. |
+| [`azuredeploy-network.json`](azuredeploy-network.json) | ARM template: the **optional** landing pad — vnet + `workstations` subnet + NAT gateway + NSG, with inbound rules only for the CIDRs you name. Outputs `subnetId`. Deploy at resource-group scope, after `azuredeploy.json`. |
 | [`azuredeploy.parameters.example.json`](azuredeploy.parameters.example.json) | Example parameters file. |
 | [`deploy.sh`](deploy.sh) | End-to-end wrapper: creates the app + SP + OIDC federated credential with `az`, then deploys the template. |
 
@@ -31,6 +33,32 @@ Env vars: `RG`, `ISSUER_URL`, `ORG_UID` (required); `APP_NAME`
 (`ringleader-workstations`), `ROLE_NAME` (`Ringleader Workstation Operator`),
 `WORKSTATION_IDENTITIES` (`1` to also grant the per-workstation runtime-identity
 actions — see [`../README.md`](../README.md) before turning it on).
+
+## The optional network landing pad
+
+Add `CREATE_NETWORK=true` and `deploy.sh` also deploys `azuredeploy-network.json`
+and prints the resulting subnet id:
+
+```bash
+CREATE_NETWORK=true \
+SSH_SOURCE_CIDR=203.0.113.0/24 \
+  ./deploy.sh
+```
+
+Env vars for it: `NAME_PREFIX` (`ringleader`), `VNET_CIDR` (`10.70.0.0/16`),
+`SUBNET_CIDR` (`10.70.1.0/24`), `SSH_SOURCE_CIDR` (empty), and
+`SECONDARY_SSH_SOURCE_CIDR` (empty — the opt-in second SSH port, see
+[`../README.md`](../README.md#a-second-ssh-port--opt-in-and-off-unless-you-ask)).
+Both CIDR vars empty means the NSG is created with **no inbound rule**, which is
+correct only if you reach the VNet privately.
+
+**Why a second template rather than a `deployNetwork` flag on the first.**
+`azuredeploy.json` is also deployed by the [Terraform module](../terraform/),
+which compares Azure's normalized echo of it against the file on every plan — so
+it may carry no `outputs` block and no parameter default it does not pass (see
+*Editing this template* below). A landing pad is useless without an output (you
+need the subnet id back), so the two cannot be one file. Two deployments keep
+both properties.
 
 ## Deploy the template by itself
 

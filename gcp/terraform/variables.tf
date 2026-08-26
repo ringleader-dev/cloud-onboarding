@@ -136,6 +136,33 @@ variable "secondary_ssh_network_tag" {
   EOT
 }
 
+variable "name_prefix" {
+  type        = string
+  default     = "ringleader"
+  description = <<-EOT
+    Prefix for every resource the optional landing pad creates. The default reproduces the names
+    this module has always used, so changing nothing changes nothing.
+
+    Set it if those names are already taken in this project -- a second landing pad, or a
+    ringleader-vpc you built earlier and kept. Without it the apply fails on a name collision with a
+    resource this module does not own.
+  EOT
+}
+
+variable "allow_internal_traffic" {
+  type        = bool
+  default     = false
+  description = <<-EOT
+    Let workstations on this subnet reach EACH OTHER (tcp/udp/icmp from the subnet's own range).
+    Off by default, and off is not an oversight.
+
+    A custom-mode VPC has no firewall rules, so today two workstations here cannot reach each other
+    at all -- which means a compromised box cannot scan its neighbours. Turn this on if your
+    workflows need workstation-to-workstation traffic; leave it off otherwise. It never admits
+    anything from outside the subnet.
+  EOT
+}
+
 variable "region" {
   type        = string
   default     = "us-central1"
