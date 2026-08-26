@@ -4,7 +4,7 @@ A reusable module that creates, in an **existing resource group you own**: an
 Entra app + service principal, a **federated identity credential** trusting
 Ringleader's per-org issuer, a **custom least-privilege role**, and the role
 assignment binding them — plus, optionally, a network landing pad (egress via NAT gateway;
-inbound SSH only from the CIDRs you name).
+inbound SSH only from the CIDRs you name, and a **secondary SSH port** only if you ask for one).
 
 It declares **no provider blocks**, so you can reference it from your own
 Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standalone/).
@@ -22,6 +22,7 @@ Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standal
 | `enable_workstation_identities` | `false` | Let Ringleader provision a per-user managed identity and assign roles to it. Adds `Microsoft.ManagedIdentity` CRUD/assign + `Microsoft.Authorization/roleAssignments/write` — **which built-in Contributor does not have either.** |
 | `create_network` | `false` | Also create a vnet + subnet + NAT gateway + NSG (egress out; inbound only via `ssh_source_ranges`). |
 | `ssh_source_ranges` | `[]` | CIDRs allowed to reach workstations on **TCP 22**. Empty creates **no inbound rule** — workstations come up but nobody can open a shell on them (there is no bastion). Set it unless you reach the VNet privately. |
+| `secondary_ssh_source_ranges` | `[]` | **Opt-in.** CIDRs allowed to reach the **secondary SSH port** (TCP 2222) that some workstation types run their own SSH daemon on. Empty creates **no rule** — an existing configuration plans clean. The rule is subnet-wide (Azure has no per-VM tag), and you do not supply the port. |
 | `location` | `eastus` | Region for the optional network. |
 | `vnet_address_space` | `10.70.0.0/16` | Address space for the optional vnet. |
 | `subnet_prefix` | `10.70.1.0/24` | Prefix for the optional workstations subnet. |

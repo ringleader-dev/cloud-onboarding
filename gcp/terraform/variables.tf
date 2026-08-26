@@ -106,6 +106,36 @@ variable "workstation_network_tag" {
   description = "Network tag the inbound-SSH rule targets. Put the same tag on your workstations (providerConfig.gcp.networkTags) so the rule applies to them and to nothing else in the VPC."
 }
 
+variable "secondary_ssh_source_ranges" {
+  type        = list(string)
+  default     = []
+  description = <<-EOT
+    OPT-IN, off by default. CIDRs allowed to reach the SECONDARY SSH port (TCP 2222) on the
+    workstations you tag with secondary_ssh_network_tag, when create_network is set.
+
+    Empty -- the default -- creates NO rule at all. A configuration that leaves this unset admits
+    exactly what it admitted before this variable existed.
+
+    Some Ringleader workstation types run their own SSH daemon on that port inside the VM, beside
+    the VM's own sshd on 22, and `rl shell` dials it instead of 22 for those workstations. Other
+    workstation types never use it. Ringleader tells you which you are running; if in doubt, leave
+    this empty -- an unopened port costs you nothing but a workstation you cannot reach.
+
+    The port itself is not a variable: Ringleader fixes it, and this module supplies it.
+  EOT
+}
+
+variable "secondary_ssh_network_tag" {
+  type        = string
+  default     = "ringleader-secondary-ssh"
+  description = <<-EOT
+    Network tag the secondary-SSH rule targets, so that rule reaches only the workstations that
+    need the port. Put it on those workstations ALONGSIDE workstation_network_tag, e.g.
+    providerConfig.gcp.networkTags: [ringleader-workstation, ringleader-secondary-ssh].
+    Replacing the first tag rather than adding to it would take TCP 22 away with it.
+  EOT
+}
+
 variable "region" {
   type        = string
   default     = "us-central1"

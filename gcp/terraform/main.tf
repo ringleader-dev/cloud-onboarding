@@ -9,7 +9,8 @@
 #     the service account.
 #
 # Optionally, a VPC + subnet + Cloud NAT landing pad: egress out, and inbound SSH only from
-# the CIDRs you name (ssh_source_ranges).
+# the CIDRs you name (ssh_source_ranges) -- plus, if you ask for it, the SECONDARY SSH port
+# some workstation types use (secondary_ssh_source_ranges, off by default).
 #
 # Keyless throughout: no service-account key is created. This module declares NO
 # provider block so it can be referenced from another repository. See
@@ -285,4 +286,47 @@ resource "google_compute_firewall" "ssh" {
 
   source_ranges = var.ssh_source_ranges
   target_tags   = [var.workstation_network_tag]
+}
+
+locals {
+  # The SECONDARY SSH port (see the rule below). Fixed by Ringleader, so it is a constant here and
+  # NOT a variable: you never have to know the number, and it cannot drift from the port Ringleader
+  # actually dials. A wrong value would be a rule that exists, reads correctly in the console, and
+  # admits nothing.
+  secondary_ssh_port = 2222
+}
+
+# A SECOND SSH port -- created only if you ask for it.
+#
+# Some Ringleader workstation types run their OWN SSH daemon on a secondary port inside the VM,
+# while the VM's own sshd keeps 22. For such a workstation `rl shell` dials THAT port, so it needs
+# an inbound rule of its own; a workstation that does not use one is unaffected either way.
+# Ringleader tells you whether the workstations you intend to run need it -- if in doubt, leave
+# secondary_ssh_source_ranges empty.
+#
+# EMPTY IS THE DEFAULT AND CREATES NOTHING. A configuration that does not set this variable plans
+# and applies exactly as it did before the variable existed: no rule, no diff, no change in what
+# your VPC admits.
+#
+# It carries its OWN tag rather than reusing the one above, so the port opens on the subset of
+# workstations that actually need it and on nothing else in the VPC. Put BOTH tags on those
+# workstations -- the rule above still supplies their TCP 22:
+#
+#   providerConfig.gcp.networkTags: [ringleader-workstation, ringleader-secondary-ssh]
+#
+# Replacing the first tag rather than adding to it would take 22 away with it.
+resource "google_compute_firewall" "secondary_ssh" {
+  count     = var.create_network && length(var.secondary_ssh_source_ranges) > 0 ? 1 : 0
+  project   = var.project_id
+  name      = "ringleader-allow-secondary-ssh"
+  network   = google_compute_network.workstations[0].name
+  direction = "INGRESS"
+
+  allow {
+    protocol = "tcp"
+    ports    = [tostring(local.secondary_ssh_port)]
+  }
+
+  source_ranges = var.secondary_ssh_source_ranges
+  target_tags   = [var.secondary_ssh_network_tag]
 }

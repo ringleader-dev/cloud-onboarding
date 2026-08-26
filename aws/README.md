@@ -16,7 +16,7 @@ OIDC provider (or the role).
 |---|---|
 | **IAM OIDC identity provider** | trusts Ringleader's per-org issuer (`<issuer>/org/<org-id>`) with client id `<issuer>/org/<org-id>/aws` |
 | **IAM role** (`ringleader-workstations`) | assumed via `sts:AssumeRoleWithWebIdentity`; trust pins **both** `aud` and `sub` to your org; permissions cover only the EC2 workstation lifecycle + the SSM public-parameter read that resolves an AMI |
-| _optional_ **VPC + public subnet + internet gateway + security group** | a landing pad: egress out (so a workstation can come up) and inbound SSH from the CIDRs you name |
+| _optional_ **VPC + public subnet + internet gateway + security group** | a landing pad: egress out (so a workstation can come up), inbound SSH from the CIDRs you name, and — only if you ask — a secondary SSH port |
 
 The permissions policy is exactly these three statements — no wildcard on any action:
 
@@ -93,6 +93,7 @@ The Terraform module derives the thumbprint automatically.
 |---|---|---|
 | **Bringing the workstation up** | **egress** from the VM to the Ringleader control plane | a public IP + internet gateway (the default), or a NAT gateway |
 | **Using the workstation** (`rl shell`, `rl tmux`, port-forwards, VS Code Web) | **inbound TCP 22**, from wherever you run `rl` | a security-group rule (`ssh_source_ranges` / `SshSourceCidr`) — or private connectivity |
+| **Using a workstation type that runs its own SSH daemon** | additionally, **inbound on a secondary SSH port** | an opt-in rule (`secondary_ssh_source_ranges` / `SecondarySshSourceCidr`), off by default |
 
 A workstation gets a **public IP by default** (`providerConfig.aws.assignPublicIp`), so
 the internet gateway alone gives it egress — no NAT gateway, no hourly bill. Set
@@ -100,6 +101,14 @@ the internet gateway alone gives it egress — no NAT gateway, no hourly bill. S
 (`create_nat_gateway`) so it still has egress. Ringleader ships **no bastion and no SSH
 tunnel**: a workstation with no inbound path finishes setting up and reports
 Ready, but nobody can open it.
+
+**The secondary SSH port is opt-in and off by default.** Some Ringleader workstation types run
+their own SSH daemon on a second port inside the instance, while the instance's own sshd keeps 22,
+and `rl shell` dials that port for such a workstation. Set `secondary_ssh_source_ranges`
+(Terraform) or `SECONDARY_SSH_SOURCE_CIDR` (`deploy.sh`) to open it on the workstations security
+group; leave it unset and **no rule is created** — your account admits exactly what it admits
+today. Ringleader tells you whether the workstations you plan to run need it, and you never supply
+the port number: both paths carry it.
 
 ## Workstations hold no AWS identity by default
 

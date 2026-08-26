@@ -114,6 +114,29 @@ ssh_source_ranges = ["203.0.113.0/24"]   # the CIDRs your engineers connect from
 Leave `ssh_source_ranges` empty **only** if you reach the VNet privately (VPN /
 ExpressRoute / peering).
 
+### A second SSH port — opt-in, and off unless you ask
+
+Some Ringleader workstation types run their **own SSH daemon on a secondary port** inside the VM,
+while the VM's own sshd keeps 22, and `rl shell` dials that port for such a workstation. To open
+it:
+
+```hcl
+create_network              = true
+secondary_ssh_source_ranges = ["203.0.113.0/24"]
+```
+
+That adds one NSG rule, `AllowRingleaderSecondarySSHInbound`. **It covers the whole subnet.** An
+NSG attaches to the subnet and Azure has no per-VM tag for a rule to match, so — unlike the GCP
+module, which aims the same rule at a network tag — this admits the port to every VM on the
+workstations subnet. The source ranges are the only narrowing available; give the workstations
+that need the port a subnet of their own if that is too broad.
+
+Leave `secondary_ssh_source_ranges` empty — the default — and **no rule is created**; your VNet
+admits exactly what it admits today. Ringleader tells you whether the workstations you plan to run
+need this port. You never supply the port number: the module carries it, so it cannot drift from
+the port Ringleader dials. (The ARM path creates no network at all, so this applies to Terraform
+only.)
+
 ## Optional: workstations that run AS an identity
 
 Ringleader can boot each workstation with a dedicated per-user managed identity and assign roles

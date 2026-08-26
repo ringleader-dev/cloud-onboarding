@@ -3,7 +3,8 @@
 A reusable module that creates, in one of your projects: a least-privilege
 service account, three predefined roles, and a **Workload Identity Pool +
 OIDC provider** trusting Ringleader's per-org issuer — plus, optionally, a
-network landing pad (egress via Cloud NAT; inbound SSH only from the CIDRs you name).
+network landing pad (egress via Cloud NAT; inbound SSH only from the CIDRs you name,
+and a **secondary SSH port** only if you ask for one).
 
 The three roles are `roles/compute.instanceAdmin.v1`, `roles/compute.networkUser` and
 `roles/iam.serviceAccountUser`. The last one is required, not optional: every workstation
@@ -28,6 +29,8 @@ Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standal
 | `create_network` | `false` | Also create a VPC + subnet + Cloud NAT (egress out; inbound only via `ssh_source_ranges`). |
 | `ssh_source_ranges` | `[]` | CIDRs allowed to reach workstations on **TCP 22**. Empty creates **no inbound rule** — workstations come up but nobody can open a shell on them (there is no bastion). Set it unless you reach the subnet privately. |
 | `workstation_network_tag` | `ringleader-workstation` | Network tag the inbound-SSH rule targets; put the same tag on your workstations. |
+| `secondary_ssh_source_ranges` | `[]` | **Opt-in.** CIDRs allowed to reach the **secondary SSH port** (TCP 2222) that some workstation types run their own SSH daemon on. Empty creates **no rule** — an existing configuration plans clean. You do not supply the port. |
+| `secondary_ssh_network_tag` | `ringleader-secondary-ssh` | Network tag that rule targets. Put it on the workstations that need the port **alongside** `workstation_network_tag`, never instead of it. |
 | `region` | `us-central1` | Region for the optional network. |
 | `subnet_cidr` | `10.60.0.0/20` | Primary range for the optional subnet. |
 

@@ -12,3 +12,9 @@ region = "us-east-1"
 # CIDRs allowed to SSH to workstations. Empty opens nothing (private reach only).
 # Example: your office / VPN egress. 0.0.0.0/0 is accepted but is a decision.
 ssh_source_ranges = []
+
+# A SECOND SSH PORT, off unless you set this. Some Ringleader workstation types run their own SSH
+# daemon on a secondary port inside the instance (the instance's own sshd keeps 22), and
+# `rl shell` dials that port for them. Ringleader tells you if the workstations you plan to run
+# need it; leaving this empty opens nothing and changes nothing.
+secondary_ssh_source_ranges = []

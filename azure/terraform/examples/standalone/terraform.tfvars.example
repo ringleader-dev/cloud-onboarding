@@ -15,6 +15,13 @@ org_uid               = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
 # (VPN / ExpressRoute / peering).
 # ssh_source_ranges = ["203.0.113.0/24"]   # the CIDRs your engineers connect from
 
+# A SECOND SSH PORT, off unless you set this. Some Ringleader workstation types run their own SSH
+# daemon on a secondary port inside the VM (the VM's own sshd keeps 22), and `rl shell` dials that
+# port for them. Ringleader tells you if the workstations you plan to run need it; leaving this
+# empty opens nothing and changes nothing. On Azure an NSG covers the whole subnet, so these
+# ranges are the only narrowing available -- the rule admits the port to every VM on it.
+# secondary_ssh_source_ranges = ["203.0.113.0/24"]
+
 # Let Ringleader provision a per-user managed identity per workstation and assign roles to it.
 # Adds Microsoft.Authorization/roleAssignments/write, which built-in Contributor does NOT have.
 # enable_workstation_identities = true
