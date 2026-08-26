@@ -35,6 +35,11 @@ variable "ssh_source_ranges" {
   default = []
 }
 
+variable "secondary_ssh_source_ranges" {
+  type    = list(string)
+  default = []
+}
+
 provider "aws" {
   region = var.region
 }
@@ -52,6 +57,9 @@ module "ringleader_onboarding" {
   # from your ranges.
   create_network    = true
   ssh_source_ranges = var.ssh_source_ranges
+
+  # Off unless you set it: the secondary SSH port some workstation types use.
+  secondary_ssh_source_ranges = var.secondary_ssh_source_ranges
 }
 
 output "handoff" {

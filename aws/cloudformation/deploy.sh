@@ -16,6 +16,10 @@
 #   ROLE_NAME    IAM role name Ringleader assumes              (default: ringleader-workstations)
 #   CREATE_NETWORK  true|false: create a landing-pad network   (default: false)
 #   SSH_SOURCE_CIDR a single CIDR allowed to SSH (network on)  (default: empty = no inbound)
+#   SECONDARY_SSH_SOURCE_CIDR
+#                a single CIDR allowed to reach the SECONDARY SSH
+#                port, for workstation types that run their own SSH
+#                daemon inside the instance                     (default: empty = no inbound)
 #   ALLOWED_REGION  bound the role to one region (optional)    (default: $REGION)
 #
 set -euo pipefail
@@ -27,6 +31,7 @@ STACK_NAME="${STACK_NAME:-ringleader-onboarding}"
 ROLE_NAME="${ROLE_NAME:-ringleader-workstations}"
 CREATE_NETWORK="${CREATE_NETWORK:-false}"
 SSH_SOURCE_CIDR="${SSH_SOURCE_CIDR:-}"
+SECONDARY_SSH_SOURCE_CIDR="${SECONDARY_SSH_SOURCE_CIDR:-}"
 ALLOWED_REGION="${ALLOWED_REGION:-$REGION}"
 
 case "$ISSUER_URL" in
@@ -61,6 +66,7 @@ echo ">> audience:      $AUDIENCE"
 echo ">> subject:       $SUBJECT"
 echo ">> thumbprint:    $THUMBPRINT"
 echo ">> create network:$CREATE_NETWORK  ssh cidr: ${SSH_SOURCE_CIDR:-<none>}"
+echo ">> secondary ssh cidr: ${SECONDARY_SSH_SOURCE_CIDR:-<none>}"
 
 # Substitute the one placeholder CloudFormation cannot parameterize (a condition KEY).
 RENDERED="$(mktemp)"
@@ -80,7 +86,8 @@ aws cloudformation deploy \
     RoleName="$ROLE_NAME" \
     AllowedRegion="$ALLOWED_REGION" \
     CreateNetwork="$CREATE_NETWORK" \
-    SshSourceCidr="$SSH_SOURCE_CIDR"
+    SshSourceCidr="$SSH_SOURCE_CIDR" \
+    SecondarySshSourceCidr="$SECONDARY_SSH_SOURCE_CIDR"
 
 echo
 echo "================ hand these back to Ringleader ================"

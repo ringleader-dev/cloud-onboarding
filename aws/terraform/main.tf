@@ -6,7 +6,9 @@
 #     policy pins BOTH the audience AND the subject to your org, and whose permissions
 #     policy grants only the EC2 actions the workstation lifecycle needs (plus the SSM
 #     public-parameter read that resolves an AMI at launch), and
-#   - optionally, a VPC + public subnet + internet gateway + security group landing pad.
+#   - optionally, a VPC + public subnet + internet gateway + security group landing pad
+#     (egress out, inbound SSH from the CIDRs you name, and -- if you ask for it -- the
+#     SECONDARY SSH port some workstation types use).
 #
 # Keyless throughout: no IAM user, no access key. Revoke by removing the OIDC provider
 # (or the role) and Ringleader can no longer mint into your account. This module declares
@@ -29,6 +31,12 @@ locals {
 
   # A region condition is applied only when allowed_regions is non-empty.
   region_condition = length(var.allowed_regions) > 0
+
+  # The SECONDARY SSH port (see the security group below). Fixed by Ringleader, so it is a
+  # constant here and NOT a variable: you never have to know the number, and it cannot drift from
+  # the port Ringleader actually dials. A wrong value would be an ingress rule that exists, reads
+  # correctly in the console, and admits nothing.
+  secondary_ssh_port = 2222
 }
 
 # 1. The federation trust: an IAM OIDC identity provider for Ringleader's per-org issuer.
@@ -219,12 +227,15 @@ resource "aws_route_table_association" "workstations" {
 }
 
 # Inbound SSH -- the difference between a workstation that COMES UP and one you can USE.
-# Egress is open (a workstation needs it to come up); ingress is 22 from ssh_source_ranges only, and
-# nothing at all when that list is empty (reach the workstation privately, or over a public IP whose
-# CIDR you list).
+# Egress is open (a workstation needs it to come up); ingress is 22 from ssh_source_ranges, plus the
+# opt-in secondary port from secondary_ssh_source_ranges, and nothing at all while both lists are
+# empty (reach the workstation privately, or over a public IP whose CIDR you list).
 resource "aws_security_group" "workstations" {
-  count       = var.create_network ? 1 : 0
-  name        = "ringleader-workstations"
+  count = var.create_network ? 1 : 0
+  name  = "ringleader-workstations"
+  # Do NOT restate the ingress list here as it grows: `description` is ForceNew, so editing it
+  # REPLACES the group and changes the id you handed back to Ringleader
+  # (providerConfig.aws.securityGroupIds). The rules below are the authority on what is open.
   description = "Ringleader workstations: egress out; inbound SSH only from ssh_source_ranges."
   vpc_id      = aws_vpc.workstations[0].id
 
@@ -244,6 +255,28 @@ resource "aws_security_group" "workstations" {
       to_port     = 22
       protocol    = "tcp"
       cidr_blocks = var.ssh_source_ranges
+    }
+  }
+
+  # A SECOND SSH port -- opened only if you ask for it.
+  #
+  # Some Ringleader workstation types run their OWN SSH daemon on a secondary port inside the
+  # instance, while the instance's own sshd keeps 22. For such a workstation `rl shell` dials THAT
+  # port, so it needs an ingress rule of its own; a workstation that does not use one is unaffected
+  # either way. Ringleader tells you whether the workstations you intend to run need it -- if in
+  # doubt, leave secondary_ssh_source_ranges empty.
+  #
+  # EMPTY IS THE DEFAULT AND OPENS NOTHING. A configuration that does not set this variable plans
+  # and applies exactly as it did before the variable existed: no rule, no diff, no change in what
+  # this security group admits.
+  dynamic "ingress" {
+    for_each = length(var.secondary_ssh_source_ranges) > 0 ? [1] : []
+    content {
+      description = "Secondary SSH port, for workstation types that run their own SSH daemon."
+      from_port   = local.secondary_ssh_port
+      to_port     = local.secondary_ssh_port
+      protocol    = "tcp"
+      cidr_blocks = var.secondary_ssh_source_ranges
     }
   }
 

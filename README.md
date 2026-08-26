@@ -97,6 +97,29 @@ The clouds differ in their default: **GCP** gives every workstation an external 
 unless you opt out; **Azure** gives none unless you opt in (so it needs the NAT gateway
 for egress); **AWS** gives one by default. See each cloud's README.
 
+### A second SSH port — opt-in, and off unless you ask
+
+Some Ringleader workstation types run their **own SSH daemon on a secondary port** inside the
+VM, while the VM's own sshd keeps 22; `rl shell` dials that port for such a workstation. Every
+module here can open it and **none of them do by default**:
+
+| Path | Set |
+|---|---|
+| Terraform (all three clouds) | `secondary_ssh_source_ranges` |
+| `gcp/gcloud/network-landing-pad.sh` | `SECONDARY_SSH_RANGES` |
+| `aws/cloudformation/deploy.sh` | `SECONDARY_SSH_SOURCE_CIDR` |
+
+Leave them unset and nothing is created — your firewall admits exactly what it admits today.
+Ringleader tells you whether the workstations you plan to run need this port; if in doubt, leave
+it closed. **You never supply the port number** — each asset carries it, so it cannot drift from
+the port Ringleader actually dials.
+
+The clouds differ in how narrowly the rule can be aimed. **GCP** scopes it to its own network tag
+(`ringleader-secondary-ssh`), so it reaches only the workstations you tag with it. **AWS** puts it
+on the workstations security group, like the rule for 22. **Azure** cannot scope it at all — an
+NSG attaches to the subnet and there is no per-VM tag to match — so the source ranges are the only
+narrowing, and the rule admits the port to every VM on that subnet.
+
 ## What you return after applying
 
 Each cloud's README lists the exact values. In short:

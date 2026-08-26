@@ -12,7 +12,7 @@ already exists, so run it once, against a project with no Ringleader network yet
 | [`onboard.sh`](onboard.sh) | Creates the onboarding SA, grants the three project roles, and creates a Workload Identity Pool + OIDC provider trusting Ringleader's issuer for your org, plus the `workloadIdentityUser` binding. |
 | [`verify.sh`](verify.sh) | Checks the three required roles are present, then prints the provider's issuer/audience/condition and the impersonation binding. |
 | [`revoke.sh`](revoke.sh) | Deletes the WIF pool (cuts federation; default) or also deletes the SA (`FULL=1`). |
-| [`network-landing-pad.sh`](network-landing-pad.sh) | Optional: a minimal VPC + subnet + Cloud NAT, plus an inbound-SSH rule if you set `SSH_RANGES`; prints the subnet self-link. |
+| [`network-landing-pad.sh`](network-landing-pad.sh) | Optional: a minimal VPC + subnet + Cloud NAT, plus an inbound-SSH rule if you set `SSH_RANGES` and a **secondary SSH port** rule if you set `SECONDARY_SSH_RANGES` (both empty by default, both creating nothing); prints the subnet self-link. |
 
 ## Quick start
 

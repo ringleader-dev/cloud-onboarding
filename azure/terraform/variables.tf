@@ -88,6 +88,30 @@ variable "ssh_source_ranges" {
   EOT
 }
 
+variable "secondary_ssh_source_ranges" {
+  type        = list(string)
+  default     = []
+  description = <<-EOT
+    OPT-IN, off by default. CIDRs allowed to reach the SECONDARY SSH port (TCP 2222) on the
+    workstations subnet, when create_network is set.
+
+    Empty -- the default -- creates NO rule at all. A configuration that leaves this unset admits
+    exactly what it admitted before this variable existed.
+
+    Some Ringleader workstation types run their own SSH daemon on that port inside the VM, beside
+    the VM's own sshd on 22, and `rl shell` dials it instead of 22 for those workstations. Other
+    workstation types never use it. Ringleader tells you which you are running; if in doubt, leave
+    this empty -- an unopened port costs you nothing but a workstation you cannot reach.
+
+    These ranges are the ONLY narrowing available on Azure: an NSG attaches to the subnet and
+    Azure has no per-VM tag to match, so the rule admits the port to every VM on this subnet.
+    (On GCP the same rule is scoped to a network tag.) Give the workstations that need it a
+    subnet of their own if that is too broad.
+
+    The port itself is not a variable: Ringleader fixes it, and this module supplies it.
+  EOT
+}
+
 variable "location" {
   type        = string
   default     = "eastus"

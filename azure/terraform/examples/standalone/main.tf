@@ -34,6 +34,19 @@ variable "create_network" {
   default = false
 }
 
+# Who may reach the workstations, and on what. Both are forwarded to the module below, so a value
+# set in terraform.tfvars actually takes effect -- a variable this root did not declare would be
+# accepted with a warning and then IGNORED, leaving you with a plan that opens nothing.
+variable "ssh_source_ranges" {
+  type    = list(string)
+  default = []
+}
+
+variable "secondary_ssh_source_ranges" {
+  type    = list(string)
+  default = []
+}
+
 module "ringleader" {
   source = "../.."
 
@@ -42,6 +55,9 @@ module "ringleader" {
   ringleader_issuer_url = var.ringleader_issuer_url
   org_uid               = var.org_uid
   create_network        = var.create_network
+
+  ssh_source_ranges           = var.ssh_source_ranges
+  secondary_ssh_source_ranges = var.secondary_ssh_source_ranges
 }
 
 output "handoff" {

@@ -11,7 +11,8 @@
 #     Ringleader authenticates with a signed token instead of a secret.
 #
 # Optionally, a vnet + subnet + NAT gateway + NSG landing pad: egress out, and inbound SSH
-# only from the CIDRs you name (ssh_source_ranges).
+# only from the CIDRs you name (ssh_source_ranges) -- plus, if you ask for it, the SECONDARY
+# SSH port some workstation types use (secondary_ssh_source_ranges, off by default).
 #
 # Keyless: no client secret is created or stored. This module declares NO
 # provider blocks so it can be referenced from another repository. See
@@ -141,6 +142,46 @@ resource "azurerm_network_security_rule" "ssh" {
   source_port_range           = "*"
   destination_port_range      = "22"
   source_address_prefixes     = var.ssh_source_ranges
+  destination_address_prefix  = "*"
+}
+
+locals {
+  # The SECONDARY SSH port (see the rule below). Fixed by Ringleader, so it is a constant here and
+  # NOT a variable: you never have to know the number, and it cannot drift from the port Ringleader
+  # actually dials. A wrong value would be a rule that exists, reads correctly in the portal, and
+  # admits nothing.
+  secondary_ssh_port = 2222
+}
+
+# A SECOND SSH port -- created only if you ask for it.
+#
+# Some Ringleader workstation types run their OWN SSH daemon on a secondary port inside the VM,
+# while the VM's own sshd keeps 22. For such a workstation `rl shell` dials THAT port, so it needs
+# an inbound rule of its own; a workstation that does not use one is unaffected either way.
+# Ringleader tells you whether the workstations you intend to run need it -- if in doubt, leave
+# secondary_ssh_source_ranges empty.
+#
+# EMPTY IS THE DEFAULT AND CREATES NOTHING. A configuration that does not set this variable plans
+# and applies exactly as it did before the variable existed: no rule, no diff, no change in what
+# your VNet admits.
+#
+# THE SOURCE RANGES ARE THE ONLY NARROWING AVAILABLE HERE, and that is Azure, not a shortcut: an
+# NSG attaches to the SUBNET and Azure has no per-VM tag for a rule to match, so this admits the
+# port to every VM on the workstations subnet. (The GCP module scopes the same rule to a network
+# tag, so only the workstations carrying it are reachable on the port.) If that is too broad,
+# put the workstations that need this port on a subnet of their own with its own NSG.
+resource "azurerm_network_security_rule" "secondary_ssh" {
+  count                       = var.create_network && length(var.secondary_ssh_source_ranges) > 0 ? 1 : 0
+  name                        = "AllowRingleaderSecondarySSHInbound"
+  resource_group_name         = var.resource_group_name
+  network_security_group_name = azurerm_network_security_group.workstations[0].name
+  priority                    = 1010
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  destination_port_range      = tostring(local.secondary_ssh_port)
+  source_address_prefixes     = var.secondary_ssh_source_ranges
   destination_address_prefix  = "*"
 }
 

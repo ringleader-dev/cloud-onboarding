@@ -86,12 +86,26 @@ Parameters:
       no inbound rule (private reach only). rl shell/tmux/port-forwards all dial the
       workstation on 22 directly -- there is no bastion.
 
+  SecondarySshSourceCidr:
+    Type: String
+    Default: ""
+    Description: >-
+      Optional, and empty opens nothing. A single CIDR allowed to reach the SECONDARY SSH
+      port (TCP 2222) on the workstations security group. Some Ringleader workstation types
+      run their own SSH daemon on that port inside the instance, beside the instance's own
+      sshd on 22, and rl shell dials it instead of 22 for those workstations; others never
+      use it. Ringleader tells you which you are running -- if in doubt leave this empty.
+
 Conditions:
   HasRegionCondition: !Not [!Equals [!Ref AllowedRegion, ""]]
   WantNetwork: !Equals [!Ref CreateNetwork, "true"]
   WantSsh: !And
     - !Condition WantNetwork
     - !Not [!Equals [!Ref SshSourceCidr, ""]]
+  WantSecondarySsh: !And
+    - !Condition WantNetwork
+    - !Not [!Equals [!Ref SecondarySshSourceCidr, ""]]
+  WantAnyInbound: !Or [!Condition WantSsh, !Condition WantSecondarySsh]
 
 Resources:
   RingleaderOidcProvider:
@@ -223,19 +237,38 @@ Resources:
     Condition: WantNetwork
     Properties:
       GroupName: ringleader-workstations
+      # Do NOT restate the ingress list here as it grows: GroupDescription requires REPLACEMENT,
+      # so editing it swaps the security group for a new one with a new id -- the id you handed
+      # back to Ringleader (providerConfig.aws.securityGroupIds). SecurityGroupIngress below is
+      # the authority on what is actually open.
       GroupDescription: "Ringleader workstations: egress out; inbound SSH only from SshSourceCidr."
       VpcId: !Ref Vpc
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: "0.0.0.0/0"
           Description: "All egress (a workstation reaching the Ringleader control plane)."
+      # 2222 is the SECONDARY SSH port, fixed by Ringleader and deliberately not a parameter:
+      # you never have to know the number, and it cannot drift from the port Ringleader dials.
+      # With both CIDRs empty this property resolves away entirely, so a stack deployed on the
+      # defaults admits exactly what it admitted before SecondarySshSourceCidr existed.
       SecurityGroupIngress: !If
-        - WantSsh
-        - - IpProtocol: tcp
-            FromPort: 22
-            ToPort: 22
-            CidrIp: !Ref SshSourceCidr
-            Description: "SSH from your ranges."
+        - WantAnyInbound
+        - - !If
+            - WantSsh
+            - IpProtocol: tcp
+              FromPort: 22
+              ToPort: 22
+              CidrIp: !Ref SshSourceCidr
+              Description: "SSH from your ranges."
+            - !Ref AWS::NoValue
+          - !If
+            - WantSecondarySsh
+            - IpProtocol: tcp
+              FromPort: 2222
+              ToPort: 2222
+              CidrIp: !Ref SecondarySshSourceCidr
+              Description: "Secondary SSH port, for workstation types that run their own SSH daemon."
+            - !Ref AWS::NoValue
         - !Ref AWS::NoValue
       Tags: [{ Key: Name, Value: ringleader-workstations }]
 

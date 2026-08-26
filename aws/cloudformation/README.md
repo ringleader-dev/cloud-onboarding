@@ -17,7 +17,14 @@ SSH_SOURCE_CIDR=<your.ip/32> \
 
 Env vars: `ISSUER_URL`, `ORG_UID` (required); `REGION` (default `us-east-1`), `STACK_NAME`
 (`ringleader-onboarding`), `ROLE_NAME` (`ringleader-workstations`), `CREATE_NETWORK`
-(`false`), `SSH_SOURCE_CIDR` (empty), `ALLOWED_REGION` (default `$REGION`).
+(`false`), `SSH_SOURCE_CIDR` (empty), `SECONDARY_SSH_SOURCE_CIDR` (empty),
+`ALLOWED_REGION` (default `$REGION`).
+
+`SECONDARY_SSH_SOURCE_CIDR` is **opt-in and empty by default**: it opens a second SSH port on the
+workstations security group, which some Ringleader workstation types run their own SSH daemon on
+while the instance's own sshd keeps 22. Left empty, the stack opens nothing extra and admits
+exactly what it admitted before this parameter existed. You never supply the port number — the
+template carries it.
 
 ## The one placeholder
 
@@ -35,7 +42,7 @@ sed -i "s|__OIDC_PROVIDER__|oidc-app.ringleader.dev/org/<org-id>|g" ringleader-o
 
 `IssuerUrl` = `<issuer>/org/<org-id>`, `Audience` = `<IssuerUrl>/aws`, `Subject` = `org:<org-id>`,
 `Thumbprint`, `RoleName`, `AllowedRegion`, `CreateNetwork`, `VpcCidr`, `SubnetCidr`,
-`SshSourceCidr`.
+`SshSourceCidr`, `SecondarySshSourceCidr`.
 
 Deploy with `--capabilities CAPABILITY_NAMED_IAM` (the role has a fixed name).
 

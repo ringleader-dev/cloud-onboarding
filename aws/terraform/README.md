@@ -1,8 +1,9 @@
 # Ringleader AWS onboarding — Terraform module
 
 A reusable module that creates the IAM OIDC provider, the federated role, and (optionally)
-a public-subnet landing-pad network. Declares no `provider` block, so reference it from your
-own configuration; `examples/standalone/` is a ready-to-apply root.
+a public-subnet landing-pad network (egress out, inbound SSH from the CIDRs you name, and a
+**secondary SSH port** only if you ask for one). Declares no `provider` block, so reference it
+from your own configuration; `examples/standalone/` is a ready-to-apply root.
 
 ## Usage
 
@@ -32,6 +33,7 @@ output "handoff" { value = module.ringleader_onboarding.handoff }
 | `enable_workstation_identities` | `false` | grant `iam:PassRole` (scoped) for instance profiles |
 | `create_network` | `false` | create VPC + public subnet + IGW + security group |
 | `ssh_source_ranges` | `[]` | inbound-SSH CIDRs (empty = no inbound rule) |
+| `secondary_ssh_source_ranges` | `[]` | **opt-in** CIDRs for the **secondary SSH port** (TCP 2222) that some workstation types run their own SSH daemon on; empty = no rule, and an existing configuration plans clean. You do not supply the port |
 | `create_nat_gateway` | `false` | add a NAT gateway for private (no-public-IP) workstations (bills hourly) |
 
 ## Outputs

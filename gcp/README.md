@@ -115,6 +115,34 @@ the workstations (`providerConfig.gcp.networkTags: [ringleader-workstation]`).
 Leave `ssh_source_ranges` empty **only** if you reach the subnet privately (VPN /
 Interconnect / peering).
 
+### A second SSH port — opt-in, and off unless you ask
+
+Some Ringleader workstation types run their **own SSH daemon on a secondary port** inside the VM,
+while the VM's own sshd keeps 22, and `rl shell` dials that port for such a workstation. To open
+it:
+
+```hcl
+create_network              = true
+secondary_ssh_source_ranges = ["203.0.113.0/24"]
+```
+
+(or `SECONDARY_SSH_RANGES=203.0.113.0/24` for `network-landing-pad.sh`). That adds one rule,
+`ringleader-allow-secondary-ssh`, targeting the **`ringleader-secondary-ssh`** network tag — so it
+reaches only the workstations you tag with it. Put that tag on them **alongside** the first one:
+
+```yaml
+providerConfig:
+  gcp:
+    networkTags: [ringleader-workstation, ringleader-secondary-ssh]
+```
+
+Replacing rather than adding would take TCP 22 away with it.
+
+Leave `secondary_ssh_source_ranges` empty — the default — and **no rule is created**; your project
+admits exactly what it admits today. Ringleader tells you whether the workstations you plan to run
+need this port. You never supply the port number: the module carries it, so it cannot drift from
+the port Ringleader dials.
+
 ## Optional: let Ringleader create the per-user identities
 
 Ringleader can **provision** a dedicated service account per workstation user and **bind
