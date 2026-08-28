@@ -19,20 +19,30 @@
 #   ROLE_NAME    custom role display name                     (default: Ringleader Workstation Operator)
 #   WORKSTATION_IDENTITIES  1 to also grant the per-workstation runtime-identity
 #                actions (see below)                          (default: unset)
+#   EGRESS_CONTROL  1 to also grant the NSG actions Ringleader needs to restrict
+#                where workstations may connect               (default: unset)
 #   CREATE_NETWORK  true to also deploy the vnet + subnet + NAT
 #                gateway + NSG landing pad                     (default: false)
 #   NAME_PREFIX  prefix for the landing pad's resources        (default: ringleader)
 #   VNET_CIDR / SUBNET_CIDR  its address space / subnet prefix (defaults: 10.70.0.0/16, 10.70.1.0/24)
 #   SSH_SOURCE_CIDR  one CIDR allowed inbound on TCP 22        (default: empty = no inbound rule)
 #   SECONDARY_SSH_SOURCE_CIDR  one CIDR allowed inbound on the
-#                SECONDARY SSH port, for workstation types that
+#                secondary SSH port, for workstation types that
 #                run their own SSH daemon inside the VM        (default: empty = no rule)
+#   CREATE_GATEWAY_SUBNET  true to also reserve an empty subnet for
+#                the future DNS / HTTPS proxy VM               (default: false)
+#   GATEWAY_SUBNET_CIDR  its prefix                            (default: 10.70.240.0/24)
 #
 # WORKSTATION_IDENTITIES=1 lets Ringleader provision a dedicated user-assigned managed
 # identity per workstation user and assign roles to it. It adds the Microsoft.ManagedIdentity
-# CRUD/assign actions and Microsoft.Authorization roleAssignments write -- which built-in
-# Contributor does NOT have either. Scoped to this one resource group. Left off, the feature
+# CRUD/assign actions and Microsoft.Authorization roleAssignments write, which built-in
+# Contributor does not have either. Scoped to this one resource group. Left off, the feature
 # fails closed with a 403.
+#
+# EGRESS_CONTROL=1 lets Ringleader manage the network security groups that restrict where
+# workstations may connect. It adds NSG and security-rule read/write/delete plus join/action,
+# still scoped to this resource group. Left off, workstations reach whatever your network
+# routes, exactly as they do today.
 #
 set -euo pipefail
 
@@ -47,10 +57,17 @@ VNET_CIDR="${VNET_CIDR:-10.70.0.0/16}"
 SUBNET_CIDR="${SUBNET_CIDR:-10.70.1.0/24}"
 SSH_SOURCE_CIDR="${SSH_SOURCE_CIDR:-}"
 SECONDARY_SSH_SOURCE_CIDR="${SECONDARY_SSH_SOURCE_CIDR:-}"
+CREATE_GATEWAY_SUBNET="${CREATE_GATEWAY_SUBNET:-false}"
+GATEWAY_SUBNET_CIDR="${GATEWAY_SUBNET_CIDR:-10.70.240.0/24}"
 if [[ "${WORKSTATION_IDENTITIES:-0}" == "1" ]]; then
   ENABLE_IDENTITIES=true
 else
   ENABLE_IDENTITIES=false
+fi
+if [[ "${EGRESS_CONTROL:-0}" == "1" ]]; then
+  ENABLE_EGRESS=true
+else
+  ENABLE_EGRESS=false
 fi
 
 case "$ISSUER_URL" in
@@ -110,14 +127,15 @@ az deployment group create \
   --template-file "${SCRIPT_DIR}/azuredeploy.json" \
   --parameters principalId="$SP_OBJECT_ID" roleName="$ROLE_NAME" \
                enableWorkstationIdentities="$ENABLE_IDENTITIES" \
+               enableEgressControl="$ENABLE_EGRESS" \
   --query 'properties.provisioningState' -o tsv
 
-# 4. The OPTIONAL network landing pad, from its own template.
+# 4. The optional network landing pad, from its own template.
 #
-#    A SEPARATE file from azuredeploy.json on purpose: that one is also deployed by the Terraform
+#    A separate file from azuredeploy.json on purpose: that one is also deployed by the Terraform
 #    module, which compares Azure's normalized echo of it against the file on every plan, so it
-#    may carry no outputs block -- and a network landing pad is useless without one (you need the
-#    subnet id back). Deploying them as two deployments keeps both properties.
+#    can carry no outputs block -- and a landing pad is useless without one, since you need the
+#    subnet id back. Two deployments keep both properties.
 SUBNET_ID=""
 if [ "$CREATE_NETWORK" = "true" ]; then
   echo ">> deploying the network landing pad (${NAME_PREFIX}-vnet, NAT gateway, NSG)"
@@ -130,6 +148,8 @@ if [ "$CREATE_NETWORK" = "true" ]; then
     --parameters namePrefix="$NAME_PREFIX" vnetCidr="$VNET_CIDR" subnetCidr="$SUBNET_CIDR" \
                  sshSourceCidr="$SSH_SOURCE_CIDR" \
                  secondarySshSourceCidr="$SECONDARY_SSH_SOURCE_CIDR" \
+                 createGatewaySubnet="$CREATE_GATEWAY_SUBNET" \
+                 gatewaySubnetCidr="$GATEWAY_SUBNET_CIDR" \
     --query 'properties.outputs.subnetId.value' -o tsv)"
 fi
 

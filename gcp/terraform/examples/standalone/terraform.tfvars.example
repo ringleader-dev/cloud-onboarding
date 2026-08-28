@@ -26,3 +26,20 @@ org_uid               = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
 # WARNING: grants roles/resourcemanager.projectIamAdmin, which can grant ANY role in this project
 # to ANY principal (including roles/owner to itself). Dedicated projects only.
 # enable_workstation_identities = true
+
+# EGRESS CONTROL, off unless you set this. Lets Ringleader manage the VPC firewall rules that
+# restrict where your workstations may connect -- an allowlist you declare per workstation.
+# Grants a custom role with five compute.firewalls.* permissions and nothing else. Off changes
+# nothing: workstations reach whatever your network routes, as they do today.
+# enable_egress_control = true
+
+# Reserve an empty subnet (10.60.240.0/24 by default) for the DNS / HTTPS proxy VM that
+# hostname-level egress control will use. The VM does not exist yet; the subnet costs nothing
+# and saves renumbering later. Needs create_network.
+# create_gateway_subnet = true
+
+# More regions in the SAME global VPC -- a GCP VPC is global, so this needs no peering and one
+# proxy VM can serve every region. Each also gets its own Cloud Router and Cloud NAT.
+# additional_regions = {
+#   "europe-west1" = "10.60.16.0/20"
+# }

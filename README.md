@@ -120,6 +120,37 @@ on the workstations security group, like the rule for 22. **Azure** cannot scope
 NSG attaches to the subnet and there is no per-VM tag to match — so the source ranges are the only
 narrowing, and the rule admits the port to every VM on that subnet.
 
+## Optional: controlling where workstations can connect
+
+A Ringleader workstation reaches anything your network routes, and until now nothing in a
+manifest could narrow that. Ringleader can restrict it to an allowlist you declare per
+workstation — a set of IP ranges and hostnames — enforced by your cloud's own firewall:
+security groups on AWS, VPC firewall rules on GCP, network security groups on Azure.
+
+Enforcing it means Ringleader has to be able to **create and maintain those firewall
+objects**, which is more than the read-only network access the base onboarding grants. So it
+is a separate, opt-in switch in every module, **off by default**:
+
+| Path | Set |
+|---|---|
+| Terraform (all three clouds) | `enable_egress_control = true` |
+| `gcp/gcloud/onboard.sh` | `EGRESS_CONTROL=1` |
+| `aws/cloudformation/deploy.sh` | `EGRESS_CONTROL=true` |
+| `azure/arm/deploy.sh` | `EGRESS_CONTROL=1` |
+
+Leave it off and nothing changes — your workstations behave exactly as they do today, and the
+grant stays exactly as narrow as it is today. You can turn it on later by re-applying. Each
+cloud's README lists the precise actions it adds; every module also prints them back as an
+output so you can check what you granted rather than take it on trust.
+
+Restricting egress by **hostname** rather than by IP range additionally needs a small DNS /
+HTTPS proxy VM in your own account, because no cloud can answer DNS differently per VM. That
+VM is not built yet, but every module can reserve an empty subnet for it now
+(`create_gateway_subnet`), which costs nothing and saves renumbering later. If you plan to run
+workstations in more than one region, read your cloud's README on address ranges **before the
+first apply**: on AWS and Azure a second region is a second network, and joining them later is
+impossible if the ranges overlap.
+
 ## What you return after applying
 
 Each cloud's README lists the exact values. In short:

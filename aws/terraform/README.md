@@ -34,15 +34,21 @@ output "handoff" { value = module.ringleader_onboarding.handoff }
 | `create_network` | `false` | create VPC + public subnet + IGW + security group |
 | `ssh_source_ranges` | `[]` | inbound-SSH CIDRs (empty = no inbound rule) |
 | `secondary_ssh_source_ranges` | `[]` | **opt-in** CIDRs for the **secondary SSH port** (TCP 2222) that some workstation types run their own SSH daemon on; empty = no rule, and an existing configuration plans clean. You do not supply the port |
-| `create_nat_gateway` | `false` | add a NAT gateway for private (no-public-IP) workstations (bills hourly) |
+| `create_nat_gateway` | `false` | add a NAT gateway **and a private route table** for private (no-public-IP) workstations (bills hourly) |
+| `enable_egress_control` | `false` | let Ringleader manage the security groups that restrict where workstations may connect; grants six security-group actions plus `ec2:ModifyNetworkInterfaceAttribute` |
+| `egress_vpc_ids` | `[]` | confine those permissions to these VPCs. Empty uses the VPC this module created; empty **and** no created network means region-only scoping — check the `egress_scope` output |
+| `create_gateway_subnet` | `false` | reserve an empty **private** subnet for the future DNS / HTTPS proxy VM. Needs `create_nat_gateway` |
+| `gateway_subnet_cidr` | `10.60.240.0/24` | its CIDR, well clear of `subnet_cidr` |
+| `vpc_cidr` | `10.60.0.0/16` | one region's worth. **Give every region a distinct range from the first apply** — a second region is a second VPC, and an inter-region Transit Gateway cannot route overlapping CIDRs |
 | `max_session_duration` | `3600` | ceiling on the life of the credentials Ringleader mints by assuming the role (AWS bounds: 3600–43200). 3600 is AWS's own default, so setting it changes nothing on an existing role |
 
 ## Outputs
 
 `target_role_arn`, `account_id`, `subnet_id`, `security_group_id`, and `handoff` (all of
-them in one object). Hand `handoff` back to Ringleader.
+them in one object). Hand `handoff` back to Ringleader. Plus `vpc_id`, `gateway_subnet_id`,
+`gateway_subnet_cidr` and `private_route_table_id` when the matching options are on.
 
-Three more are for **audit**, and none of them goes back to Ringleader — they exist so the
+Four more are for **audit**, and none of them goes back to Ringleader — they exist so the
 security property is something you can verify after applying rather than take on trust:
 
 | Output | Read it back to confirm |
@@ -50,6 +56,7 @@ security property is something you can verify after applying rather than take on
 | `issuer_url` | the per-org issuer this account now trusts, byte for byte against what Ringleader gave you |
 | `trusted_subject` | the **one** subject the trust policy admits — your org's uid and nothing else |
 | `actions_granted` | every action the role holds, read from the same lists the policy is built from, so it cannot overstate or understate |
+| `egress_scope` | how the egress-control permissions are bounded — a VPC list, a region list, or `UNBOUNDED` |
 
 ## Partitions
 

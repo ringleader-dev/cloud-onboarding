@@ -40,6 +40,23 @@ variable "secondary_ssh_source_ranges" {
   default = []
 }
 
+# Egress control, and a home for the proxy VM it will eventually use. Both off by default;
+# the gateway subnet is private, so it needs the NAT gateway.
+variable "enable_egress_control" {
+  type    = bool
+  default = false
+}
+
+variable "create_nat_gateway" {
+  type    = bool
+  default = false
+}
+
+variable "create_gateway_subnet" {
+  type    = bool
+  default = false
+}
+
 provider "aws" {
   region = var.region
 }
@@ -60,6 +77,10 @@ module "ringleader_onboarding" {
 
   # Off unless you set it: the secondary SSH port some workstation types use.
   secondary_ssh_source_ranges = var.secondary_ssh_source_ranges
+
+  enable_egress_control = var.enable_egress_control
+  create_nat_gateway    = var.create_nat_gateway
+  create_gateway_subnet = var.create_gateway_subnet
 }
 
 output "handoff" {

@@ -19,7 +19,14 @@
       "type": "Bool",
       "defaultValue": false,
       "metadata": {
-        "description": "Let Ringleader provision a per-user managed identity and assign roles to it. Adds the Microsoft.ManagedIdentity CRUD/assign actions and Microsoft.Authorization roleAssignments write -- which built-in Contributor does NOT have either. Leave false unless you use the feature; left off it fails closed with a 403."
+        "description": "Let Ringleader provision a per-user managed identity and assign roles to it. Adds the Microsoft.ManagedIdentity CRUD/assign actions and Microsoft.Authorization roleAssignments write, which built-in Contributor does not have either. Leave false unless you use the feature; left off it fails closed with a 403."
+      }
+    },
+    "enableEgressControl": {
+      "type": "Bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Let Ringleader manage the network security groups that restrict where workstations may connect. Adds NSG and security-rule read/write/delete plus join/action, which is what lets Ringleader attach a group to a workstation NIC. Still scoped to this resource group. Leave false unless you use egress control; left off it fails closed with a 403."
       }
     }
   },
@@ -64,7 +71,17 @@
       "Microsoft.Authorization/roleAssignments/delete",
       "Microsoft.Authorization/roleDefinitions/read"
     ],
-    "effectiveActions": "[if(parameters('enableWorkstationIdentities'), union(variables('actions'), variables('identityActions')), variables('actions'))]"
+    "egressActions": [
+      "Microsoft.Network/networkSecurityGroups/read",
+      "Microsoft.Network/networkSecurityGroups/write",
+      "Microsoft.Network/networkSecurityGroups/delete",
+      "Microsoft.Network/networkSecurityGroups/join/action",
+      "Microsoft.Network/networkSecurityGroups/securityRules/read",
+      "Microsoft.Network/networkSecurityGroups/securityRules/write",
+      "Microsoft.Network/networkSecurityGroups/securityRules/delete"
+    ],
+    "actionsWithIdentities": "[if(parameters('enableWorkstationIdentities'), union(variables('actions'), variables('identityActions')), variables('actions'))]",
+    "effectiveActions": "[if(parameters('enableEgressControl'), union(variables('actionsWithIdentities'), variables('egressActions')), variables('actionsWithIdentities'))]"
   },
   "resources": [
     {

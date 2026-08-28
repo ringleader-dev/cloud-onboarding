@@ -52,6 +52,14 @@ Env vars for it: `NAME_PREFIX` (`ringleader`), `VNET_CIDR` (`10.70.0.0/16`),
 Both CIDR vars empty means the NSG is created with **no inbound rule**, which is
 correct only if you reach the VNet privately.
 
+`CREATE_GATEWAY_SUBNET=true` (with `GATEWAY_SUBNET_CIDR`, default `10.70.240.0/24`) also
+reserves an empty subnet for the DNS / HTTPS proxy VM that hostname-level egress control
+will use, and prints its id. It shares the NAT gateway, so the proxy needs no public IP.
+
+`EGRESS_CONTROL=1` is separate and goes on the **role**, not the network: it adds the NSG
+actions Ringleader needs to enforce an egress policy. See
+[`../README.md`](../README.md#optional-egress-control).
+
 **Why a second template rather than a `deployNetwork` flag on the first.**
 `azuredeploy.json` is also deployed by the [Terraform module](../terraform/),
 which compares Azure's normalized echo of it against the file on every plan — so
@@ -110,7 +118,19 @@ stores, and edits must keep it that way:
   explicitly** — Azure materializes the default into the stored parameters while the file
   leaves it unset. That is why the role definition GUID is a `variables` entry rather than
   a parameter.
+- **parameter `type` in ARM's canonical casing** — `String`, `Bool`, `Int`, `Object`,
+  `Array`, `SecureString`, `SecureObject`. ARM accepts the lowercase spellings and the docs
+  use them, but Azure stores the capitalized form, so a lowercase `"type": "string"` here is
+  a permanent one-line diff per parameter.
 
 Parameter `metadata.description` blocks are preserved by Azure and are fine.
+
+The optional action sets — `enableWorkstationIdentities` and `enableEgressControl` — are
+folded in with nested `if`/`union` expressions over the `actions` variable, so the base list
+stays in one place. Both parameters carry a `defaultValue`, and both are passed explicitly by
+the Terraform module and `deploy.sh`, which is what rule three requires.
+
+Check what Azure actually holds with
+`az deployment group export -g <rg> -n ringleader-onboarding`.
 
 See [`../README.md`](../README.md) for the trust model and the values to hand back.

@@ -23,6 +23,24 @@ output "subnet_id" {
   description = "Hand back to Ringleader (only when create_network = true; otherwise supply your own subnet)."
 }
 
+output "gateway_subnet_id" {
+  value       = var.create_network && var.create_gateway_subnet ? azurerm_subnet.gateway[0].id : null
+  description = "Subnet reserved for the future DNS / HTTPS proxy VM (only when create_gateway_subnet = true)."
+}
+
+output "gateway_subnet_prefix" {
+  value       = var.create_network && var.create_gateway_subnet ? var.gateway_subnet_prefix : null
+  description = "The gateway subnet's prefix. This is what an egress allowlist names to let workstations reach the proxy, so it is worth recording."
+}
+
+output "role_extras_granted" {
+  description = "Optional action sets folded into the custom role, for audit. The base action list is in ../arm/azuredeploy.json."
+  value = concat(
+    var.enable_workstation_identities ? ["Microsoft.ManagedIdentity CRUD + assign, Microsoft.Authorization roleAssignments -- workstation runtime identities"] : [],
+    var.enable_egress_control ? ["Microsoft.Network/networkSecurityGroups (+ securityRules) read/write/delete and join/action -- egress control"] : [],
+  )
+}
+
 output "handoff" {
   description = "Everything to hand back to Ringleader, in one place. Add your tenant id (az account show --query tenantId -o tsv)."
   value = {

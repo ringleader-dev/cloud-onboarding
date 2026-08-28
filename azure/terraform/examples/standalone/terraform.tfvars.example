@@ -25,3 +25,20 @@ org_uid               = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
 # Let Ringleader provision a per-user managed identity per workstation and assign roles to it.
 # Adds Microsoft.Authorization/roleAssignments/write, which built-in Contributor does NOT have.
 # enable_workstation_identities = true
+
+# EGRESS CONTROL, off unless you set this. Lets Ringleader manage the network security groups
+# that restrict where your workstations may connect -- an allowlist you declare per workstation.
+# Adds seven NSG actions to the custom role, still scoped to this resource group. Off changes
+# nothing. Note these attach to the NIC, so unlike the inbound rules above they really are
+# per workstation.
+# enable_egress_control = true
+
+# Reserve an empty subnet (10.70.240.0/24 by default) for the DNS / HTTPS proxy VM that
+# hostname-level egress control will use. The VM does not exist yet; the subnet costs nothing,
+# shares the NAT gateway, and saves renumbering later. Needs create_network.
+# create_gateway_subnet = true
+
+# PLANNING A SECOND REGION? Set vnet_address_space per region BEFORE the first apply. An Azure
+# VNet is regional, and global VNet peering cannot join overlapping address spaces.
+#   first region  10.70.0.0/16, second 10.71.0.0/16, third 10.72.0.0/16 ...
+# vnet_address_space = "10.70.0.0/16"

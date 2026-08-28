@@ -5,10 +5,7 @@ variable "project_id" {
 
 variable "ringleader_issuer_url" {
   type        = string
-  description = <<-EOT
-    Ringleader's OIDC issuer origin, provided by Ringleader, e.g.
-    https://oidc-app.ringleader.dev. NO trailing slash.
-  EOT
+  description = "Ringleader's OIDC issuer origin, provided by Ringleader, e.g. https://oidc-app.ringleader.dev. No trailing slash."
 
   validation {
     condition     = can(regex("^https://[^/]+$", var.ringleader_issuer_url))
@@ -19,8 +16,8 @@ variable "ringleader_issuer_url" {
 variable "org_uid" {
   type        = string
   description = <<-EOT
-    Your Ringleader organization id, provided by Ringleader. A lowercase RFC-4122
-    UUID. Only a Ringleader token carrying sub = org:<org_uid> can federate in.
+    Your Ringleader organization id, provided by Ringleader. A lowercase RFC-4122 UUID.
+    Only a Ringleader token carrying sub = org:<org_uid> can federate in.
   EOT
 
   validation {
@@ -59,22 +56,59 @@ variable "enable_workstation_identities" {
   type        = bool
   default     = false
   description = <<-EOT
-    Let Ringleader PROVISION a dedicated service account per workstation user and BIND ROLES to it
-    (e.g. so one workstation can read one bucket). Off by default.
+    Let Ringleader provision a dedicated service account per workstation user and bind roles
+    to it (so one workstation can read one bucket, say). Off by default.
 
-    This is not what makes a workstation run as an identity -- every workstation already does, on
-    the project's default compute service account. It is only about Ringleader creating those
-    accounts and granting them roles for you. You can get the same result without this by creating
-    the service accounts yourself and naming one on the workstation
+    This is not what makes a workstation run as an identity -- every workstation already
+    does, on the project's default compute service account. It is only about Ringleader
+    creating those accounts and granting them roles. You can get the same result without it
+    by creating the service accounts yourself and naming one on the workstation
     (providerConfig.gcp.serviceAccount).
 
-    SECURITY: this grants roles/resourcemanager.projectIamAdmin, which can grant ANY role in this
-    project to ANY principal -- including roles/owner to itself. That is inherent (setting a role
-    binding IS project-IAM administration), not an artifact of how this module is written. Turn it
-    on ONLY in a project dedicated to Ringleader workstations.
+    Please read before enabling: this grants roles/resourcemanager.projectIamAdmin, which can
+    grant any role in this project to any principal, including roles/owner to itself. That is
+    inherent -- setting a role binding is project-IAM administration -- so enable it only in a
+    project dedicated to Ringleader workstations.
 
     Left off, the feature fails closed with a 403; nothing else is affected.
   EOT
+}
+
+# --- Optional: egress control -----------------------------------------------
+
+variable "enable_egress_control" {
+  type        = bool
+  default     = false
+  description = <<-EOT
+    Let Ringleader manage the VPC firewall rules that restrict where your workstations may
+    connect. Off by default, and off means nothing changes: workstations reach whatever your
+    network routes, exactly as they do today.
+
+    Turning it on grants a custom project role with five permissions --
+    compute.firewalls.create/delete/get/list/update -- and nothing else. Deliberately not
+    roles/compute.securityAdmin, which also carries Cloud Armor security policies, SSL
+    policies and certificates.
+
+    Ringleader compiles each distinct egress policy into one firewall rule targeted by
+    network tag, so a fleet sharing a policy costs one rule rather than one per workstation.
+
+    Leave it off if you only want workstations. You can enable it later by re-applying.
+  EOT
+}
+
+variable "egress_role_id" {
+  type        = string
+  default     = "ringleaderEgressControl"
+  description = <<-EOT
+    Id of the custom role created when enable_egress_control is set. Change it only if that
+    id is already taken in this project -- a custom role id cannot be reused for 7 days after
+    deletion, so a re-apply soon after a destroy may need a different one.
+  EOT
+
+  validation {
+    condition     = can(regex("^[a-zA-Z0-9_.]{3,64}$", var.egress_role_id))
+    error_message = "egress_role_id must be 3-64 characters of [a-zA-Z0-9_.] (GCP custom role ids allow no hyphens)."
+  }
 }
 
 # --- Optional network landing pad (egress out; inbound only via ssh_source_ranges) ---
@@ -89,14 +123,14 @@ variable "ssh_source_ranges" {
   type        = list(string)
   default     = []
   description = <<-EOT
-    CIDRs allowed to reach workstations on TCP 22, when create_network is set. Empty (the default)
-    creates NO inbound rule.
+    CIDRs allowed to reach workstations on TCP 22, when create_network is set. Empty (the
+    default) creates no inbound rule.
 
     Ringleader has no bastion and no SSH tunnel: `rl shell`, `rl tmux`, port-forwards and
     VS Code Web all dial the workstation on 22. So with no rule, workstations come up and
-    report Ready but nobody can get into them -- correct ONLY if you reach the subnet
-    privately (VPN / Interconnect / peering) from wherever you run `rl`. Otherwise list
-    the CIDRs your engineers connect from.
+    report Ready but nobody can get into them -- correct only if you reach the subnet
+    privately (VPN / Interconnect / peering) from wherever you run `rl`. Otherwise list the
+    CIDRs your engineers connect from.
   EOT
 }
 
@@ -110,16 +144,16 @@ variable "secondary_ssh_source_ranges" {
   type        = list(string)
   default     = []
   description = <<-EOT
-    OPT-IN, off by default. CIDRs allowed to reach the SECONDARY SSH port (TCP 2222) on the
+    Opt-in, off by default. CIDRs allowed to reach the secondary SSH port (TCP 2222) on the
     workstations you tag with secondary_ssh_network_tag, when create_network is set.
 
-    Empty -- the default -- creates NO rule at all. A configuration that leaves this unset admits
-    exactly what it admitted before this variable existed.
+    Empty -- the default -- creates no rule at all, so a configuration that leaves this unset
+    admits exactly what it admitted before the variable existed.
 
-    Some Ringleader workstation types run their own SSH daemon on that port inside the VM, beside
-    the VM's own sshd on 22, and `rl shell` dials it instead of 22 for those workstations. Other
-    workstation types never use it. Ringleader tells you which you are running; if in doubt, leave
-    this empty -- an unopened port costs you nothing but a workstation you cannot reach.
+    Some Ringleader workstation types run their own SSH daemon on that port inside the VM,
+    beside the VM's own sshd on 22, and `rl shell` dials it instead of 22 for those. Others
+    never use it. Ringleader tells you which you are running; if in doubt, leave this empty --
+    an unopened port costs you nothing but a workstation you cannot reach.
 
     The port itself is not a variable: Ringleader fixes it, and this module supplies it.
   EOT
@@ -129,8 +163,8 @@ variable "secondary_ssh_network_tag" {
   type        = string
   default     = "ringleader-secondary-ssh"
   description = <<-EOT
-    Network tag the secondary-SSH rule targets, so that rule reaches only the workstations that
-    need the port. Put it on those workstations ALONGSIDE workstation_network_tag, e.g.
+    Network tag the secondary-SSH rule targets, so that rule reaches only the workstations
+    that need the port. Put it on those workstations alongside workstation_network_tag, e.g.
     providerConfig.gcp.networkTags: [ringleader-workstation, ringleader-secondary-ssh].
     Replacing the first tag rather than adding to it would take TCP 22 away with it.
   EOT
@@ -140,12 +174,12 @@ variable "name_prefix" {
   type        = string
   default     = "ringleader"
   description = <<-EOT
-    Prefix for every resource the optional landing pad creates. The default reproduces the names
-    this module has always used, so changing nothing changes nothing.
+    Prefix for every resource the optional landing pad creates. The default reproduces the
+    names this module has always used, so changing nothing changes nothing.
 
     Set it if those names are already taken in this project -- a second landing pad, or a
-    ringleader-vpc you built earlier and kept. Without it the apply fails on a name collision with a
-    resource this module does not own.
+    ringleader-vpc you built earlier and kept. Without it the apply fails on a name collision
+    with a resource this module does not own.
   EOT
 }
 
@@ -153,24 +187,71 @@ variable "allow_internal_traffic" {
   type        = bool
   default     = false
   description = <<-EOT
-    Let workstations on this subnet reach EACH OTHER (tcp/udp/icmp from the subnet's own range).
+    Let workstations reach each other (tcp/udp/icmp from the workstation subnet ranges).
     Off by default, and off is not an oversight.
 
-    A custom-mode VPC has no firewall rules, so today two workstations here cannot reach each other
-    at all -- which means a compromised box cannot scan its neighbours. Turn this on if your
-    workflows need workstation-to-workstation traffic; leave it off otherwise. It never admits
-    anything from outside the subnet.
+    A custom-mode VPC has no firewall rules, so today two workstations here cannot reach each
+    other at all -- which means a compromised box cannot scan its neighbours. Turn this on if
+    your workflows need workstation-to-workstation traffic; leave it off otherwise. It never
+    admits anything from outside the subnets.
   EOT
 }
 
 variable "region" {
   type        = string
   default     = "us-central1"
-  description = "Region for the optional network landing pad."
+  description = "Region for the optional network landing pad's first subnet, its Cloud Router and its Cloud NAT."
 }
 
 variable "subnet_cidr" {
   type        = string
   default     = "10.60.0.0/20"
   description = "Primary IP range for the optional workstations subnet."
+}
+
+variable "additional_regions" {
+  type        = map(string)
+  default     = {}
+  description = <<-EOT
+    Extra regions to place workstations in, as region => subnet CIDR, e.g.
+
+      { "europe-west1" = "10.60.16.0/20", "asia-southeast1" = "10.60.32.0/20" }
+
+    A GCP VPC is global and its subnets are regional, so these join the same VPC as the
+    primary subnet and reach it on internal addresses with no peering -- which is why
+    multi-region is cheap here and expensive on AWS and Azure. Ranges must not overlap; GCP
+    refuses an overlapping subnet, so a mistake fails the apply rather than breaking routing
+    later.
+
+    Each region also gets its own Cloud Router and Cloud NAT, because both are regional and a
+    subnet without them comes up unable to reach the Ringleader control plane.
+  EOT
+}
+
+# --- Optional: a subnet for the future DNS / HTTPS proxy VM ------------------
+
+variable "create_gateway_subnet" {
+  type        = bool
+  default     = false
+  description = <<-EOT
+    Reserve a subnet for the DNS / HTTPS proxy VM that Ringleader's hostname-level egress
+    control will use. Off by default. Requires create_network.
+
+    The VM itself is not built yet and this creates nothing but an empty subnet, which GCP
+    does not bill for. It is worth doing early because the firewall rules that permit
+    workstation -> proxy traffic can then name one stable range instead of one VM's address,
+    and because carving the range now avoids renumbering later.
+
+    Cloud NAT already covers every range in this region, so the proxy will have upstream
+    egress with no further setup.
+  EOT
+}
+
+variable "gateway_subnet_cidr" {
+  type        = string
+  default     = "10.60.240.0/24"
+  description = <<-EOT
+    IP range for the gateway subnet, when create_gateway_subnet is set. The default sits well
+    clear of the workstations range so growing that subnet later does not collide.
+  EOT
 }

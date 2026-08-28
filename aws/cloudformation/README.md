@@ -44,6 +44,14 @@ sed -i "s|__OIDC_PROVIDER__|oidc-app.ringleader.dev/org/<org-id>|g" ringleader-o
 `Thumbprint`, `RoleName`, `AllowedRegion`, `CreateNetwork`, `VpcCidr`, `SubnetCidr`,
 `SshSourceCidr`, `SecondarySshSourceCidr`.
 
+Egress control and the proxy subnet add five more, all off by default:
+`EnableEgressControl`, `EgressVpcId`, `CreateNatGateway`, `CreateGatewaySubnet`,
+`GatewaySubnetCidr`. `deploy.sh` exposes them as `EGRESS_CONTROL`, `EGRESS_VPC_ID`,
+`CREATE_NAT_GATEWAY`, `CREATE_GATEWAY_SUBNET` and `GATEWAY_SUBNET_CIDR`;
+[`../README.md`](../README.md#optional-egress-control) explains what each one grants.
+`CreateGatewaySubnet=true` turns the NAT gateway on for you, since the proxy VM has no
+public IP and NAT is its only route out.
+
 Deploy with `--capabilities CAPABILITY_NAMED_IAM` (the role has a fixed name).
 
 ### About the `Thumbprint` default
@@ -67,9 +75,10 @@ THUMBPRINT=$(echo | openssl s_client -servername oidc-app.ringleader.dev \
 
 ## Outputs
 
-`TargetRoleArn`, `OidcProviderArn`, and — with `CreateNetwork=true` — `SubnetId` and
-`SecurityGroupId`. Hand the role ARN, region, and (if created) subnet + security group back
-to Ringleader.
+`TargetRoleArn`, `OidcProviderArn`, and — with `CreateNetwork=true` — `SubnetId`,
+`SecurityGroupId` and `VpcId`. With the proxy subnet on, also `GatewaySubnetId`; with a NAT
+gateway, `PrivateRouteTableId`. Hand the role ARN, region, and (if created) subnet +
+security group back to Ringleader.
 
 ## Revoke
 

@@ -33,14 +33,27 @@ Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standal
 | `secondary_ssh_network_tag` | `ringleader-secondary-ssh` | Network tag that rule targets. Put it on the workstations that need the port **alongside** `workstation_network_tag`, never instead of it. |
 | `name_prefix` | `ringleader` | Prefix for the landing pad's resource names. Change it only if those names are already taken in the project; the default reproduces the names this module has always used. |
 | `allow_internal_traffic` | `false` | Let workstations on the subnet reach **each other** (tcp/udp/icmp from the subnet's own range). Off by default: a custom VPC has no rules, so today they cannot, and a compromised box cannot scan its neighbours. Never admits anything from outside the subnet. |
-| `region` | `us-central1` | Region for the optional network. |
+| `region` | `us-central1` | Region for the optional network's first subnet, router and NAT. |
 | `subnet_cidr` | `10.60.0.0/20` | Primary range for the optional subnet. |
+| `additional_regions` | `{}` | More regions in the **same global VPC**, as `region => subnet CIDR`. Each also gets its own Cloud Router and Cloud NAT, since both are regional. GCP refuses overlapping ranges, so a mistake fails the apply. |
+| `enable_egress_control` | `false` | Let Ringleader manage the firewall rules that restrict where workstations may connect. Grants a **custom role** with `compute.firewalls.create/delete/get/list/update` — deliberately not `roles/compute.securityAdmin`, which reaches further. |
+| `egress_role_id` | `ringleaderEgressControl` | Id of that custom role. GCP reserves a deleted custom-role id for 7 days, so a quick re-apply after a destroy may need a different one. |
+| `create_gateway_subnet` | `false` | Reserve an empty subnet for the future DNS / HTTPS proxy VM. Costs nothing; saves renumbering later. |
+| `gateway_subnet_cidr` | `10.60.240.0/24` | Its range. Sits well clear of `subnet_cidr` so growing that one does not collide. |
 
 ## Outputs
 
 `handoff` bundles everything to hand back to Ringleader:
 `target_service_account_email`, `project_id`, `workload_identity_provider`, and
 `subnetwork_self_link` (when `create_network`).
+
+Also available: `additional_subnetwork_self_links` (keyed by region),
+`gateway_subnetwork_self_link` and `gateway_subnet_cidr` — the last is what an egress
+allowlist names to let workstations reach the proxy, so it is worth recording.
+
+Two are for **audit** and go nowhere near Ringleader: `trusted_subject` (the one subject
+this project's provider admits) and `roles_granted` (every role the service account holds,
+including the optional ones, so you can check what you granted rather than take it on trust).
 
 ## Use as a module
 

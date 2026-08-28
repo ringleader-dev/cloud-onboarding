@@ -64,6 +64,58 @@ variable "enable_workstation_identities" {
   EOT
 }
 
+# --- Optional: egress control -----------------------------------------------
+
+variable "enable_egress_control" {
+  type        = bool
+  default     = false
+  description = <<-EOT
+    Let Ringleader manage the network security groups that restrict where your workstations
+    may connect. Off by default, and off means nothing changes: workstations reach whatever
+    your network routes, exactly as they do today.
+
+    Turning it on adds seven NSG actions to the custom role -- read/write/delete on the group
+    and its security rules, plus join/action, which is what lets Ringleader attach a group to
+    a workstation's NIC. Still scoped to this one resource group.
+
+    Ringleader compiles each distinct egress policy into one NSG and attaches it to the NICs
+    of the workstations carrying that policy, so a fleet sharing a policy costs one group.
+    That matters here: Azure caps an NSG at 1,000 rules and will not raise it.
+
+    Leave it off if you only want workstations. You can enable it later by re-applying.
+  EOT
+}
+
+# --- Optional: a subnet for the future DNS / HTTPS proxy VM ------------------
+
+variable "create_gateway_subnet" {
+  type        = bool
+  default     = false
+  description = <<-EOT
+    Reserve a subnet for the DNS / HTTPS proxy VM that Ringleader's hostname-level egress
+    control will use. Off by default. Requires create_network.
+
+    The VM itself is not built yet and this creates nothing but an empty subnet, which Azure
+    does not bill for. It is worth doing early because the NSG rules that permit
+    workstation -> proxy traffic can then name one stable prefix instead of one VM's address,
+    and because carving the range now avoids renumbering later.
+
+    It shares the landing pad's NAT gateway, so the proxy will have upstream egress without a
+    public IP.
+  EOT
+}
+
+variable "gateway_subnet_prefix" {
+  type        = string
+  default     = "10.70.240.0/24"
+  description = <<-EOT
+    Prefix for the gateway subnet, when create_gateway_subnet is set. Must sit inside
+    vnet_address_space, and the default sits well clear of the workstations subnet so growing
+    that one later does not collide. If you changed vnet_address_space for a second region,
+    change this to match.
+  EOT
+}
+
 # --- Optional network landing pad (egress out; inbound only via ssh_source_ranges) ---
 
 variable "create_network" {
@@ -134,11 +186,18 @@ variable "location" {
 variable "vnet_address_space" {
   type        = string
   default     = "10.70.0.0/16"
-  description = "Address space for the optional vnet."
+  description = <<-EOT
+    Address space for the optional vnet. One region's worth.
+
+    Give every region its own range from the first apply. An Azure VNet is regional, so a
+    second region is a second VNet, and joining them later needs global VNet peering, which
+    cannot join overlapping address spaces. A simple plan: 10.70.0.0/16 for the first region,
+    10.71.0.0/16 for the second, and so on.
+  EOT
 }
 
 variable "subnet_prefix" {
   type        = string
   default     = "10.70.1.0/24"
-  description = "Prefix for the optional workstations subnet."
+  description = "Prefix for the optional workstations subnet. Must sit inside vnet_address_space."
 }

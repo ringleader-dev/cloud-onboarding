@@ -18,3 +18,24 @@ ssh_source_ranges = []
 # `rl shell` dials that port for them. Ringleader tells you if the workstations you plan to run
 # need it; leaving this empty opens nothing and changes nothing.
 secondary_ssh_source_ranges = []
+
+# EGRESS CONTROL, off unless you set this. Lets Ringleader manage the security groups that
+# restrict where your workstations may connect -- an allowlist you declare per workstation.
+# Bounded to the VPC this module creates; read the egress_scope output after applying to
+# confirm. Off changes nothing.
+# enable_egress_control = true
+
+# A NAT gateway plus a private route table, so an instance with no public IP still has egress.
+# Bills per hour. Required by create_gateway_subnet.
+# create_nat_gateway = true
+
+# Reserve an empty private subnet (10.60.240.0/24 by default) for the DNS / HTTPS proxy VM that
+# hostname-level egress control will use. The VM does not exist yet; the subnet costs nothing
+# and saves renumbering later.
+# create_gateway_subnet = true
+
+# PLANNING A SECOND REGION? Set vpc_cidr per region BEFORE the first apply. An AWS VPC is
+# regional, and joining two regions later needs an inter-region Transit Gateway, which cannot
+# route overlapping CIDRs -- so two regions on the default range can never be joined.
+#   first region  10.60.0.0/16, second 10.61.0.0/16, third 10.62.0.0/16 ...
+# vpc_cidr = "10.60.0.0/16"

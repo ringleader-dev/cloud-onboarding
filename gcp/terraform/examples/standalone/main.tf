@@ -39,6 +39,17 @@ variable "secondary_ssh_source_ranges" {
   default = []
 }
 
+# Egress control, and a home for the proxy VM it will eventually use. Both off by default.
+variable "enable_egress_control" {
+  type    = bool
+  default = false
+}
+
+variable "create_gateway_subnet" {
+  type    = bool
+  default = false
+}
+
 module "ringleader" {
   source = "../.."
 
@@ -49,6 +60,9 @@ module "ringleader" {
 
   ssh_source_ranges           = var.ssh_source_ranges
   secondary_ssh_source_ranges = var.secondary_ssh_source_ranges
+
+  enable_egress_control = var.enable_egress_control
+  create_gateway_subnet = var.create_gateway_subnet
 }
 
 output "handoff" {
