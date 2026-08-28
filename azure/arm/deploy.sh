@@ -17,22 +17,38 @@
 #   ORG_UID      your Ringleader organization id (a UUID)     (required)
 #   APP_NAME     Entra app display name                       (default: ringleader-workstations)
 #   ROLE_NAME    custom role display name                     (default: Ringleader Workstation Operator)
-#   WORKSTATION_IDENTITIES  1 to also grant the per-workstation runtime-identity
-#                actions (see below)                          (default: unset)
-#   CREATE_NETWORK  true to also deploy the vnet + subnet + NAT
-#                gateway + NSG landing pad                     (default: false)
+#   WORKSTATION_IDENTITIES  0 to skip the per-workstation runtime-identity
+#                actions (see below)                          (default: 1, granted)
+#   EGRESS_CONTROL  0 to skip the NSG actions Ringleader needs to restrict
+#                where workstations may connect               (default: 1, granted)
+#   CREATE_NETWORK  false to skip the vnet + subnet + NAT gateway
+#                + NSG landing pad. Its NAT gateway and public IP
+#                bill per hour                                 (default: true)
 #   NAME_PREFIX  prefix for the landing pad's resources        (default: ringleader)
 #   VNET_CIDR / SUBNET_CIDR  its address space / subnet prefix (defaults: 10.70.0.0/16, 10.70.1.0/24)
 #   SSH_SOURCE_CIDR  one CIDR allowed inbound on TCP 22        (default: empty = no inbound rule)
 #   SECONDARY_SSH_SOURCE_CIDR  one CIDR allowed inbound on the
-#                SECONDARY SSH port, for workstation types that
-#                run their own SSH daemon inside the VM        (default: empty = no rule)
+#                secondary SSH port, for workstation types that
+#                run their own SSH daemon inside the VM. "none"
+#                closes it                     (default: same as SSH_SOURCE_CIDR)
+#   CREATE_GATEWAY_SUBNET  false to skip the empty subnet reserved for
+#                the future DNS / HTTPS proxy VM               (default: true)
+#   GATEWAY_SUBNET_CIDR  its prefix                            (default: 10.70.240.0/24)
 #
-# WORKSTATION_IDENTITIES=1 lets Ringleader provision a dedicated user-assigned managed
-# identity per workstation user and assign roles to it. It adds the Microsoft.ManagedIdentity
-# CRUD/assign actions and Microsoft.Authorization roleAssignments write -- which built-in
-# Contributor does NOT have either. Scoped to this one resource group. Left off, the feature
-# fails closed with a 403.
+# The defaults grant what Ringleader needs for the features available today, so enabling one
+# later does not mean a second onboarding pass. Only the landing pad costs money.
+#
+# WORKSTATION_IDENTITIES lets Ringleader provision a dedicated user-assigned managed identity
+# per workstation user and assign roles to it. It adds the Microsoft.ManagedIdentity
+# CRUD/assign actions and Microsoft.Authorization roleAssignments write, which built-in
+# Contributor does not carry either -- still scoped to this one resource group, which is the
+# bound that makes it reasonable as a default. Set it to 0 and the feature fails closed
+# with a 403.
+#
+# EGRESS_CONTROL lets Ringleader manage the network security groups that restrict where
+# workstations may connect. It adds NSG and security-rule read/write/delete plus join/action,
+# still scoped to this resource group, and restricts nothing until you declare an egress
+# policy on a workstation. Set it to 0 to skip the grant.
 #
 set -euo pipefail
 
@@ -41,16 +57,28 @@ ISSUER_URL="${ISSUER_URL:?set ISSUER_URL to the Ringleader issuer origin, e.g. h
 ORG_UID="${ORG_UID:?set ORG_UID to your Ringleader organization id, a UUID}"
 APP_NAME="${APP_NAME:-ringleader-workstations}"
 ROLE_NAME="${ROLE_NAME:-Ringleader Workstation Operator}"
-CREATE_NETWORK="${CREATE_NETWORK:-false}"
+CREATE_NETWORK="${CREATE_NETWORK:-true}"
 NAME_PREFIX="${NAME_PREFIX:-ringleader}"
 VNET_CIDR="${VNET_CIDR:-10.70.0.0/16}"
 SUBNET_CIDR="${SUBNET_CIDR:-10.70.1.0/24}"
 SSH_SOURCE_CIDR="${SSH_SOURCE_CIDR:-}"
-SECONDARY_SSH_SOURCE_CIDR="${SECONDARY_SSH_SOURCE_CIDR:-}"
-if [[ "${WORKSTATION_IDENTITIES:-0}" == "1" ]]; then
+# 2222 follows 22 unless you say otherwise: if you opened one to your engineers you almost
+# certainly want the other open to the same people. "none" closes it.
+SECONDARY_SSH_SOURCE_CIDR="${SECONDARY_SSH_SOURCE_CIDR:-$SSH_SOURCE_CIDR}"
+if [ "$SECONDARY_SSH_SOURCE_CIDR" = "none" ]; then
+  SECONDARY_SSH_SOURCE_CIDR=""
+fi
+CREATE_GATEWAY_SUBNET="${CREATE_GATEWAY_SUBNET:-true}"
+GATEWAY_SUBNET_CIDR="${GATEWAY_SUBNET_CIDR:-10.70.240.0/24}"
+if [[ "${WORKSTATION_IDENTITIES:-1}" == "1" ]]; then
   ENABLE_IDENTITIES=true
 else
   ENABLE_IDENTITIES=false
+fi
+if [[ "${EGRESS_CONTROL:-1}" == "1" ]]; then
+  ENABLE_EGRESS=true
+else
+  ENABLE_EGRESS=false
 fi
 
 case "$ISSUER_URL" in
@@ -110,14 +138,15 @@ az deployment group create \
   --template-file "${SCRIPT_DIR}/azuredeploy.json" \
   --parameters principalId="$SP_OBJECT_ID" roleName="$ROLE_NAME" \
                enableWorkstationIdentities="$ENABLE_IDENTITIES" \
+               enableEgressControl="$ENABLE_EGRESS" \
   --query 'properties.provisioningState' -o tsv
 
-# 4. The OPTIONAL network landing pad, from its own template.
+# 4. The optional network landing pad, from its own template.
 #
-#    A SEPARATE file from azuredeploy.json on purpose: that one is also deployed by the Terraform
+#    A separate file from azuredeploy.json on purpose: that one is also deployed by the Terraform
 #    module, which compares Azure's normalized echo of it against the file on every plan, so it
-#    may carry no outputs block -- and a network landing pad is useless without one (you need the
-#    subnet id back). Deploying them as two deployments keeps both properties.
+#    can carry no outputs block -- and a landing pad is useless without one, since you need the
+#    subnet id back. Two deployments keep both properties.
 SUBNET_ID=""
 if [ "$CREATE_NETWORK" = "true" ]; then
   echo ">> deploying the network landing pad (${NAME_PREFIX}-vnet, NAT gateway, NSG)"
@@ -130,6 +159,8 @@ if [ "$CREATE_NETWORK" = "true" ]; then
     --parameters namePrefix="$NAME_PREFIX" vnetCidr="$VNET_CIDR" subnetCidr="$SUBNET_CIDR" \
                  sshSourceCidr="$SSH_SOURCE_CIDR" \
                  secondarySshSourceCidr="$SECONDARY_SSH_SOURCE_CIDR" \
+                 createGatewaySubnet="$CREATE_GATEWAY_SUBNET" \
+                 gatewaySubnetCidr="$GATEWAY_SUBNET_CIDR" \
     --query 'properties.outputs.subnetId.value' -o tsv)"
 fi
 

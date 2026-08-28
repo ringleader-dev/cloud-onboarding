@@ -9,7 +9,10 @@
       "value": "Ringleader Workstation Operator"
     },
     "enableWorkstationIdentities": {
-      "value": false
+      "value": true
+    },
+    "enableEgressControl": {
+      "value": true
     }
   }
 }

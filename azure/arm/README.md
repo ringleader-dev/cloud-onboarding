@@ -47,10 +47,20 @@ SSH_SOURCE_CIDR=203.0.113.0/24 \
 
 Env vars for it: `NAME_PREFIX` (`ringleader`), `VNET_CIDR` (`10.70.0.0/16`),
 `SUBNET_CIDR` (`10.70.1.0/24`), `SSH_SOURCE_CIDR` (empty), and
-`SECONDARY_SSH_SOURCE_CIDR` (empty — the opt-in second SSH port, see
-[`../README.md`](../README.md#a-second-ssh-port--opt-in-and-off-unless-you-ask)).
-Both CIDR vars empty means the NSG is created with **no inbound rule**, which is
+`SECONDARY_SSH_SOURCE_CIDR` (mirrors `SSH_SOURCE_CIDR`; `none` closes it — see
+[`../README.md`](../README.md#a-second-ssh-port--opened-to-the-same-people-as-22)).
+`SSH_SOURCE_CIDR` empty means the NSG is created with **no inbound rule**, which is
 correct only if you reach the VNet privately.
+
+`CREATE_GATEWAY_SUBNET` is on by default (with `GATEWAY_SUBNET_CIDR`, `10.70.240.0/24`): it
+reserves an empty subnet for the DNS / HTTPS proxy VM that hostname-level egress control will
+use, and prints its id. It shares the NAT gateway, so the proxy needs no public IP. Set it to
+`false` to skip.
+
+`EGRESS_CONTROL` is separate and goes on the **role**, not the network: it adds the NSG
+actions Ringleader needs to enforce an egress policy. Also on by default; `EGRESS_CONTROL=0`
+skips it. See [`../README.md`](../README.md#optional-egress-control) and
+[the full list of defaults](../../README.md#what-is-on-by-default-and-how-to-turn-it-off).
 
 **Why a second template rather than a `deployNetwork` flag on the first.**
 `azuredeploy.json` is also deployed by the [Terraform module](../terraform/),
@@ -110,7 +120,19 @@ stores, and edits must keep it that way:
   explicitly** — Azure materializes the default into the stored parameters while the file
   leaves it unset. That is why the role definition GUID is a `variables` entry rather than
   a parameter.
+- **parameter `type` in ARM's canonical casing** — `String`, `Bool`, `Int`, `Object`,
+  `Array`, `SecureString`, `SecureObject`. ARM accepts the lowercase spellings and the docs
+  use them, but Azure stores the capitalized form, so a lowercase `"type": "string"` here is
+  a permanent one-line diff per parameter.
 
 Parameter `metadata.description` blocks are preserved by Azure and are fine.
+
+The optional action sets — `enableWorkstationIdentities` and `enableEgressControl` — are
+folded in with nested `if`/`union` expressions over the `actions` variable, so the base list
+stays in one place. Both parameters carry a `defaultValue`, and both are passed explicitly by
+the Terraform module and `deploy.sh`, which is what rule three requires.
+
+Check what Azure actually holds with
+`az deployment group export -g <rg> -n ringleader-onboarding`.
 
 See [`../README.md`](../README.md) for the trust model and the values to hand back.

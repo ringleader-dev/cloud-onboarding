@@ -3,26 +3,50 @@ project_id            = "my-company-dev-workstations"
 ringleader_issuer_url = "https://oidc-app.ringleader.dev"
 org_uid               = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
 
-# Set true only if you do NOT already have a subnet for the VMs:
-# create_network = true
+# EVERYTHING BELOW IS ON BY DEFAULT. Uncomment a line only to turn something off.
+# The root README has the full list: ../../../README.md
 
-# WHO CAN SSH IN. Ringleader has no bastion: `rl shell`, tmux, port-forwards and VS Code Web all
-# dial the workstation on TCP 22. With this empty, workstations come up and report Ready but
-# NOBODY can open them -- correct only if you reach the subnet privately
-# (VPN / Interconnect / peering).
+# The landing pad: a VPC + subnet + Cloud NAT. Set false if you already have a subnet for
+# these VMs. Cloud NAT bills per hour and per GB.
+# create_network = false
+
+# WHO CAN SSH IN -- the one thing that is NOT on by default, and cannot be. Ringleader has no
+# bastion: `rl shell`, tmux, port-forwards and VS Code Web all dial the workstation on TCP 22.
+# With this empty, workstations come up and report Ready but nobody can open them -- correct
+# only if you reach the subnet privately (VPN / Interconnect / peering).
 # ssh_source_ranges = ["203.0.113.0/24"]   # the CIDRs your engineers connect from
 
-# A SECOND SSH PORT, off unless you set this. Some Ringleader workstation types run their own SSH
-# daemon on a secondary port inside the VM (the VM's own sshd keeps 22), and `rl shell` dials that
-# port for them. Ringleader tells you if the workstations you plan to run need it; leaving this
-# empty opens nothing and changes nothing. The rule targets the ringleader-secondary-ssh network
-# tag, so put that tag on those workstations ALONGSIDE ringleader-workstation:
+# The secondary SSH port follows ssh_source_ranges unless you set this. Some Ringleader
+# workstation types run their own SSH daemon on it (the VM's own sshd keeps 22) and `rl shell`
+# dials it for them; for the types that do not, the rule is harmless. Set [] to close it.
+# The rule targets the ringleader-secondary-ssh network tag, so put that tag on those
+# workstations ALONGSIDE ringleader-workstation:
 #   providerConfig.gcp.networkTags: [ringleader-workstation, ringleader-secondary-ssh]
-# secondary_ssh_source_ranges = ["203.0.113.0/24"]
+# secondary_ssh_source_ranges = []
 
-# Let Ringleader CREATE a service account per workstation user and bind roles to it. Not needed to
-# run workstations as an identity -- every workstation already runs as one (the project's default
-# compute service account, unless it names its own).
-# WARNING: grants roles/resourcemanager.projectIamAdmin, which can grant ANY role in this project
-# to ANY principal (including roles/owner to itself). Dedicated projects only.
-# enable_workstation_identities = true
+# Let Ringleader CREATE a service account per workstation user and bind roles to it. Not needed
+# to run workstations as an identity -- every workstation already runs as one. This grants
+# roles/resourcemanager.projectIamAdmin, which can grant any role in this project to any
+# principal, including roles/owner to itself. It is the broadest grant here: set it false in a
+# project that holds anything besides Ringleader workstations.
+# enable_workstation_identities = false
+
+# Let Ringleader manage the VPC firewall rules that restrict where workstations may connect.
+# Grants a custom role with five compute.firewalls.* permissions and nothing else. It restricts
+# nothing until you declare an egress policy on a workstation.
+# enable_egress_control = false
+
+# An empty subnet (10.60.240.0/24) reserved for the DNS / HTTPS proxy VM that hostname-level
+# egress control will use. The VM does not exist yet; the subnet costs nothing and saves
+# renumbering later.
+# create_gateway_subnet = false
+
+# Let workstations reach each other. The one default that widens rather than grants: false
+# means a compromised box cannot scan its neighbours.
+# allow_internal_traffic = false
+
+# More regions in the SAME global VPC -- a GCP VPC is global, so this needs no peering and one
+# proxy VM can serve every region. Each also gets its own Cloud Router and Cloud NAT.
+# additional_regions = {
+#   "europe-west1" = "10.60.16.0/20"
+# }

@@ -68,11 +68,13 @@ it `roles/editor`), or give workstations a role-less service account of their ow
 [`gcp/README.md`](gcp/README.md#every-workstation-runs-as-a-service-account).
 
 Letting Ringleader **create** those per-user identities and **bind roles** to them is a
-separate, optional step, and it costs real permissions (on GCP, the power to administer
-project IAM; on Azure, the power to create role assignments). Each module therefore
-leaves it **off** and the feature fails closed with a `403` rather than quietly working —
-see `enable_workstation_identities` in each cloud's module, and read its warning before
-turning it on.
+separate switch, `enable_workstation_identities`, and it costs real permissions: on GCP the
+power to administer project IAM, on Azure the power to create role assignments, on AWS
+`iam:PassRole` under one path. It is **on by default**, along with everything else — see
+*What is on by default* below. **On GCP it is the one to think hardest about**, because
+`roles/resourcemanager.projectIamAdmin` can grant any role in the project to any principal;
+that is why this onboarding asks for a project dedicated to Ringleader workstations, and why
+you should set it to `false` in a project that holds anything else.
 
 ## Reaching your workstations
 
@@ -97,28 +99,99 @@ The clouds differ in their default: **GCP** gives every workstation an external 
 unless you opt out; **Azure** gives none unless you opt in (so it needs the NAT gateway
 for egress); **AWS** gives one by default. See each cloud's README.
 
-### A second SSH port — opt-in, and off unless you ask
+### A second SSH port — opened to the same people as 22
 
 Some Ringleader workstation types run their **own SSH daemon on a secondary port** inside the
-VM, while the VM's own sshd keeps 22; `rl shell` dials that port for such a workstation. Every
-module here can open it and **none of them do by default**:
+VM, while the VM's own sshd keeps 22; `rl shell` dials that port for such a workstation. Others
+never use it, and for those the rule is harmless — so rather than making you find out which kind
+you are running, every module **follows whatever you set for port 22**:
 
-| Path | Set |
-|---|---|
-| Terraform (all three clouds) | `secondary_ssh_source_ranges` |
-| `gcp/gcloud/network-landing-pad.sh` | `SECONDARY_SSH_RANGES` |
-| `aws/cloudformation/deploy.sh` | `SECONDARY_SSH_SOURCE_CIDR` |
+| Path | Set | Default |
+|---|---|---|
+| Terraform (all three clouds) | `secondary_ssh_source_ranges` | unset — mirrors `ssh_source_ranges`; `[]` closes it |
+| `gcp/gcloud/network-landing-pad.sh` | `SECONDARY_SSH_RANGES` | mirrors `SSH_RANGES`; `none` closes it |
+| `aws/cloudformation/deploy.sh` | `SECONDARY_SSH_SOURCE_CIDR` | mirrors `SSH_SOURCE_CIDR`; `none` closes it |
+| `azure/arm/deploy.sh` | `SECONDARY_SSH_SOURCE_CIDR` | mirrors `SSH_SOURCE_CIDR`; `none` closes it |
 
-Leave them unset and nothing is created — your firewall admits exactly what it admits today.
-Ringleader tells you whether the workstations you plan to run need this port; if in doubt, leave
-it closed. **You never supply the port number** — each asset carries it, so it cannot drift from
-the port Ringleader actually dials.
+Open nothing for 22 and nothing opens for 2222 either. **You never supply the port number** —
+each asset carries it, so it cannot drift from the port Ringleader actually dials.
 
 The clouds differ in how narrowly the rule can be aimed. **GCP** scopes it to its own network tag
 (`ringleader-secondary-ssh`), so it reaches only the workstations you tag with it. **AWS** puts it
 on the workstations security group, like the rule for 22. **Azure** cannot scope it at all — an
 NSG attaches to the subnet and there is no per-VM tag to match — so the source ranges are the only
 narrowing, and the rule admits the port to every VM on that subnet.
+
+## Controlling where workstations can connect
+
+A Ringleader workstation reaches anything your network routes, and until now nothing in a
+manifest could narrow that. Ringleader can restrict it to an allowlist you declare per
+workstation — a set of IP ranges and hostnames — enforced by your cloud's own firewall:
+security groups on AWS, VPC firewall rules on GCP, network security groups on Azure.
+
+Enforcing it means Ringleader has to be able to **create and maintain those firewall
+objects**, which is more than the read-only network access the base onboarding used to grant.
+That grant is now part of the default (`enable_egress_control`); it **restricts nothing on its
+own**, because until you declare an egress policy on a workstation, nothing changes.
+
+Each cloud's README lists the precise actions it adds, and every module prints them back as an
+output so you can check what you granted rather than take it on trust.
+
+Restricting egress by **hostname** rather than by IP range additionally needs a small DNS /
+HTTPS proxy VM in your own account, because no cloud can answer DNS differently per VM. That
+VM is not built yet, but every module can reserve an empty subnet for it now
+(`create_gateway_subnet`), which costs nothing and saves renumbering later. If you plan to run
+workstations in more than one region, read your cloud's README on address ranges **before the
+first apply**: on AWS and Azure a second region is a second network, and joining them later is
+impossible if the ranges overlap.
+
+## What is on by default, and how to turn it off
+
+Onboarding grants what Ringleader needs for **every feature available today**, so adopting one
+later never means a second onboarding pass and another change-approval cycle. Everything below
+is a single variable away from off.
+
+| | What it does | Terraform | Script | Costs money |
+|---|---|---|---|---|
+| **Landing-pad network** | VPC/VNet + subnet + egress + a security group / NSG | `create_network` | `CREATE_NETWORK` (AWS, Azure), `network-landing-pad.sh` (GCP) | GCP Cloud NAT, Azure NAT gateway + public IP |
+| **NAT gateway** (AWS) | private route table, so an instance with no public IP has egress | `create_nat_gateway` | `CREATE_NAT_GATEWAY` | yes, per hour |
+| **Proxy subnet** | an empty subnet reserved for the future DNS / HTTPS proxy VM | `create_gateway_subnet` | `CREATE_GATEWAY_SUBNET`, `GATEWAY_CIDR` (GCP) | no |
+| **Egress control** | Ringleader may create and maintain the firewall objects an egress policy compiles to | `enable_egress_control` | `EGRESS_CONTROL` | no |
+| **Workstation identities** | Ringleader may create per-user identities and bind roles to them | `enable_workstation_identities` | `WORKSTATION_IDENTITIES` | no |
+| **Workstation-to-workstation** (GCP) | boxes on the subnet can reach each other | `allow_internal_traffic` | `ALLOW_INTERNAL` | no |
+
+Two of these deserve a deliberate decision rather than a default:
+
+- **`enable_workstation_identities` on GCP** grants `roles/resourcemanager.projectIamAdmin`,
+  which can grant any role in the project to any principal — including `roles/owner` to
+  itself. That is inherent to binding roles, not an artifact of how this is written. It is why
+  the onboarding asks for a **dedicated project**; in a shared one, set it to `false`.
+- **`allow_internal_traffic` on GCP** widens rather than grants. Off, two workstations cannot
+  reach each other at all and a compromised box cannot scan its neighbours. On, they can —
+  matching what Azure's default NSG rules already allow.
+
+Inbound SSH is the one thing that is **not** on by default and cannot be: `ssh_source_ranges`
+is empty until you name the CIDRs your engineers connect from. There is no safe default for
+"who may reach your machines", and `0.0.0.0/0` is a decision, never one this module makes for
+you. The secondary SSH port then follows whatever you set for 22.
+
+### Already onboarded on the old defaults?
+
+These switches used to default to **off**. Re-applying an existing configuration will now
+create the landing pad and widen the grant unless you say otherwise. To keep exactly what you
+have today:
+
+```hcl
+create_network                = false   # or leave true if you already use this module's network
+create_nat_gateway            = false   # AWS only
+create_gateway_subnet         = false
+enable_egress_control         = false
+enable_workstation_identities = false
+allow_internal_traffic        = false   # GCP only
+secondary_ssh_source_ranges   = []
+```
+
+Run `terraform plan` before applying, as always — the plan is the authority on what changes.
 
 ## What you return after applying
 

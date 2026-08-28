@@ -115,7 +115,7 @@ the workstations (`providerConfig.gcp.networkTags: [ringleader-workstation]`).
 Leave `ssh_source_ranges` empty **only** if you reach the subnet privately (VPN /
 Interconnect / peering).
 
-### A second SSH port — opt-in, and off unless you ask
+### A second SSH port — opened to the same people as 22
 
 Some Ringleader workstation types run their **own SSH daemon on a secondary port** inside the VM,
 while the VM's own sshd keeps 22, and `rl shell` dials that port for such a workstation. To open
@@ -148,24 +148,99 @@ the port Ringleader dials.
 Ringleader can **provision** a dedicated service account per workstation user and **bind
 roles** to it, so one workstation can (say) read one bucket. Every workstation already
 runs as a service account without this (above) — what this adds is Ringleader creating
-those accounts and granting them roles for you. It is **off by default** because it is
-not free:
+those accounts and granting them roles for you. It is **on by default**, and it is the one
+default here most worth a deliberate decision, because it is not free:
 
 | capability | role it needs |
 |---|---|
 | create/delete the per-user SA | `roles/iam.serviceAccountAdmin` |
 | bind roles to it on the project | `roles/resourcemanager.projectIamAdmin` |
 
-**`roles/resourcemanager.projectIamAdmin` can grant any role in the project to any
-principal — including `roles/owner` to itself.** That is inherent: setting a role
-binding *is* project-IAM administration. Enable it (`enable_workstation_identities =
-true`) **only in a project dedicated to Ringleader workstations**. Left off, the feature
-fails closed with a `403`.
+`roles/resourcemanager.projectIamAdmin` can grant any role in the project to any principal,
+including `roles/owner` to itself. That is inherent — setting a role binding *is* project-IAM
+administration — and it is exactly why this onboarding asks for a **project dedicated to
+Ringleader workstations**. In a project that holds anything else, set
+`enable_workstation_identities = false` (or `WORKSTATION_IDENTITIES=0`); the feature then
+fails closed with a `403` and nothing else changes.
 
 You can get the same end result without granting either: create the service accounts and
 their role bindings yourself, and name one on the workstation
 (`providerConfig.gcp.serviceAccount`). Ringleader attaches an account it did not create
 using the `actAs` it already holds.
+
+## Optional: egress control
+
+By default a workstation can reach anything your network routes. Ringleader can narrow that
+to an allowlist you declare in the workstation manifest — a set of IP ranges and hostnames —
+enforced by VPC firewall rules that Ringleader creates and keeps in step with the manifest.
+
+It is **on by default**, and granting it restricts nothing on its own: until you declare an
+egress policy on a workstation, everything behaves exactly as it does today. To opt out:
+
+```hcl
+enable_egress_control = false
+```
+```bash
+EGRESS_CONTROL=0 ./onboard.sh    # the gcloud path
+```
+
+What that grants is a **custom project role** with five permissions and nothing else:
+
+| | |
+|---|---|
+| `compute.firewalls.create` / `delete` / `get` / `list` / `update` | create and maintain the firewall rules that carry each policy |
+
+Deliberately **not** `roles/compute.securityAdmin`, which is the usual answer and reaches
+further than this needs — it also carries Cloud Armor security policies, SSL policies and
+certificates. Changing which policy a workstation is on is a network-tag change, which
+`roles/compute.instanceAdmin.v1` already permits, so no extra grant is needed for that.
+
+Ringleader compiles each distinct policy into **one** firewall rule targeted by network tag,
+so a fleet of a hundred workstations sharing a policy costs one rule rather than a hundred.
+
+You can turn this on later by re-applying; nothing about it is decided at first onboarding.
+
+## Room for the DNS / HTTPS proxy
+
+Restricting egress by **hostname** (rather than by IP range) needs a resolver that answers
+per workstation, and no cloud offers one — so Ringleader runs a small DNS / HTTPS proxy VM in
+your project. That VM does not exist yet, but it is worth reserving its address range now:
+
+It is on by default (`10.60.240.0/24`). To skip it:
+
+```hcl
+create_gateway_subnet = false
+```
+```bash
+GATEWAY_CIDR=none ./network-landing-pad.sh
+```
+
+It creates an **empty subnet** and nothing else. GCP does not bill for a subnet, and Cloud
+NAT already covers every range in the region, so the proxy will have upstream egress with no
+further setup. Doing it now means the firewall rules that let workstations reach the proxy
+can name one stable range instead of one VM's address — and saves renumbering later.
+
+## More than one region
+
+A GCP VPC is a **global** resource whose subnets are regional, and instances in any region
+reach each other on internal addresses with no peering. So a second region is one more
+subnet in the same VPC, and one proxy VM can serve all of them. (This is materially cheaper
+than AWS or Azure, where a second region means a second network and an inter-region link.)
+
+```hcl
+additional_regions = {
+  "europe-west1"    = "10.60.16.0/20"
+  "asia-southeast1" = "10.60.32.0/20"
+}
+```
+
+Ranges must not overlap, and GCP refuses an overlapping subnet — so a mistake fails the apply
+rather than breaking routing later. Each region also gets its own Cloud Router and Cloud NAT,
+because both are regional and a subnet without them comes up unable to reach Ringleader.
+
+Two costs worth knowing: traffic between two VMs in the **same zone** is free, while
+same-region-different-zone egress is billed per GiB. If you run the proxy, pin it and the
+workstations it serves to the same zone.
 
 ## What you return to Ringleader
 
@@ -175,6 +250,7 @@ using the `actAs` it already holds.
 | **project id** | where your workstations run |
 | **workload identity provider** (`//iam.googleapis.com/projects/…/providers/…`) | the token-exchange audience |
 | **subnet self-link** (only if you created a network) | the subnet Ringleader attaches NICs to |
+| **gateway subnet self-link** (only if you reserved one) | where the DNS / HTTPS proxy VM will run |
 
 ## Revoking
 

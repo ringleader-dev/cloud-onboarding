@@ -32,7 +32,7 @@ The permissions policy is exactly these three statements — no wildcard on any 
   AWS-owned public AMI parameters.
 
 No `iam:*` unless you opt into per-workstation instance profiles (Terraform
-`enable_workstation_identities`, off by default and scoped to `iam:PassRole` under one
+`enable_workstation_identities`, on by default and scoped to `iam:PassRole` under one
 path).
 
 ## Values Ringleader gives you
@@ -86,6 +86,7 @@ The Terraform module derives the thumbprint automatically.
 - **`target_role_arn`** → `arn:aws:iam::<account-id>:role/ringleader-workstations`
 - your **region**
 - if you created the landing pad: **`subnet_id`** and **`security_group_id`**
+- if you reserved one: **`gateway_subnet_id`**, where the DNS / HTTPS proxy VM will run
 
 ## Reaching your workstations
 
@@ -93,7 +94,7 @@ The Terraform module derives the thumbprint automatically.
 |---|---|---|
 | **Bringing the workstation up** | **egress** from the VM to the Ringleader control plane | a public IP + internet gateway (the default), or a NAT gateway |
 | **Using the workstation** (`rl shell`, `rl tmux`, port-forwards, VS Code Web) | **inbound TCP 22**, from wherever you run `rl` | a security-group rule (`ssh_source_ranges` / `SshSourceCidr`) — or private connectivity |
-| **Using a workstation type that runs its own SSH daemon** | additionally, **inbound on a secondary SSH port** | an opt-in rule (`secondary_ssh_source_ranges` / `SecondarySshSourceCidr`), off by default |
+| **Using a workstation type that runs its own SSH daemon** | additionally, **inbound on a secondary SSH port** | a rule that follows `ssh_source_ranges` unless you override it (`secondary_ssh_source_ranges` / `SecondarySshSourceCidr`) |
 
 A workstation gets a **public IP by default** (`providerConfig.aws.assignPublicIp`), so
 the internet gateway alone gives it egress — no NAT gateway, no hourly bill. Set
@@ -102,13 +103,97 @@ the internet gateway alone gives it egress — no NAT gateway, no hourly bill. S
 tunnel**: a workstation with no inbound path finishes setting up and reports
 Ready, but nobody can open it.
 
-**The secondary SSH port is opt-in and off by default.** Some Ringleader workstation types run
-their own SSH daemon on a second port inside the instance, while the instance's own sshd keeps 22,
-and `rl shell` dials that port for such a workstation. Set `secondary_ssh_source_ranges`
-(Terraform) or `SECONDARY_SSH_SOURCE_CIDR` (`deploy.sh`) to open it on the workstations security
-group; leave it unset and **no rule is created** — your account admits exactly what it admits
-today. Ringleader tells you whether the workstations you plan to run need it, and you never supply
-the port number: both paths carry it.
+**The secondary SSH port follows port 22.** Some Ringleader workstation types run their own SSH
+daemon on a second port inside the instance, while the instance's own sshd keeps 22, and
+`rl shell` dials that port for such a workstation; others never use it, and for those the rule is
+harmless. So rather than making you find out which kind you are running, both paths mirror
+whatever you set for 22 — `secondary_ssh_source_ranges` (Terraform) and
+`SECONDARY_SSH_SOURCE_CIDR` (`deploy.sh`) override it, and `[]` / `none` closes it. Open nothing
+for 22 and nothing opens for 2222. You never supply the port number: both paths carry it.
+
+## Optional: egress control
+
+By default a workstation can reach anything your network routes. Ringleader can narrow that
+to an allowlist you declare in the workstation manifest — a set of IP ranges and hostnames —
+enforced by security groups that Ringleader creates and keeps in step with the manifest.
+
+It is **on by default**, and granting it restricts nothing on its own: until you declare an
+egress policy on a workstation, everything behaves exactly as it does today.
+
+```hcl
+egress_vpc_ids = []   # empty uses the VPC this module creates
+
+# enable_egress_control = false   # to opt out
+```
+```bash
+EGRESS_CONTROL=false ./deploy.sh   # the CloudFormation path, to opt out
+```
+
+It grants seven actions and no more:
+
+| action | why |
+|---|---|
+| `ec2:CreateSecurityGroup`, `ec2:DeleteSecurityGroup` | one group per distinct egress policy |
+| `ec2:AuthorizeSecurityGroupEgress`, `ec2:RevokeSecurityGroupEgress` | keep that group's rules in step with the manifest |
+| `ec2:AuthorizeSecurityGroupIngress`, `ec2:RevokeSecurityGroupIngress` | the DNS / HTTPS proxy's own group, which has to admit workstation traffic |
+| `ec2:ModifyNetworkInterfaceAttribute` | move a running workstation onto the group its policy compiled to |
+
+**Bound them to a VPC.** With `egress_vpc_ids` set — or with `create_network = true`, where
+the module uses the VPC it made — the permissions apply only to security groups in that VPC.
+If you bring your own network and name no VPC, the only bound is `allowed_regions`, which
+lets Ringleader manage security groups anywhere in that region. The `egress_scope` output
+tells you which of the three you ended up with, so it is worth reading after an apply.
+
+Ringleader compiles each distinct policy into **one** security group and attaches it to the
+workstations carrying that policy. That is not just tidiness: AWS caps a network interface at
+**5 security groups** and **1,000 rules**, and a region at **2,500 groups**, so a group per
+workstation would not reach fleet scale.
+
+## Room for the DNS / HTTPS proxy
+
+Restricting egress by **hostname** (rather than by IP range) needs a resolver that answers per
+workstation, and no cloud offers one — so Ringleader runs a small DNS / HTTPS proxy VM in your
+account. That VM does not exist yet, but it is worth reserving its address range now:
+
+Both are on by default (`create_nat_gateway`, and `create_gateway_subnet` at
+`10.60.240.0/24`). To skip them:
+
+```hcl
+create_nat_gateway    = false
+create_gateway_subnet = false
+```
+```bash
+CREATE_NAT_GATEWAY=false CREATE_GATEWAY_SUBNET=false ./deploy.sh
+```
+
+It creates an **empty private subnet** in the same availability zone as the workstations
+subnet (AWS charges for cross-AZ traffic in both directions, and a proxy sits on the path of
+everything a workstation does). AWS does not bill for a subnet; **the NAT gateway does bill per
+hour**, which makes it the one default here that costs money. Turn both off if every
+workstation gets a public IP.
+
+**It also fixes something that was broken.** `create_nat_gateway` previously created a NAT
+gateway that nothing routed to, so a workstation with `assignPublicIp: false` had no egress at
+all. There is now a private route table pointing at it — `private_route_table_id` — and you can
+associate any subnet that should reach the internet without a public IP with it.
+
+## Plan your CIDRs before the second region
+
+An AWS VPC is regional. A second region means a second VPC, and joining them later needs an
+**inter-region Transit Gateway**, which cannot route overlapping CIDRs. Applying this module
+in another region on the default `vpc_cidr` gives you two VPCs that can never be peered, and
+the fix at that point is to renumber and re-onboard.
+
+So pick the ranges up front, even if you only need one region today:
+
+| region | `vpc_cidr` | `subnet_cidr` | `gateway_subnet_cidr` |
+|---|---|---|---|
+| first | `10.60.0.0/16` | `10.60.0.0/20` | `10.60.240.0/24` |
+| second | `10.61.0.0/16` | `10.61.0.0/20` | `10.61.240.0/24` |
+| third | `10.62.0.0/16` | `10.62.0.0/20` | `10.62.240.0/24` |
+
+Ringleader's proxy VMs are regional, so each region runs its own; nothing here requires the
+regions to be joined at all until you want one proxy to serve several.
 
 ## Workstations hold no AWS identity by default
 

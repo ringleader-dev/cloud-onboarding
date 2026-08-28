@@ -23,7 +23,7 @@ variable "ringleader_issuer_url" { type = string }
 variable "org_uid" { type = string }
 variable "create_network" {
   type    = bool
-  default = false
+  default = true
 }
 
 # Who may reach the workstations, and on what. Both are forwarded to the module below, so a value
@@ -34,9 +34,22 @@ variable "ssh_source_ranges" {
   default = []
 }
 
+# Unset mirrors ssh_source_ranges; [] closes the second SSH port.
 variable "secondary_ssh_source_ranges" {
   type    = list(string)
-  default = []
+  default = null
+}
+
+# Egress control, and a home for the proxy VM it will eventually use. Both on by default;
+# set either false in terraform.tfvars to opt out.
+variable "enable_egress_control" {
+  type    = bool
+  default = true
+}
+
+variable "create_gateway_subnet" {
+  type    = bool
+  default = true
 }
 
 module "ringleader" {
@@ -49,6 +62,9 @@ module "ringleader" {
 
   ssh_source_ranges           = var.ssh_source_ranges
   secondary_ssh_source_ranges = var.secondary_ssh_source_ranges
+
+  enable_egress_control = var.enable_egress_control
+  create_gateway_subnet = var.create_gateway_subnet
 }
 
 output "handoff" {

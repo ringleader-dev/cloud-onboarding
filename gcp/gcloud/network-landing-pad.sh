@@ -16,6 +16,10 @@
 #                (default: empty -- NO rule is created)
 #   SECONDARY_SSH_TAG
 #                network tag that rule targets        (default: ringleader-secondary-ssh)
+#   GATEWAY_CIDR an empty subnet reserved for the future DNS / HTTPS proxy VM
+#                (default: 10.60.240.0/24; set to "none" to skip it)
+#   ALLOW_INTERNAL  1 to let workstations reach each other inside the subnet
+#                (default: 1; set 0 for the tighter posture)
 #
 # REACHABILITY -- the part that decides whether your workstations are USABLE.
 #
@@ -53,13 +57,37 @@ REGION="${REGION:-us-central1}"
 CIDR="${CIDR:-10.60.0.0/20}"
 SSH_RANGES="${SSH_RANGES:-}"
 SSH_TAG="${SSH_TAG:-ringleader-workstation}"
-SECONDARY_SSH_RANGES="${SECONDARY_SSH_RANGES:-}"
+# 2222 follows 22 unless you say otherwise: if you opened one to your engineers you almost
+# certainly want the other open to the same people. "none" closes it.
+SECONDARY_SSH_RANGES="${SECONDARY_SSH_RANGES:-$SSH_RANGES}"
+if [ "$SECONDARY_SSH_RANGES" = "none" ]; then
+  SECONDARY_SSH_RANGES=""
+fi
 SECONDARY_SSH_TAG="${SECONDARY_SSH_TAG:-ringleader-secondary-ssh}"
+GATEWAY_CIDR="${GATEWAY_CIDR:-10.60.240.0/24}"
+if [ "$GATEWAY_CIDR" = "none" ]; then
+  GATEWAY_CIDR=""
+fi
+ALLOW_INTERNAL="${ALLOW_INTERNAL:-1}"
 
 gcloud compute networks create ringleader-vpc --project "$PROJECT" --subnet-mode custom
 gcloud compute networks subnets create ringleader-workstations --project "$PROJECT" \
   --network ringleader-vpc --region "$REGION" --range "$CIDR" \
   --enable-private-ip-google-access
+# A home for the future DNS / HTTPS proxy VM -- created empty, and only if you ask.
+#
+# Ringleader's hostname-level egress control points workstations at a proxy that resolves
+# names and terminates HTTPS for the hosts you allow. That VM is not built yet, but a subnet
+# of its own means the firewall rules permitting workstation -> proxy traffic can name one
+# stable range rather than one VM's address, and carving it now avoids renumbering later.
+# GCP does not bill for a subnet, and Cloud NAT below covers every range in this region.
+if [[ -n "$GATEWAY_CIDR" ]]; then
+  gcloud compute networks subnets create ringleader-gateway --project "$PROJECT" \
+    --network ringleader-vpc --region "$REGION" --range "$GATEWAY_CIDR" \
+    --enable-private-ip-google-access
+  echo ">> gateway subnet ringleader-gateway created at ${GATEWAY_CIDR}"
+fi
+
 gcloud compute routers create ringleader-router --project "$PROJECT" \
   --region "$REGION" --network ringleader-vpc
 gcloud compute routers nats create ringleader-nat --project "$PROJECT" \
@@ -88,7 +116,41 @@ if [[ -n "$SECONDARY_SSH_RANGES" ]]; then
   echo ">> secondary SSH port ${SECONDARY_SSH_PORT} allowed from ${SECONDARY_SSH_RANGES} to VMs tagged ${SECONDARY_SSH_TAG}"
 fi
 
+# Workstation-to-workstation traffic, on by default so this matches the Terraform module.
+# Without it a custom-mode VPC has no firewall rules and two workstations cannot reach each
+# other at all -- a tighter posture, in which a compromised box cannot scan its neighbours.
+# Set ALLOW_INTERNAL=0 for that. It never admits anything from outside the subnet.
+if [[ "$ALLOW_INTERNAL" == "1" ]]; then
+  gcloud compute firewall-rules create ringleader-allow-internal --project "$PROJECT" \
+    --network ringleader-vpc --direction INGRESS --action allow \
+    --rules tcp,udp,icmp --source-ranges "$CIDR" --target-tags "$SSH_TAG"
+  echo ">> workstations tagged ${SSH_TAG} can reach each other within ${CIDR}"
+fi
+
 echo
 echo ">> subnet self-link (hand back to Ringleader as your workstation subnet):"
 gcloud compute networks subnets describe ringleader-workstations \
   --project "$PROJECT" --region "$REGION" --format='value(selfLink)'
+
+if [[ -n "$GATEWAY_CIDR" ]]; then
+  echo
+  echo ">> gateway subnet self-link (for the future DNS / HTTPS proxy VM):"
+  gcloud compute networks subnets describe ringleader-gateway \
+    --project "$PROJECT" --region "$REGION" --format='value(selfLink)'
+fi
+
+# Adding a region later: a GCP VPC is global and its subnets are regional, so another region
+# is one more subnet in this same VPC -- no peering, and workstations reach each other on
+# internal addresses. Cloud Router and Cloud NAT are regional though, so each new region
+# needs its own pair:
+#
+#   gcloud compute networks subnets create ringleader-workstations-<region> \
+#     --project <p> --network ringleader-vpc --region <region> --range <non-overlapping cidr> \
+#     --enable-private-ip-google-access
+#   gcloud compute routers create ringleader-router-<region> \
+#     --project <p> --region <region> --network ringleader-vpc
+#   gcloud compute routers nats create ringleader-nat-<region> \
+#     --project <p> --region <region> --router ringleader-router-<region> \
+#     --auto-allocate-nat-external-ips --nat-all-subnet-ip-ranges
+#
+# The Terraform module does this for you -- see its additional_regions variable.

@@ -5,15 +5,12 @@ Description: >-
   AssumeRoleWithWebIdentity (trust pinned to your org's aud AND sub, permissions limited
   to the EC2 workstation lifecycle), and optionally a public-subnet landing-pad network.
 
-# ---------------------------------------------------------------------------------------
-# NOTE ON THE TWO CONDITION KEYS. CloudFormation cannot build an object KEY from a
-# parameter, and the IAM trust-policy condition keys are "<issuer-host+path>:aud" and
-# ":sub" -- which embed your org. So this template carries the placeholder token
-# __OIDC_PROVIDER__ in exactly those two keys, and the deploy wrapper (deploy.sh) does a
-# single text substitution of it with your issuer host+path (e.g.
-# oidc-app.ringleader.dev/org/<org-id>) before `aws cloudformation deploy`. If you deploy by
-# hand, replace __OIDC_PROVIDER__ first. Everything else is a real parameter.
-# ---------------------------------------------------------------------------------------
+# About the two condition keys: CloudFormation cannot build an object key from a parameter,
+# and the IAM trust-policy condition keys are "<issuer-host+path>:aud" and ":sub", which
+# embed your org. So this template carries the placeholder __OIDC_PROVIDER__ in exactly those
+# two keys, and deploy.sh substitutes your issuer host+path (e.g.
+# oidc-app.ringleader.dev/org/<org-id>) before running `aws cloudformation deploy`. Deploying
+# by hand? Replace __OIDC_PROVIDER__ first. Everything else is a real parameter.
 
 Parameters:
   IssuerUrl:
@@ -66,9 +63,12 @@ Parameters:
 
   CreateNetwork:
     Type: String
-    Default: "false"
+    Default: "true"
     AllowedValues: ["true", "false"]
-    Description: "Create a VPC + public subnet + internet gateway + security group landing pad."
+    Description: >-
+      Create a VPC + public subnet + internet gateway + security group landing pad. On by
+      default; set false and supply your own subnet and security group instead. The VPC,
+      subnet, gateway and security group are free -- the NAT gateway below is not.
 
   VpcCidr:
     Type: String
@@ -90,11 +90,60 @@ Parameters:
     Type: String
     Default: ""
     Description: >-
-      Optional, and empty opens nothing. A single CIDR allowed to reach the SECONDARY SSH
-      port (TCP 2222) on the workstations security group. Some Ringleader workstation types
-      run their own SSH daemon on that port inside the instance, beside the instance's own
-      sshd on 22, and rl shell dials it instead of 22 for those workstations; others never
-      use it. Ringleader tells you which you are running -- if in doubt leave this empty.
+      A single CIDR allowed to reach the secondary SSH port (TCP 2222) on the workstations
+      security group. Empty opens no rule. deploy.sh defaults it to SshSourceCidr, so the two
+      ports open to the same people unless you say otherwise; set SECONDARY_SSH_SOURCE_CIDR to
+      "none" there to close it, or pass this parameter directly when deploying by hand. Some
+      Ringleader workstation types run their own SSH daemon on that port inside the instance,
+      beside the instance's own sshd on 22, and rl shell dials it instead of 22 for those;
+      others never use it, and for those the rule is harmless.
+
+  EnableEgressControl:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Let Ringleader manage the security groups that restrict where your workstations may
+      connect. On by default; set false to opt out. It grants six security-group actions, a
+      security-group-rules read and ec2:ModifyNetworkInterfaceAttribute, bounded to
+      EgressVpcId (and to AllowedRegion, if set). Granting it restricts nothing on its own --
+      until you declare an egress policy on a workstation, nothing changes.
+
+  EgressVpcId:
+    Type: String
+    Default: ""
+    Description: >-
+      VPC the egress permissions are confined to. Leave empty when CreateNetwork=true and
+      the VPC this stack creates is used. If you bring your own network, name it here --
+      otherwise the permissions are bounded by region alone and reach every security group
+      in it.
+
+  CreateNatGateway:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Create a NAT gateway and a private route table, so anything on this VPC without a
+      public IP still has egress. On by default, and the one default here that costs money --
+      it bills per hour plus data processing whether or not anything uses it. Set false,
+      along with CreateGatewaySubnet, if every workstation gets a public IP.
+
+  CreateGatewaySubnet:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Reserve a private subnet for the DNS / HTTPS proxy VM that Ringleader's hostname-level
+      egress control will use. On by default; set false to opt out. The VM is not built yet,
+      so this creates an empty subnet, which AWS does not bill for. It turns CreateNatGateway
+      on, because the proxy has no public IP and NAT is its only route out.
+
+  GatewaySubnetCidr:
+    Type: String
+    Default: "10.60.240.0/24"
+    Description: >-
+      CIDR for the gateway subnet. Must sit inside VpcCidr; the default sits well clear of
+      SubnetCidr so growing that subnet later does not collide.
 
 Conditions:
   HasRegionCondition: !Not [!Equals [!Ref AllowedRegion, ""]]
@@ -106,6 +155,18 @@ Conditions:
     - !Condition WantNetwork
     - !Not [!Equals [!Ref SecondarySshSourceCidr, ""]]
   WantAnyInbound: !Or [!Condition WantSsh, !Condition WantSecondarySsh]
+  WantEgressControl: !Equals [!Ref EnableEgressControl, "true"]
+  HasEgressVpc: !Not [!Equals [!Ref EgressVpcId, ""]]
+  HasAnyEgressVpc: !Or [!Condition HasEgressVpc, !Condition WantNetwork]
+  WantGatewaySubnet: !And
+    - !Condition WantNetwork
+    - !Equals [!Ref CreateGatewaySubnet, "true"]
+  # A gateway subnet has no public IP, so it implies the NAT gateway.
+  WantNat: !And
+    - !Condition WantNetwork
+    - !Or
+      - !Equals [!Ref CreateNatGateway, "true"]
+      - !Equals [!Ref CreateGatewaySubnet, "true"]
 
 Resources:
   RingleaderOidcProvider:
@@ -180,6 +241,66 @@ Resources:
                 # policy that is valid and matches nothing.
                 Resource: !Sub "arn:${AWS::Partition}:ssm:*::parameter/aws/service/*"
 
+              # Egress control, when EnableEgressControl=true. Ringleader compiles each distinct
+              # egress policy into ONE security group and attaches it to the workstations
+              # carrying that policy, so a fleet sharing a policy costs one group -- which
+              # matters, because AWS caps an ENI at 5 security groups and a region at 2,500.
+              #
+              # The ingress pair is for the DNS / HTTPS proxy VM, whose own group has to admit
+              # workstation traffic.
+              #
+              # Bounded by VPC where one is known, since a VPC sits in exactly one region and is
+              # the tighter of the two bounds; by AllowedRegion otherwise.
+              - !If
+                - WantEgressControl
+                - Sid: EgressSecurityGroups
+                  Effect: Allow
+                  Action:
+                    - "ec2:DescribeSecurityGroupRules"
+                    - "ec2:CreateSecurityGroup"
+                    - "ec2:DeleteSecurityGroup"
+                    - "ec2:AuthorizeSecurityGroupEgress"
+                    - "ec2:RevokeSecurityGroupEgress"
+                    - "ec2:AuthorizeSecurityGroupIngress"
+                    - "ec2:RevokeSecurityGroupIngress"
+                  Resource: "*"
+                  Condition: !If
+                    - HasAnyEgressVpc
+                    - StringLike:
+                        "ec2:Vpc": !If
+                          - HasEgressVpc
+                          - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:vpc/${EgressVpcId}"
+                          - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:vpc/${Vpc}"
+                    - !If
+                      - HasRegionCondition
+                      - StringEquals:
+                          "aws:RequestedRegion": !Ref AllowedRegion
+                      - !Ref AWS::NoValue
+                - !Ref AWS::NoValue
+
+              # The other half: moving a workstation's NIC onto the security group its policy
+              # compiled to, which is what makes a policy change take effect on a running
+              # workstation rather than only on the next one created.
+              - !If
+                - WantEgressControl
+                - Sid: EgressAttachToInstances
+                  Effect: Allow
+                  Action: "ec2:ModifyNetworkInterfaceAttribute"
+                  Resource: "*"
+                  Condition: !If
+                    - HasAnyEgressVpc
+                    - StringLike:
+                        "ec2:Vpc": !If
+                          - HasEgressVpc
+                          - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:vpc/${EgressVpcId}"
+                          - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:vpc/${Vpc}"
+                    - !If
+                      - HasRegionCondition
+                      - StringEquals:
+                          "aws:RequestedRegion": !Ref AllowedRegion
+                      - !Ref AWS::NoValue
+                - !Ref AWS::NoValue
+
   # --- Optional landing-pad network -----------------------------------------------------
   Vpc:
     Type: AWS::EC2::VPC
@@ -234,6 +355,68 @@ Resources:
     Properties:
       SubnetId: !Ref Subnet
       RouteTableId: !Ref RouteTable
+
+  # NAT gateway, for anything on this VPC without a public IP: a workstation created with
+  # providerConfig.aws.assignPublicIp: false, and the gateway subnet below. It lives in the
+  # public subnet (that is where a NAT gateway has to be) and is reached through the private
+  # route table, which is what actually gives a private instance egress. Bills per hour plus
+  # data processing.
+  NatEip:
+    Type: AWS::EC2::EIP
+    Condition: WantNat
+    Properties:
+      Domain: vpc
+      Tags: [{ Key: Name, Value: ringleader-nat }]
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Condition: WantNat
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      AllocationId: !GetAtt NatEip.AllocationId
+      SubnetId: !Ref Subnet
+      Tags: [{ Key: Name, Value: ringleader-workstations }]
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Condition: WantNat
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: ringleader-private }]
+
+  PrivateDefaultRoute:
+    Type: AWS::EC2::Route
+    Condition: WantNat
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref NatGateway
+
+  # A home for the future DNS / HTTPS proxy VM -- created empty, and only if you ask.
+  #
+  # Ringleader's egress control can point workstations at a proxy that resolves names and
+  # terminates HTTPS for the hosts you allow. That VM is not built yet, but where it will live
+  # is worth settling now: a subnet of its own means the security-group rules that permit
+  # workstation -> proxy traffic can name one stable range instead of one instance's address,
+  # and carving the range now avoids renumbering later.
+  #
+  # It shares the workstations subnet's availability zone, because AWS charges for cross-AZ
+  # traffic in both directions and a proxy sits on the path of everything a workstation does.
+  GatewaySubnet:
+    Type: AWS::EC2::Subnet
+    Condition: WantGatewaySubnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref GatewaySubnetCidr
+      AvailabilityZone: !GetAtt Subnet.AvailabilityZone
+      Tags: [{ Key: Name, Value: ringleader-gateway }]
+
+  GatewaySubnetRouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: WantGatewaySubnet
+    Properties:
+      SubnetId: !Ref GatewaySubnet
+      RouteTableId: !Ref PrivateRouteTable
 
   WorkstationsSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -290,3 +473,19 @@ Outputs:
     Condition: WantNetwork
     Description: "providerConfig.aws.securityGroupIds."
     Value: !GetAtt WorkstationsSecurityGroup.GroupId
+  VpcId:
+    Condition: WantNetwork
+    Description: >-
+      The VPC this stack created. Also the VPC the egress permissions are bounded to, when
+      EnableEgressControl=true and EgressVpcId was left empty.
+    Value: !Ref Vpc
+  GatewaySubnetId:
+    Condition: WantGatewaySubnet
+    Description: "Private subnet reserved for the future DNS / HTTPS proxy VM."
+    Value: !Ref GatewaySubnet
+  PrivateRouteTableId:
+    Condition: WantNat
+    Description: >-
+      Route table sending 0.0.0.0/0 to the NAT gateway. Associate any subnet that should
+      reach the internet without a public IP with it.
+    Value: !Ref PrivateRouteTable

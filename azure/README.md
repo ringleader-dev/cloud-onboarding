@@ -114,7 +114,7 @@ ssh_source_ranges = ["203.0.113.0/24"]   # the CIDRs your engineers connect from
 Leave `ssh_source_ranges` empty **only** if you reach the VNet privately (VPN /
 ExpressRoute / peering).
 
-### A second SSH port — opt-in, and off unless you ask
+### A second SSH port — opened to the same people as 22
 
 Some Ringleader workstation types run their **own SSH daemon on a secondary port** inside the VM,
 while the VM's own sshd keeps 22, and `rl shell` dials that port for such a workstation. To open
@@ -140,13 +140,82 @@ the port Ringleader dials. On the ARM path it is `SECONDARY_SSH_SOURCE_CIDR` —
 ## Optional: workstations that run AS an identity
 
 Ringleader can boot each workstation with a dedicated per-user managed identity and assign roles
-to it. This is **off by default** because it needs the `Microsoft.ManagedIdentity` CRUD +
+to it. This is **on by default**; it needs the `Microsoft.ManagedIdentity` CRUD +
 `assign/action` surface **and** `Microsoft.Authorization/roleAssignments/write` — which
 built-in **Contributor does not have either**. Scoped to the one resource group, it is
 still the power to hand out access inside that boundary.
 
 Set `enable_workstation_identities = true` (Terraform) or run `deploy.sh` with
 `WORKSTATION_IDENTITIES=1` (ARM). Left off, the feature fails closed with a `403`.
+
+## Optional: egress control
+
+By default a workstation can reach anything your network routes. Ringleader can narrow that
+to an allowlist you declare in the workstation manifest — a set of IP ranges and hostnames —
+enforced by network security groups that Ringleader creates and keeps in step with the
+manifest.
+
+It is **on by default**, and granting it restricts nothing on its own: until you declare an
+egress policy on a workstation, everything behaves exactly as it does today. To opt out:
+
+```hcl
+enable_egress_control = false
+```
+```bash
+EGRESS_CONTROL=0 ./deploy.sh    # the ARM path
+```
+
+It adds seven actions to the custom role, still scoped to your one resource group:
+
+| action | why |
+|---|---|
+| `Microsoft.Network/networkSecurityGroups/read` / `write` / `delete` | one NSG per distinct egress policy |
+| `.../networkSecurityGroups/securityRules/read` / `write` / `delete` | keep that NSG's rules in step with the manifest |
+| `Microsoft.Network/networkSecurityGroups/join/action` | attach the NSG to a workstation's NIC — the one people forget |
+
+Ringleader compiles each distinct policy into **one** NSG and attaches it to the NICs of the
+workstations carrying that policy. That matters here: Azure caps an NSG at **1,000 rules** and
+will not raise it, so a rule set per workstation would not reach fleet scale.
+
+Note the difference from the inbound rules elsewhere in this module: those attach to the
+**subnet**, so they reach every VM on it. Egress policies attach to the **NIC**, so they are
+genuinely per workstation.
+
+## Room for the DNS / HTTPS proxy
+
+Restricting egress by **hostname** (rather than by IP range) needs a resolver that answers per
+workstation, and no cloud offers one — so Ringleader runs a small DNS / HTTPS proxy VM in your
+resource group. That VM does not exist yet, but it is worth reserving its address range now:
+
+It is on by default (`10.70.240.0/24`). To skip it:
+
+```hcl
+create_gateway_subnet = false
+```
+```bash
+CREATE_GATEWAY_SUBNET=false ./deploy.sh
+```
+
+It creates an **empty subnet** and nothing else. Azure does not bill for a subnet, and the
+subnet shares the landing pad's NAT gateway, so the proxy gets upstream egress without a
+public IP. No NSG is attached: Azure's defaults already allow intra-VNet traffic and deny
+inbound from the internet, which is the right posture for a proxy.
+
+## Plan your address space before the second region
+
+An Azure VNet is regional. A second region means a second VNet joined by **global VNet
+peering**, which is non-transitive and cannot join overlapping address spaces. So pick the
+ranges up front, even if you only need one region today:
+
+| region | `vnet_address_space` | `subnet_prefix` | `gateway_subnet_prefix` |
+|---|---|---|---|
+| first | `10.70.0.0/16` | `10.70.1.0/24` | `10.70.240.0/24` |
+| second | `10.71.0.0/16` | `10.71.1.0/24` | `10.71.240.0/24` |
+| third | `10.72.0.0/16` | `10.72.1.0/24` | `10.72.240.0/24` |
+
+Ringleader's proxy VMs are regional, so each region runs its own; nothing here requires the
+regions to be joined at all until you want one proxy to serve several. Global VNet peering
+also charges for cross-region transfer, which is a second reason to keep a proxy local.
 
 ## What you return to Ringleader
 

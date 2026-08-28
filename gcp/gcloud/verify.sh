@@ -8,6 +8,8 @@
 #   SA        onboarding SA account id       (default: ringleader-workstations)
 #   POOL      pool id                        (default: ringleader)
 #   PROVIDER  provider id                    (default: oidc)
+#   EGRESS_ROLE  custom egress-control role id, if you enabled it
+#                                            (default: ringleaderEgressControl)
 #
 set -euo pipefail
 
@@ -16,6 +18,7 @@ ORG_UID="${ORG_UID:?set ORG_UID (your Ringleader organization id)}"
 SA="${SA:-ringleader-workstations}"
 POOL="${POOL:-ringleader}"
 PROVIDER="${PROVIDER:-oidc}"
+EGRESS_ROLE="${EGRESS_ROLE:-ringleaderEgressControl}"
 SA_EMAIL="${SA}@${PROJECT}.iam.gserviceaccount.com"
 SUBJECT="org:${ORG_UID}"
 
@@ -39,6 +42,18 @@ if [ -n "$MISSING" ]; then
   echo "!! re-run ./onboard.sh (idempotent) to add them"
 else
   echo ">> all three required roles present"
+fi
+
+# Optional extras, reported rather than required -- both are off unless you asked for them.
+if printf '%s\n' "$ROLES" | grep -qx "projects/${PROJECT}/roles/${EGRESS_ROLE}"; then
+  echo ">> egress control is ON (custom role ${EGRESS_ROLE}):"
+  gcloud iam roles describe "$EGRESS_ROLE" --project "$PROJECT" \
+    --format='value(includedPermissions)' | tr ';' '\n' | sed 's/^/   /'
+else
+  echo ">> egress control is off (no ${EGRESS_ROLE} binding); workstations reach whatever your network routes"
+fi
+if printf '%s\n' "$ROLES" | grep -qx "roles/resourcemanager.projectIamAdmin"; then
+  echo ">> workstation runtime identities are ON (roles/resourcemanager.projectIamAdmin is granted)"
 fi
 
 echo

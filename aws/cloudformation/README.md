@@ -17,14 +17,15 @@ SSH_SOURCE_CIDR=<your.ip/32> \
 
 Env vars: `ISSUER_URL`, `ORG_UID` (required); `REGION` (default `us-east-1`), `STACK_NAME`
 (`ringleader-onboarding`), `ROLE_NAME` (`ringleader-workstations`), `CREATE_NETWORK`
-(`false`), `SSH_SOURCE_CIDR` (empty), `SECONDARY_SSH_SOURCE_CIDR` (empty),
-`ALLOWED_REGION` (default `$REGION`).
+(`true`), `SSH_SOURCE_CIDR` (empty), `SECONDARY_SSH_SOURCE_CIDR` (mirrors `SSH_SOURCE_CIDR`),
+`ALLOWED_REGION` (default `$REGION`), plus the five in *Parameters* below.
 
-`SECONDARY_SSH_SOURCE_CIDR` is **opt-in and empty by default**: it opens a second SSH port on the
-workstations security group, which some Ringleader workstation types run their own SSH daemon on
-while the instance's own sshd keeps 22. Left empty, the stack opens nothing extra and admits
-exactly what it admitted before this parameter existed. You never supply the port number — the
-template carries it.
+`SECONDARY_SSH_SOURCE_CIDR` **follows `SSH_SOURCE_CIDR`** unless you set it: it opens a second
+SSH port on the workstations security group, which some Ringleader workstation types run their
+own SSH daemon on while the instance's own sshd keeps 22, and which is harmless for the types
+that do not. Set it to `none` to close the port, or to a different CIDR to open it more
+narrowly. Open nothing for 22 and nothing opens for 2222. You never supply the port number —
+the template carries it.
 
 ## The one placeholder
 
@@ -43,6 +44,16 @@ sed -i "s|__OIDC_PROVIDER__|oidc-app.ringleader.dev/org/<org-id>|g" ringleader-o
 `IssuerUrl` = `<issuer>/org/<org-id>`, `Audience` = `<IssuerUrl>/aws`, `Subject` = `org:<org-id>`,
 `Thumbprint`, `RoleName`, `AllowedRegion`, `CreateNetwork`, `VpcCidr`, `SubnetCidr`,
 `SshSourceCidr`, `SecondarySshSourceCidr`.
+
+Egress control and the proxy subnet add five more: `EnableEgressControl` (`true`),
+`EgressVpcId` (empty — uses the VPC this stack creates), `CreateNatGateway` (`true`),
+`CreateGatewaySubnet` (`true`) and `GatewaySubnetCidr` (`10.60.240.0/24`). `deploy.sh` exposes
+them as `EGRESS_CONTROL`, `EGRESS_VPC_ID`, `CREATE_NAT_GATEWAY`, `CREATE_GATEWAY_SUBNET` and
+`GATEWAY_SUBNET_CIDR`; [`../README.md`](../README.md#optional-egress-control) explains what
+each one grants, and [the root README](../../README.md#what-is-on-by-default-and-how-to-turn-it-off)
+lists everything that is on by default. `CreateGatewaySubnet=true` keeps the NAT gateway on,
+since the proxy VM has no public IP and NAT is its only route out — and the NAT gateway is the
+one default that bills hourly.
 
 Deploy with `--capabilities CAPABILITY_NAMED_IAM` (the role has a fixed name).
 
@@ -67,9 +78,10 @@ THUMBPRINT=$(echo | openssl s_client -servername oidc-app.ringleader.dev \
 
 ## Outputs
 
-`TargetRoleArn`, `OidcProviderArn`, and — with `CreateNetwork=true` — `SubnetId` and
-`SecurityGroupId`. Hand the role ARN, region, and (if created) subnet + security group back
-to Ringleader.
+`TargetRoleArn`, `OidcProviderArn`, and — with `CreateNetwork=true` — `SubnetId`,
+`SecurityGroupId` and `VpcId`. With the proxy subnet on, also `GatewaySubnetId`; with a NAT
+gateway, `PrivateRouteTableId`. Hand the role ARN, region, and (if created) subnet +
+security group back to Ringleader.
 
 ## Revoke
 

@@ -44,7 +44,21 @@
       "type": "String",
       "defaultValue": "",
       "metadata": {
-        "description": "Optional, and empty opens nothing. A single CIDR allowed inbound on the SECONDARY SSH port (TCP 2222). Some Ringleader workstation types run their own SSH daemon on that port inside the VM, beside the VM's own sshd on 22, and rl shell dials it instead of 22 for those workstations; others never use it. An NSG covers the whole subnet, so this admits the port to every VM on it."
+        "description": "Optional, and empty opens nothing. A single CIDR allowed inbound on the secondary SSH port (TCP 2222). Some Ringleader workstation types run their own SSH daemon on that port inside the VM, beside the VM's own sshd on 22, and rl shell dials it instead of 22 for those; others never use it. An NSG covers the whole subnet, so this admits the port to every VM on it."
+      }
+    },
+    "createGatewaySubnet": {
+      "type": "Bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Reserve an empty subnet for the DNS / HTTPS proxy VM that Ringleader's hostname-level egress control will use. On by default. The VM is not built yet; carving the range now means the NSG rules that permit workstation -> proxy traffic can name one stable prefix, and avoids renumbering later. It shares the NAT gateway, so the proxy gets egress without a public IP. Azure does not bill for a subnet, so leaving it on costs nothing."
+      }
+    },
+    "gatewaySubnetCidr": {
+      "type": "String",
+      "defaultValue": "10.70.240.0/24",
+      "metadata": {
+        "description": "Prefix for the gateway subnet. Must sit inside vnetCidr, and the default sits well clear of the workstations subnet so growing that one later does not collide."
       }
     }
   },
@@ -84,7 +98,34 @@
         }
       }
     ],
-    "effectiveSecurityRules": "[concat(if(equals(parameters('sshSourceCidr'), ''), createArray(), variables('sshRules')), if(equals(parameters('secondarySshSourceCidr'), ''), createArray(), variables('secondarySshRules')))]"
+    "effectiveSecurityRules": "[concat(if(equals(parameters('sshSourceCidr'), ''), createArray(), variables('sshRules')), if(equals(parameters('secondarySshSourceCidr'), ''), createArray(), variables('secondarySshRules')))]",
+    "gatewaySubnetName": "gateway",
+    "workstationSubnets": [
+      {
+        "name": "[variables('subnetName')]",
+        "properties": {
+          "addressPrefix": "[parameters('subnetCidr')]",
+          "networkSecurityGroup": {
+            "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+          },
+          "natGateway": {
+            "id": "[resourceId('Microsoft.Network/natGateways', variables('natName'))]"
+          }
+        }
+      }
+    ],
+    "gatewaySubnets": [
+      {
+        "name": "[variables('gatewaySubnetName')]",
+        "properties": {
+          "addressPrefix": "[parameters('gatewaySubnetCidr')]",
+          "natGateway": {
+            "id": "[resourceId('Microsoft.Network/natGateways', variables('natName'))]"
+          }
+        }
+      }
+    ],
+    "effectiveSubnets": "[concat(variables('workstationSubnets'), if(parameters('createGatewaySubnet'), variables('gatewaySubnets'), createArray()))]"
   },
   "resources": [
     {
@@ -142,20 +183,7 @@
             "[parameters('vnetCidr')]"
           ]
         },
-        "subnets": [
-          {
-            "name": "[variables('subnetName')]",
-            "properties": {
-              "addressPrefix": "[parameters('subnetCidr')]",
-              "networkSecurityGroup": {
-                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
-              },
-              "natGateway": {
-                "id": "[resourceId('Microsoft.Network/natGateways', variables('natName'))]"
-              }
-            }
-          }
-        ]
+        "subnets": "[variables('effectiveSubnets')]"
       }
     }
   ],
@@ -165,6 +193,13 @@
       "value": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('subnetName'))]",
       "metadata": {
         "description": "Hand back to Ringleader: providerConfig.azure.subnetId."
+      }
+    },
+    "gatewaySubnetId": {
+      "type": "String",
+      "value": "[if(parameters('createGatewaySubnet'), resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('gatewaySubnetName')), '')]",
+      "metadata": {
+        "description": "The subnet reserved for the future DNS / HTTPS proxy VM, or empty if createGatewaySubnet was false."
       }
     }
   }
