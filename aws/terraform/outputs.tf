@@ -72,6 +72,7 @@ output "actions_granted" {
     var.enable_egress_control ? concat(
       local.egress_group_actions,
       local.egress_route_actions,
+      local.egress_describe_actions,
       ["ec2:ModifyNetworkInterfaceAttribute"],
     ) : [],
   )

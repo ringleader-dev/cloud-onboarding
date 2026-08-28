@@ -211,9 +211,10 @@ resource "google_project_iam_member" "workstation_project_iam_admin" {
 # routes actually takes, per Google's own documentation, and nothing else in this project is
 # reachable with them.
 #
-# If a create is ever denied on a project where this is enabled, the first permission to add
-# is compute.networks.updatePolicy. Google's own documentation does not list it for either
-# operation, which is why it is not here.
+# compute.networks.updatePolicy is the one that is easy to leave out and hard to diagnose:
+# creating a custom static route needs it in addition to compute.routes.create. Google's
+# firewall-rules documentation does not list it for firewall rules, so it may be redundant
+# there -- but it is required for routes, and a role that has it once covers both.
 resource "google_project_iam_custom_role" "egress" {
   count       = var.enable_egress_control ? 1 : 0
   project     = var.project_id
@@ -231,6 +232,7 @@ resource "google_project_iam_custom_role" "egress" {
     "compute.routes.delete",
     "compute.routes.get",
     "compute.routes.list",
+    "compute.networks.updatePolicy",
   ]
 
   depends_on = [google_project_service.iam]

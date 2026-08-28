@@ -257,7 +257,6 @@ Resources:
                 - Sid: EgressSecurityGroups
                   Effect: Allow
                   Action:
-                    - "ec2:DescribeSecurityGroupRules"
                     - "ec2:CreateSecurityGroup"
                     - "ec2:DeleteSecurityGroup"
                     - "ec2:AuthorizeSecurityGroupEgress"
@@ -268,7 +267,6 @@ Resources:
                     # proxy when a policy names hostnames rather than address ranges. An AWS
                     # route table is per subnet, so per-policy steering needs a subnet per
                     # policy and a route table to go with it.
-                    - "ec2:DescribeRouteTables"
                     - "ec2:CreateRouteTable"
                     - "ec2:DeleteRouteTable"
                     - "ec2:CreateRoute"
@@ -291,6 +289,28 @@ Resources:
                       - StringEquals:
                           "aws:RequestedRegion": !Ref AllowedRegion
                       - !Ref AWS::NoValue
+                - !Ref AWS::NoValue
+
+              # The two reads the reconciler and its sweep need, in a statement of their own
+              # because they cannot go in the one above. EC2's Describe actions support no
+              # resource-level permissions, so ec2:Vpc is absent from the request context and a
+              # condition on it can never match -- granting them there reads correctly and
+              # denies at runtime. AWS documents this: "the Describe actions do not support
+              # resource-level permissions, so you must specify them in a separate statement
+              # without conditions." The region condition is fine; only the VPC one is not.
+              - !If
+                - WantEgressControl
+                - Sid: EgressDescribe
+                  Effect: Allow
+                  Action:
+                    - "ec2:DescribeSecurityGroupRules"
+                    - "ec2:DescribeRouteTables"
+                  Resource: "*"
+                  Condition: !If
+                    - HasRegionCondition
+                    - StringEquals:
+                        "aws:RequestedRegion": !Ref AllowedRegion
+                    - !Ref AWS::NoValue
                 - !Ref AWS::NoValue
 
               # Two jobs: moving a workstation's NIC onto the security group its policy

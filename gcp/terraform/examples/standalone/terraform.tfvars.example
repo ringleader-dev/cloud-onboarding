@@ -33,7 +33,8 @@ org_uid               = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
 
 # Let Ringleader manage the VPC firewall rules an egress policy compiles to, and the static
 # route that steers a workstation's traffic at the DNS / HTTPS proxy. Grants a custom role with
-# compute.firewalls.* and compute.routes.* -- nine permissions -- and nothing else. It restricts
+# compute.firewalls.*, compute.routes.* and compute.networks.updatePolicy -- ten permissions
+# -- and nothing else. It restricts
 # nothing until you declare an egress policy on a workstation. GCP's own FQDN filtering is a
 # separate, documented opt-in; see gcp/README.md.
 # enable_egress_control = false

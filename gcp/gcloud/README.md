@@ -18,8 +18,8 @@ Two grants on `onboard.sh` are **on by default**: `WORKSTATION_IDENTITIES` (let 
 create per-user service accounts — the broadest grant here, so read
 [`../README.md`](../README.md#optional-let-ringleader-create-the-per-user-identities) before
 onboarding a shared project) and `EGRESS_CONTROL` (let Ringleader manage the firewall rules
-that restrict where workstations connect — a custom role with `compute.firewalls.*` and
-`compute.routes.*`, nine permissions in all). Set either to `0` to skip it. The root README has
+that restrict where workstations connect — a custom role with `compute.firewalls.*`,
+`compute.routes.*` and `compute.networks.updatePolicy`, ten permissions in all). Set either to `0` to skip it. The root README has
 [the full list of defaults](../../README.md#what-is-on-by-default-and-how-to-turn-it-off).
 
 ## Quick start

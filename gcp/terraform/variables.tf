@@ -84,11 +84,12 @@ variable "enable_egress_control" {
     Let Ringleader manage the VPC firewall rules that restrict where your workstations may
     connect. On by default; set false to opt out.
 
-    It grants a custom project role with nine permissions and nothing else:
-    compute.firewalls.* for the rules that carry an allowlist, and compute.routes.* for the
-    static route that steers a workstation's traffic at the DNS / HTTPS proxy when the policy
-    names hostnames rather than address ranges. Deliberately not roles/compute.securityAdmin,
-    which also carries Cloud Armor security policies, SSL policies and certificates.
+    It grants a custom project role with ten permissions and nothing else:
+    compute.firewalls.* for the rules that carry an allowlist, compute.routes.* for the static
+    route that steers a workstation's traffic at the DNS / HTTPS proxy when the policy names
+    hostnames rather than address ranges, and compute.networks.updatePolicy, which creating
+    that route additionally requires. Deliberately not roles/compute.securityAdmin, which also
+    carries Cloud Armor security policies, SSL policies and certificates.
 
     Ringleader compiles each distinct egress policy into one firewall rule targeted by
     network tag, so a fleet sharing a policy costs one rule rather than one per workstation.

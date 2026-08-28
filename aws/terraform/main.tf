@@ -73,7 +73,6 @@ locals {
   # workstation traffic. If you want the strict minimum for IP-level egress alone and no
   # proxy, drop those two -- the actions_granted output will show what you kept.
   egress_group_actions = [
-    "ec2:DescribeSecurityGroupRules",
     "ec2:CreateSecurityGroup",
     "ec2:DeleteSecurityGroup",
     "ec2:AuthorizeSecurityGroupEgress",
@@ -91,7 +90,6 @@ locals {
   # running workstation between security groups, and it clears the source/destination check on
   # the proxy's own interface, without which AWS silently drops every packet it forwards.
   egress_route_actions = [
-    "ec2:DescribeRouteTables",
     "ec2:CreateRouteTable",
     "ec2:DeleteRouteTable",
     "ec2:CreateRoute",
@@ -101,6 +99,18 @@ locals {
     "ec2:DisassociateRouteTable",
     "ec2:CreateSubnet",
     "ec2:DeleteSubnet",
+  ]
+
+  # The two reads the reconciler and its sweep need, in their own list because they cannot go
+  # in the statement above. EC2's Describe actions support no resource-level permissions, so
+  # `ec2:Vpc` is simply absent from the request context and a condition on it can never match:
+  # granting them there reads correctly and denies at runtime. AWS documents this in as many
+  # words -- "the Describe actions do not support resource-level permissions, so you must
+  # specify them in a separate statement without conditions". The region condition is fine
+  # (`aws:RequestedRegion` is global and present on every request); only the VPC one is not.
+  egress_describe_actions = [
+    "ec2:DescribeSecurityGroupRules",
+    "ec2:DescribeRouteTables",
   ]
 
   # The VPCs the egress permissions are bounded to. When this module created the network we
@@ -303,6 +313,28 @@ data "aws_iam_policy_document" "permissions" {
           test     = "StringLike"
           variable = "ec2:Vpc"
           values   = local.egress_vpc_arns
+        }
+      }
+    }
+  }
+
+  # The reads, deliberately unbounded by VPC -- see egress_describe_actions above. They are
+  # still gated on enable_egress_control and still bounded by region, so they widen nothing a
+  # customer did not ask for; the base grant's own Describe statement is left untouched.
+  dynamic "statement" {
+    for_each = var.enable_egress_control ? [1] : []
+    content {
+      sid       = "EgressDescribe"
+      effect    = "Allow"
+      actions   = local.egress_describe_actions
+      resources = ["*"]
+
+      dynamic "condition" {
+        for_each = local.region_condition ? [1] : []
+        content {
+          test     = "StringEquals"
+          variable = "aws:RequestedRegion"
+          values   = var.allowed_regions
         }
       }
     }

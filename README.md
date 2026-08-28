@@ -173,7 +173,7 @@ is a single variable away from off.
 | **NAT gateway** (AWS) | private route table, so an instance with no public IP has egress | `create_nat_gateway` | `CREATE_NAT_GATEWAY` | yes — hourly **and $0.045/GB** |
 | **Proxy subnet** | an empty subnet reserved for the future DNS / HTTPS proxy VM | `create_gateway_subnet` | `CREATE_GATEWAY_SUBNET`, `GATEWAY_CIDR` (GCP) | no |
 | **Egress control** | Ringleader may create and maintain the firewall objects an egress policy compiles to, and the routes that steer traffic at the proxy | `enable_egress_control` | `EGRESS_CONTROL` | no |
-| **Workstation identities** | Ringleader may create per-user identities and bind roles to them | `enable_workstation_identities` | `WORKSTATION_IDENTITIES` | no |
+| **Workstation identities** | Ringleader may create per-user identities and bind roles to them | `enable_workstation_identities` | `WORKSTATION_IDENTITIES` (GCP `onboard.sh`, Azure `deploy.sh`) — **not available on the AWS CloudFormation path**, which grants no `iam:PassRole` at all; use the AWS Terraform module if you want it | no |
 | **Workstation-to-workstation** (GCP) | boxes on the subnet can reach each other | `allow_internal_traffic` | `ALLOW_INTERNAL` | no |
 
 Two of these deserve a deliberate decision rather than a default:

@@ -165,7 +165,7 @@ enable_egress_control = false
 EGRESS_CONTROL=0 ./deploy.sh    # the ARM path
 ```
 
-It adds fifteen actions to the custom role, still scoped to your one resource group:
+It adds sixteen actions to the custom role, still scoped to your one resource group:
 
 | action | why |
 |---|---|
@@ -173,7 +173,7 @@ It adds fifteen actions to the custom role, still scoped to your one resource gr
 | `.../networkSecurityGroups/securityRules/read` / `write` / `delete` | keep that NSG's rules in step with the manifest |
 | `Microsoft.Network/networkSecurityGroups/join/action` | attach the NSG to a workstation's NIC — the one people forget |
 | `Microsoft.Network/routeTables/*` (with `routes/*` and `join/action`) | steer a workstation's traffic at the DNS / HTTPS proxy when a policy names hostnames |
-| `Microsoft.Network/virtualNetworks/subnets/write` | an Azure route table attaches **per subnet**, so per-policy steering needs a subnet per policy |
+| `Microsoft.Network/virtualNetworks/subnets/write` / `delete` | an Azure route table attaches **per subnet**, so per-policy steering needs a subnet per policy — and one Ringleader creates, it must also be able to collect |
 
 Ringleader compiles each distinct policy into **one** NSG and attaches it to the NICs of the
 workstations carrying that policy. That matters here: Azure caps an NSG at **1,000 rules** and

@@ -152,10 +152,10 @@ fi
 # administration -- and tag administration is a privilege-escalation path in an organization
 # that uses tags in IAM conditions. It is a deliberate opt-in; see gcp/README.md.
 #
-# If a create is ever denied on a project where this is on, the first permission to add is
-# compute.networks.updatePolicy; Google's docs do not list it, which is why it is not here.
+# compute.networks.updatePolicy is the one easy to leave out and hard to diagnose: creating a
+# custom static route needs it in addition to compute.routes.create.
 if [[ "${EGRESS_CONTROL:-1}" == "1" ]]; then
-  EGRESS_PERMS="compute.firewalls.create,compute.firewalls.delete,compute.firewalls.get,compute.firewalls.list,compute.firewalls.update,compute.routes.create,compute.routes.delete,compute.routes.get,compute.routes.list"
+  EGRESS_PERMS="compute.firewalls.create,compute.firewalls.delete,compute.firewalls.get,compute.firewalls.list,compute.firewalls.update,compute.routes.create,compute.routes.delete,compute.routes.get,compute.routes.list,compute.networks.updatePolicy"
   if gcloud iam roles describe "$EGRESS_ROLE" --project "$PROJECT" >/dev/null 2>&1; then
     gcloud iam roles update "$EGRESS_ROLE" --project "$PROJECT" \
       --permissions "$EGRESS_PERMS" --quiet >/dev/null

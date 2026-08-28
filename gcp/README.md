@@ -184,12 +184,13 @@ enable_egress_control = false
 EGRESS_CONTROL=0 ./onboard.sh    # the gcloud path
 ```
 
-What that grants is a **custom project role** with nine permissions and nothing else:
+What that grants is a **custom project role** with ten permissions and nothing else:
 
 | | |
 |---|---|
 | `compute.firewalls.create` / `delete` / `get` / `list` / `update` | create and maintain the firewall rules that carry each policy |
 | `compute.routes.create` / `delete` / `get` / `list` | the static route that steers a workstation's traffic at the DNS / HTTPS proxy, when a policy names hostnames rather than address ranges |
+| `compute.networks.updatePolicy` | creating that route additionally requires it — the one that is easy to leave out and hard to diagnose |
 
 Deliberately **not** `roles/compute.securityAdmin`, which is the usual answer and reaches
 further than this needs — it also carries Cloud Armor security policies, SSL policies and

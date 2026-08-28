@@ -31,7 +31,7 @@ org_uid               = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
 # enable_workstation_identities = false
 
 # Let Ringleader manage the NSGs an egress policy compiles to, and the route tables and subnets
-# that steer traffic at the DNS / HTTPS proxy. Adds fifteen actions to the custom role, still
+# that steer traffic at the DNS / HTTPS proxy. Adds sixteen actions to the custom role, still
 # scoped to this resource group. It restricts nothing until you declare an egress policy on a
 # workstation. Note the NSGs attach to the NIC, so unlike the inbound rules above they really
 # are per workstation.
