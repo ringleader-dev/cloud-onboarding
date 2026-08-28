@@ -17,16 +17,16 @@
     },
     "enableWorkstationIdentities": {
       "type": "Bool",
-      "defaultValue": false,
+      "defaultValue": true,
       "metadata": {
-        "description": "Let Ringleader provision a per-user managed identity and assign roles to it. Adds the Microsoft.ManagedIdentity CRUD/assign actions and Microsoft.Authorization roleAssignments write, which built-in Contributor does not have either. Leave false unless you use the feature; left off it fails closed with a 403."
+        "description": "Let Ringleader provision a per-user managed identity and assign roles to it. On by default. Adds the Microsoft.ManagedIdentity CRUD/assign actions and Microsoft.Authorization roleAssignments write, which built-in Contributor does not carry either -- still scoped to this resource group. Set false to opt out; the feature then fails closed with a 403."
       }
     },
     "enableEgressControl": {
       "type": "Bool",
-      "defaultValue": false,
+      "defaultValue": true,
       "metadata": {
-        "description": "Let Ringleader manage the network security groups that restrict where workstations may connect. Adds NSG and security-rule read/write/delete plus join/action, which is what lets Ringleader attach a group to a workstation NIC. Still scoped to this resource group. Leave false unless you use egress control; left off it fails closed with a 403."
+        "description": "Let Ringleader manage the network security groups that restrict where workstations may connect. On by default. Adds NSG and security-rule read/write/delete plus join/action, which is what lets Ringleader attach a group to a workstation NIC. Still scoped to this resource group, and it restricts nothing on its own until you declare an egress policy. Set false to opt out."
       }
     }
   },

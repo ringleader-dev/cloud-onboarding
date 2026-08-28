@@ -49,9 +49,9 @@
     },
     "createGatewaySubnet": {
       "type": "Bool",
-      "defaultValue": false,
+      "defaultValue": true,
       "metadata": {
-        "description": "Reserve an empty subnet for the DNS / HTTPS proxy VM that Ringleader's hostname-level egress control will use. The VM is not built yet; carving the range now means the NSG rules that permit workstation -> proxy traffic can name one stable prefix, and avoids renumbering later. It shares the NAT gateway, so the proxy gets egress without a public IP. Azure does not bill for a subnet."
+        "description": "Reserve an empty subnet for the DNS / HTTPS proxy VM that Ringleader's hostname-level egress control will use. On by default. The VM is not built yet; carving the range now means the NSG rules that permit workstation -> proxy traffic can name one stable prefix, and avoids renumbering later. It shares the NAT gateway, so the proxy gets egress without a public IP. Azure does not bill for a subnet, so leaving it on costs nothing."
       }
     },
     "gatewaySubnetCidr": {

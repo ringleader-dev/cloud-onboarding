@@ -17,7 +17,9 @@
 #   SECONDARY_SSH_TAG
 #                network tag that rule targets        (default: ringleader-secondary-ssh)
 #   GATEWAY_CIDR an empty subnet reserved for the future DNS / HTTPS proxy VM
-#                (default: empty -- no subnet is created)
+#                (default: 10.60.240.0/24; set to "none" to skip it)
+#   ALLOW_INTERNAL  1 to let workstations reach each other inside the subnet
+#                (default: 1; set 0 for the tighter posture)
 #
 # REACHABILITY -- the part that decides whether your workstations are USABLE.
 #
@@ -55,9 +57,18 @@ REGION="${REGION:-us-central1}"
 CIDR="${CIDR:-10.60.0.0/20}"
 SSH_RANGES="${SSH_RANGES:-}"
 SSH_TAG="${SSH_TAG:-ringleader-workstation}"
-SECONDARY_SSH_RANGES="${SECONDARY_SSH_RANGES:-}"
+# 2222 follows 22 unless you say otherwise: if you opened one to your engineers you almost
+# certainly want the other open to the same people. "none" closes it.
+SECONDARY_SSH_RANGES="${SECONDARY_SSH_RANGES:-$SSH_RANGES}"
+if [ "$SECONDARY_SSH_RANGES" = "none" ]; then
+  SECONDARY_SSH_RANGES=""
+fi
 SECONDARY_SSH_TAG="${SECONDARY_SSH_TAG:-ringleader-secondary-ssh}"
-GATEWAY_CIDR="${GATEWAY_CIDR:-}"
+GATEWAY_CIDR="${GATEWAY_CIDR:-10.60.240.0/24}"
+if [ "$GATEWAY_CIDR" = "none" ]; then
+  GATEWAY_CIDR=""
+fi
+ALLOW_INTERNAL="${ALLOW_INTERNAL:-1}"
 
 gcloud compute networks create ringleader-vpc --project "$PROJECT" --subnet-mode custom
 gcloud compute networks subnets create ringleader-workstations --project "$PROJECT" \
@@ -103,6 +114,17 @@ if [[ -n "$SECONDARY_SSH_RANGES" ]]; then
     --rules "tcp:${SECONDARY_SSH_PORT}" \
     --source-ranges "$SECONDARY_SSH_RANGES" --target-tags "$SECONDARY_SSH_TAG"
   echo ">> secondary SSH port ${SECONDARY_SSH_PORT} allowed from ${SECONDARY_SSH_RANGES} to VMs tagged ${SECONDARY_SSH_TAG}"
+fi
+
+# Workstation-to-workstation traffic, on by default so this matches the Terraform module.
+# Without it a custom-mode VPC has no firewall rules and two workstations cannot reach each
+# other at all -- a tighter posture, in which a compromised box cannot scan its neighbours.
+# Set ALLOW_INTERNAL=0 for that. It never admits anything from outside the subnet.
+if [[ "$ALLOW_INTERNAL" == "1" ]]; then
+  gcloud compute firewall-rules create ringleader-allow-internal --project "$PROJECT" \
+    --network ringleader-vpc --direction INGRESS --action allow \
+    --rules tcp,udp,icmp --source-ranges "$CIDR" --target-tags "$SSH_TAG"
+  echo ">> workstations tagged ${SSH_TAG} can reach each other within ${CIDR}"
 fi
 
 echo

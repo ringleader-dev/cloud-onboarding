@@ -9,30 +9,46 @@ org_uid = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
 # Region for the landing-pad network and your workstations.
 region = "us-east-1"
 
-# CIDRs allowed to SSH to workstations. Empty opens nothing (private reach only).
-# Example: your office / VPN egress. 0.0.0.0/0 is accepted but is a decision.
+# WHO CAN SSH IN -- the one thing that is NOT on by default, and cannot be. Empty opens
+# nothing (private reach only). Example: your office / VPN egress. 0.0.0.0/0 is accepted but
+# is a decision, never one this module makes for you.
 ssh_source_ranges = []
 
-# A SECOND SSH PORT, off unless you set this. Some Ringleader workstation types run their own SSH
-# daemon on a secondary port inside the instance (the instance's own sshd keeps 22), and
-# `rl shell` dials that port for them. Ringleader tells you if the workstations you plan to run
-# need it; leaving this empty opens nothing and changes nothing.
-secondary_ssh_source_ranges = []
+# ---------------------------------------------------------------------------------------
+# EVERYTHING BELOW IS ON BY DEFAULT. Uncomment a line only to turn something off.
+# The root README has the full list: ../../../README.md
+# ---------------------------------------------------------------------------------------
 
-# EGRESS CONTROL, off unless you set this. Lets Ringleader manage the security groups that
-# restrict where your workstations may connect -- an allowlist you declare per workstation.
-# Bounded to the VPC this module creates; read the egress_scope output after applying to
-# confirm. Off changes nothing.
-# enable_egress_control = true
+# The secondary SSH port follows ssh_source_ranges unless you set this. Some Ringleader
+# workstation types run their own SSH daemon on it (the instance's own sshd keeps 22) and
+# `rl shell` dials it for them; for the types that do not, the rule is harmless. Set [] to
+# close it.
+# secondary_ssh_source_ranges = []
+
+# The landing pad: a VPC + public subnet + internet gateway + security group. All free. Set
+# false if you already have a subnet and security group for these VMs.
+# create_network = false
 
 # A NAT gateway plus a private route table, so an instance with no public IP still has egress.
-# Bills per hour. Required by create_gateway_subnet.
-# create_nat_gateway = true
+# THE ONE DEFAULT THAT COSTS MONEY -- it bills per hour plus data processing whether or not
+# anything uses it. Set false, along with create_gateway_subnet, if every workstation gets a
+# public IP.
+# create_nat_gateway = false
 
-# Reserve an empty private subnet (10.60.240.0/24 by default) for the DNS / HTTPS proxy VM that
+# An empty private subnet (10.60.240.0/24) reserved for the DNS / HTTPS proxy VM that
 # hostname-level egress control will use. The VM does not exist yet; the subnet costs nothing
-# and saves renumbering later.
-# create_gateway_subnet = true
+# and saves renumbering later. Needs create_nat_gateway.
+# create_gateway_subnet = false
+
+# Let Ringleader manage the security groups that restrict where workstations may connect.
+# Bounded to the VPC this module creates; read the egress_scope output after applying to
+# confirm. It restricts nothing until you declare an egress policy on a workstation.
+# enable_egress_control = false
+
+# Let Ringleader attach an instance profile to a workstation, so it runs as an IAM role.
+# Grants iam:PassRole scoped to roles under /ringleader-workstations/ and to ec2 only -- with
+# no roles under that path it reaches nothing.
+# enable_workstation_identities = false
 
 # PLANNING A SECOND REGION? Set vpc_cidr per region BEFORE the first apply. An AWS VPC is
 # regional, and joining two regions later needs an inter-region Transit Gateway, which cannot

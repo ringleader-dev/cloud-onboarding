@@ -10,10 +10,15 @@
 #   - a federated identity credential trusting Ringleader's per-org issuer, so
 #     Ringleader authenticates with a signed token instead of a secret.
 #
-# Three optional extras, all off by default: a vnet + subnet + NAT gateway + NSG landing
-# pad, egress control (letting Ringleader manage the NSGs that restrict where workstations
-# may connect), and a subnet for the DNS / HTTPS proxy VM that hostname-level egress
-# control will use.
+# Plus, all on by default and each one a variable you can set to false: a vnet + subnet +
+# NAT gateway + NSG landing pad, a reserved subnet for the DNS / HTTPS proxy VM that
+# hostname-level egress control will use, egress control itself (letting Ringleader manage
+# the NSGs that restrict where workstations may connect), and per-workstation managed
+# identities.
+#
+# The defaults grant what Ringleader needs for the features available today, so turning one
+# on later does not mean a second onboarding pass. Only the landing pad's NAT gateway and
+# public IP cost money; see variables.tf, and the README for how to switch any of them off.
 #
 # Keyless: no client secret is created or stored. This module declares no provider blocks
 # so it can be referenced from another repository. See examples/standalone for a
@@ -50,7 +55,7 @@ resource "azuread_application_federated_identity_credential" "ringleader" {
 
 # The custom least-privilege role and its assignment, deployed from the shared ARM template
 # so the action list lives in exactly one place (../arm/azuredeploy.json). That template also
-# owns the optional unions -- the ManagedIdentity actions for per-workstation runtime
+# owns the two switchable unions -- the ManagedIdentity actions for per-workstation runtime
 # identities, and the NSG actions for egress control -- so there is nothing to duplicate here.
 #
 # file(), not templatefile(): the template is authored in ARM's own `[...]` expression syntax,
@@ -94,7 +99,7 @@ resource "azurerm_resource_group_template_deployment" "role" {
   })
 }
 
-# --- Optional network landing pad (egress out; inbound only via ssh_source_ranges) ---
+# --- Network landing pad, on by default (egress out; inbound only via ssh_source_ranges) ---
 #
 # One region's worth. An Azure VNet is regional, so a second region means a second VNet
 # joined by global VNet peering -- which is non-transitive and cannot join overlapping
@@ -117,7 +122,7 @@ resource "azurerm_subnet" "workstations" {
   address_prefixes     = [var.subnet_prefix]
 }
 
-# A home for the future DNS / HTTPS proxy VM -- created empty, and only if you ask.
+# A home for the future DNS / HTTPS proxy VM -- created empty, and on by default.
 #
 # Ringleader's egress control can point workstations at a proxy that resolves names and
 # terminates HTTPS for the hosts you allow. That VM is not built yet, but where it will live
@@ -177,15 +182,19 @@ locals {
   # port Ringleader actually dials. A wrong value would be a rule that exists, reads correctly
   # in the portal, and admits nothing.
   secondary_ssh_port = 2222
+
+  # Unset mirrors ssh_source_ranges: if you opened 22 to your engineers you almost certainly
+  # want 2222 open to the same people. An explicit [] closes the port.
+  secondary_ssh_ranges = var.secondary_ssh_source_ranges == null ? var.ssh_source_ranges : var.secondary_ssh_source_ranges
 }
 
-# A second SSH port -- created only if you ask for it.
+# A second SSH port, opened to the same ranges as 22 unless you say otherwise.
 #
 # Some Ringleader workstation types run their own SSH daemon on a secondary port inside the
 # VM, while the VM's own sshd keeps 22, and `rl shell` dials that port for such a workstation.
-# Others never use it; Ringleader tells you which you are running. If in doubt, leave
-# secondary_ssh_source_ranges empty -- the default creates nothing, and a configuration that
-# does not set it applies exactly as it did before the variable existed.
+# Others never use it, and for those this rule is harmless -- which is why it follows
+# ssh_source_ranges rather than making you find out which kind you are running. Set
+# secondary_ssh_source_ranges = [] to close it.
 #
 # The source ranges are the only narrowing available here, and that is Azure rather than a
 # shortcut: an NSG attaches to the subnet and Azure has no per-VM tag for a rule to match, so
@@ -193,7 +202,7 @@ locals {
 # rule to a network tag.) If that is too broad, put the workstations that need the port on a
 # subnet of their own with its own NSG.
 resource "azurerm_network_security_rule" "secondary_ssh" {
-  count                       = var.create_network && length(var.secondary_ssh_source_ranges) > 0 ? 1 : 0
+  count                       = var.create_network && length(local.secondary_ssh_ranges) > 0 ? 1 : 0
   name                        = "AllowRingleaderSecondarySSHInbound"
   resource_group_name         = var.resource_group_name
   network_security_group_name = azurerm_network_security_group.workstations[0].name
@@ -203,7 +212,7 @@ resource "azurerm_network_security_rule" "secondary_ssh" {
   protocol                    = "Tcp"
   source_port_range           = "*"
   destination_port_range      = tostring(local.secondary_ssh_port)
-  source_address_prefixes     = var.secondary_ssh_source_ranges
+  source_address_prefixes     = local.secondary_ssh_ranges
   destination_address_prefix  = "*"
 }
 

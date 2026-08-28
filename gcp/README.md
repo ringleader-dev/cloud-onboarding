@@ -115,7 +115,7 @@ the workstations (`providerConfig.gcp.networkTags: [ringleader-workstation]`).
 Leave `ssh_source_ranges` empty **only** if you reach the subnet privately (VPN /
 Interconnect / peering).
 
-### A second SSH port — opt-in, and off unless you ask
+### A second SSH port — opened to the same people as 22
 
 Some Ringleader workstation types run their **own SSH daemon on a secondary port** inside the VM,
 while the VM's own sshd keeps 22, and `rl shell` dials that port for such a workstation. To open
@@ -148,19 +148,20 @@ the port Ringleader dials.
 Ringleader can **provision** a dedicated service account per workstation user and **bind
 roles** to it, so one workstation can (say) read one bucket. Every workstation already
 runs as a service account without this (above) — what this adds is Ringleader creating
-those accounts and granting them roles for you. It is **off by default** because it is
-not free:
+those accounts and granting them roles for you. It is **on by default**, and it is the one
+default here most worth a deliberate decision, because it is not free:
 
 | capability | role it needs |
 |---|---|
 | create/delete the per-user SA | `roles/iam.serviceAccountAdmin` |
 | bind roles to it on the project | `roles/resourcemanager.projectIamAdmin` |
 
-**`roles/resourcemanager.projectIamAdmin` can grant any role in the project to any
-principal — including `roles/owner` to itself.** That is inherent: setting a role
-binding *is* project-IAM administration. Enable it (`enable_workstation_identities =
-true`) **only in a project dedicated to Ringleader workstations**. Left off, the feature
-fails closed with a `403`.
+`roles/resourcemanager.projectIamAdmin` can grant any role in the project to any principal,
+including `roles/owner` to itself. That is inherent — setting a role binding *is* project-IAM
+administration — and it is exactly why this onboarding asks for a **project dedicated to
+Ringleader workstations**. In a project that holds anything else, set
+`enable_workstation_identities = false` (or `WORKSTATION_IDENTITIES=0`); the feature then
+fails closed with a `403` and nothing else changes.
 
 You can get the same end result without granting either: create the service accounts and
 their role bindings yourself, and name one on the workstation
@@ -173,14 +174,14 @@ By default a workstation can reach anything your network routes. Ringleader can 
 to an allowlist you declare in the workstation manifest — a set of IP ranges and hostnames —
 enforced by VPC firewall rules that Ringleader creates and keeps in step with the manifest.
 
-It is **off by default**, and off changes nothing: apply the module as you do today and your
-workstations behave exactly as they do today.
+It is **on by default**, and granting it restricts nothing on its own: until you declare an
+egress policy on a workstation, everything behaves exactly as it does today. To opt out:
 
 ```hcl
-enable_egress_control = true
+enable_egress_control = false
 ```
 ```bash
-EGRESS_CONTROL=1 ./onboard.sh    # the gcloud path
+EGRESS_CONTROL=0 ./onboard.sh    # the gcloud path
 ```
 
 What that grants is a **custom project role** with five permissions and nothing else:
@@ -205,14 +206,16 @@ Restricting egress by **hostname** (rather than by IP range) needs a resolver th
 per workstation, and no cloud offers one — so Ringleader runs a small DNS / HTTPS proxy VM in
 your project. That VM does not exist yet, but it is worth reserving its address range now:
 
+It is on by default (`10.60.240.0/24`). To skip it:
+
 ```hcl
-create_gateway_subnet = true              # 10.60.240.0/24 by default
+create_gateway_subnet = false
 ```
 ```bash
-GATEWAY_CIDR=10.60.240.0/24 ./network-landing-pad.sh
+GATEWAY_CIDR=none ./network-landing-pad.sh
 ```
 
-This creates an **empty subnet** and nothing else. GCP does not bill for a subnet, and Cloud
+It creates an **empty subnet** and nothing else. GCP does not bill for a subnet, and Cloud
 NAT already covers every range in the region, so the proxy will have upstream egress with no
 further setup. Doing it now means the firewall rules that let workstations reach the proxy
 can name one stable range instead of one VM's address — and saves renumbering later.

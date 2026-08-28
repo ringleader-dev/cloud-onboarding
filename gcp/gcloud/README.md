@@ -12,13 +12,15 @@ already exists, so run it once, against a project with no Ringleader network yet
 | [`onboard.sh`](onboard.sh) | Creates the onboarding SA, grants the three project roles, and creates a Workload Identity Pool + OIDC provider trusting Ringleader's issuer for your org, plus the `workloadIdentityUser` binding. |
 | [`verify.sh`](verify.sh) | Checks the three required roles are present, then prints the provider's issuer/audience/condition and the impersonation binding. |
 | [`revoke.sh`](revoke.sh) | Deletes the WIF pool (cuts federation; default) or also deletes the SA (`FULL=1`). |
-| [`network-landing-pad.sh`](network-landing-pad.sh) | Optional: a minimal VPC + subnet + Cloud NAT, plus an inbound-SSH rule if you set `SSH_RANGES`, a **secondary SSH port** rule if you set `SECONDARY_SSH_RANGES`, and an empty subnet for the future DNS / HTTPS proxy VM if you set `GATEWAY_CIDR` (all empty by default, all creating nothing); prints the subnet self-links. |
+| [`network-landing-pad.sh`](network-landing-pad.sh) | Optional: a minimal VPC + subnet + Cloud NAT, an inbound-SSH rule if you set `SSH_RANGES` (with 2222 following it), a workstation-to-workstation rule, and an empty subnet for the future DNS / HTTPS proxy VM; prints the subnet self-links. |
 
-Two options on `onboard.sh` are off unless you ask for them: `WORKSTATION_IDENTITIES=1`
-(let Ringleader create per-user service accounts) and `EGRESS_CONTROL=1` (let Ringleader
-manage the firewall rules that restrict where workstations connect — a custom role with
-five `compute.firewalls.*` permissions). See
-[`../README.md`](../README.md#optional-egress-control).
+Two grants on `onboard.sh` are **on by default**: `WORKSTATION_IDENTITIES` (let Ringleader
+create per-user service accounts — the broadest grant here, so read
+[`../README.md`](../README.md#optional-let-ringleader-create-the-per-user-identities) before
+onboarding a shared project) and `EGRESS_CONTROL` (let Ringleader manage the firewall rules
+that restrict where workstations connect — a custom role with five `compute.firewalls.*`
+permissions). Set either to `0` to skip it. The root README has
+[the full list of defaults](../../README.md#what-is-on-by-default-and-how-to-turn-it-off).
 
 ## Quick start
 

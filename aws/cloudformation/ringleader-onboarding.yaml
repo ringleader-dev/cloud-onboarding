@@ -63,9 +63,12 @@ Parameters:
 
   CreateNetwork:
     Type: String
-    Default: "false"
+    Default: "true"
     AllowedValues: ["true", "false"]
-    Description: "Create a VPC + public subnet + internet gateway + security group landing pad."
+    Description: >-
+      Create a VPC + public subnet + internet gateway + security group landing pad. On by
+      default; set false and supply your own subnet and security group instead. The VPC,
+      subnet, gateway and security group are free -- the NAT gateway below is not.
 
   VpcCidr:
     Type: String
@@ -87,21 +90,24 @@ Parameters:
     Type: String
     Default: ""
     Description: >-
-      Optional, and empty opens nothing. A single CIDR allowed to reach the secondary SSH
-      port (TCP 2222) on the workstations security group. Some Ringleader workstation types
-      run their own SSH daemon on that port inside the instance, beside the instance's own
-      sshd on 22, and rl shell dials it instead of 22 for those; others never use it.
-      Ringleader tells you which you are running -- if in doubt leave this empty.
+      A single CIDR allowed to reach the secondary SSH port (TCP 2222) on the workstations
+      security group. Empty opens no rule. deploy.sh defaults it to SshSourceCidr, so the two
+      ports open to the same people unless you say otherwise; set SECONDARY_SSH_SOURCE_CIDR to
+      "none" there to close it, or pass this parameter directly when deploying by hand. Some
+      Ringleader workstation types run their own SSH daemon on that port inside the instance,
+      beside the instance's own sshd on 22, and rl shell dials it instead of 22 for those;
+      others never use it, and for those the rule is harmless.
 
   EnableEgressControl:
     Type: String
-    Default: "false"
+    Default: "true"
     AllowedValues: ["true", "false"]
     Description: >-
       Let Ringleader manage the security groups that restrict where your workstations may
-      connect. Off by default, and off means nothing changes. Turning it on grants six
-      security-group actions plus ec2:ModifyNetworkInterfaceAttribute, bounded to
-      EgressVpcId (and to AllowedRegion, if set).
+      connect. On by default; set false to opt out. It grants six security-group actions, a
+      security-group-rules read and ec2:ModifyNetworkInterfaceAttribute, bounded to
+      EgressVpcId (and to AllowedRegion, if set). Granting it restricts nothing on its own --
+      until you declare an egress policy on a workstation, nothing changes.
 
   EgressVpcId:
     Type: String
@@ -114,22 +120,23 @@ Parameters:
 
   CreateNatGateway:
     Type: String
-    Default: "false"
+    Default: "true"
     AllowedValues: ["true", "false"]
     Description: >-
       Create a NAT gateway and a private route table, so anything on this VPC without a
-      public IP still has egress. Bills per hour plus data processing. Implied by
-      CreateGatewaySubnet.
+      public IP still has egress. On by default, and the one default here that costs money --
+      it bills per hour plus data processing whether or not anything uses it. Set false,
+      along with CreateGatewaySubnet, if every workstation gets a public IP.
 
   CreateGatewaySubnet:
     Type: String
-    Default: "false"
+    Default: "true"
     AllowedValues: ["true", "false"]
     Description: >-
       Reserve a private subnet for the DNS / HTTPS proxy VM that Ringleader's hostname-level
-      egress control will use. The VM is not built yet; this creates an empty subnet, which
-      AWS does not bill for. It turns CreateNatGateway on, because the proxy has no public
-      IP and NAT is its only route out.
+      egress control will use. On by default; set false to opt out. The VM is not built yet,
+      so this creates an empty subnet, which AWS does not bill for. It turns CreateNatGateway
+      on, because the proxy has no public IP and NAT is its only route out.
 
   GatewaySubnetCidr:
     Type: String

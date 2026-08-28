@@ -8,11 +8,17 @@
 #   - the workloadIdentityUser binding that lets only that subject impersonate
 #     the service account.
 #
-# Two optional extras, both off by default:
+# Plus, all on by default and each one a variable you can set to false:
 #   - a VPC + subnet + Cloud NAT landing pad (egress out; inbound SSH only from the
-#     CIDRs you name), and
+#     CIDRs you name),
+#   - a reserved subnet for the DNS / HTTPS proxy VM egress control will use,
 #   - egress control, which lets Ringleader manage the firewall rules that restrict
-#     where your workstations can connect.
+#     where your workstations can connect, and
+#   - per-workstation runtime identities.
+#
+# The defaults grant what Ringleader needs for the features available today, so turning
+# one on later does not mean a second onboarding pass. See variables.tf for what each
+# costs, and the README for how to switch any of them off.
 #
 # Keyless throughout: no service-account key is created. This module declares no
 # provider block so it can be referenced from another repository. See
@@ -35,7 +41,7 @@ locals {
 #
 #   iam                  the service account, the pool and the provider
 #   cloudresourcemanager the project role bindings below
-#   compute              the VM lifecycle, and the optional network landing pad
+#   compute              the VM lifecycle, and the network landing pad
 #   sts / iamcredentials the token exchange and impersonation Ringleader does at run time
 #
 # Getting this wrong is quiet: the trust federates perfectly and then every VM create
@@ -90,7 +96,7 @@ resource "google_service_account" "onboarding" {
 #
 # serviceAccountUser is the third because every workstation VM runs as some service
 # account, and attaching one needs iam.serviceAccounts.actAs, which neither Compute role
-# carries. This is not the optional runtime-identity feature below: a GCE workstation
+# carries. This is not the runtime-identity feature below: a GCE workstation
 # proves its identity to Ringleader with a Google-signed instance identity assertion, and
 # the metadata server mints that only for a VM that has an attached service account. So
 # Ringleader attaches one on every create -- the workstation's own, or this project's
@@ -131,7 +137,7 @@ resource "google_project_iam_member" "service_account_user" {
   depends_on = [google_project_service.cloudresourcemanager]
 }
 
-# This grant used to be part of enable_workstation_identities, which is off by default, so
+# This grant used to sit behind enable_workstation_identities, which was then off by default, so
 # a project onboarded on the documented defaults could not boot a workstation at all. It is
 # now unconditional, and this block carries the existing binding over rather than destroying
 # and recreating it -- the two addresses are the same project/role/member, and an arbitrary
@@ -141,26 +147,27 @@ moved {
   to   = google_project_iam_member.service_account_user
 }
 
-# 2b. Optional: per-workstation runtime identities (off by default).
+# 2b. Per-workstation runtime identities (on by default; enable_workstation_identities).
 #
 # Every workstation already runs as a service account (see 2). What this adds is letting
 # Ringleader provision one per workstation user and bind roles to it, so a workstation can,
-# say, read one bucket. That needs two capabilities the roles above deliberately do not
-# grant, so with this off the feature fails closed with a 403 rather than doing something
-# surprising:
+# say, read one bucket. It needs two capabilities the roles above do not carry:
 #
 #   - create/delete the per-user SA   -> roles/iam.serviceAccountAdmin
 #   - bind roles to it on the project -> roles/resourcemanager.projectIamAdmin
 #
-# Please read before turning this on: roles/resourcemanager.projectIamAdmin lets the holder
-# grant any role in this project to any principal, including roles/owner to itself. That is
-# inherent -- setting a role binding on a project is project-IAM administration -- so enable
-# it only in a project dedicated to Ringleader workstations.
+# This is the broadest grant the module makes, and the one default most worth a deliberate
+# decision. roles/resourcemanager.projectIamAdmin lets the holder grant any role in this
+# project to any principal, including roles/owner to itself -- inherent, since setting a role
+# binding on a project is project-IAM administration. It is why this onboarding asks for a
+# project dedicated to Ringleader workstations, and in a shared project you should set
+# enable_workstation_identities = false.
 #
-# You can get runtime identities without it: create the service accounts and their role
+# You can also get runtime identities without it: create the service accounts and their role
 # bindings yourself and name one on the workstation (providerConfig.gcp.serviceAccount). The
 # VM still runs as it, and the actAs grant above is all Ringleader needs to attach one it did
-# not create.
+# not create. With the variable false the feature fails closed with a 403; nothing else is
+# affected.
 resource "google_project_iam_member" "workstation_sa_admin" {
   count   = var.enable_workstation_identities ? 1 : 0
   project = var.project_id
@@ -179,7 +186,7 @@ resource "google_project_iam_member" "workstation_project_iam_admin" {
   depends_on = [google_project_service.cloudresourcemanager]
 }
 
-# 2c. Optional: egress control (off by default).
+# 2c. Egress control (on by default; enable_egress_control).
 #
 # Lets Ringleader restrict where your workstations may connect -- an allowlist of IP
 # ranges and hosts declared in the workstation manifest, enforced by VPC firewall rules
@@ -266,7 +273,7 @@ resource "google_service_account_iam_member" "workload_identity_user" {
   member             = "principal://iam.googleapis.com/${google_iam_workload_identity_pool.ringleader.name}/subject/${local.subject}"
 }
 
-# --- Optional network landing pad (egress out; inbound only via ssh_source_ranges) ---
+# --- Network landing pad, on by default (egress out; inbound only via ssh_source_ranges) ---
 #
 # A GCP VPC is a GLOBAL resource whose subnets are regional, and instances in any region
 # reach each other on internal addresses with no peering. That makes multi-region cheap
@@ -292,7 +299,7 @@ resource "google_compute_subnetwork" "workstations" {
   private_ip_google_access = true
 }
 
-# A home for the future DNS / HTTPS proxy VM -- created empty, and only if you ask.
+# A home for the future DNS / HTTPS proxy VM -- created empty, and on by default.
 #
 # Ringleader's egress control can point workstations at a proxy that resolves names and
 # terminates HTTPS for the hosts you allow. That VM is not built yet, but where it will
@@ -415,15 +422,19 @@ locals {
   # Ringleader actually dials. A wrong value would be a rule that exists, reads correctly in
   # the console, and admits nothing.
   secondary_ssh_port = 2222
+
+  # Unset mirrors ssh_source_ranges: if you opened 22 to your engineers you almost certainly
+  # want 2222 open to the same people. An explicit [] closes the port.
+  secondary_ssh_ranges = var.secondary_ssh_source_ranges == null ? var.ssh_source_ranges : var.secondary_ssh_source_ranges
 }
 
-# A second SSH port -- created only if you ask for it.
+# A second SSH port, opened to the same ranges as 22 unless you say otherwise.
 #
 # Some Ringleader workstation types run their own SSH daemon on a secondary port inside the
 # VM, while the VM's own sshd keeps 22, and `rl shell` dials that port for such a workstation.
-# Others never use it; Ringleader tells you which you are running. If in doubt, leave
-# secondary_ssh_source_ranges empty -- the default creates nothing, and a configuration that
-# does not set it plans and applies exactly as it did before the variable existed.
+# Others never use it, and for those this rule is harmless -- which is why it follows
+# ssh_source_ranges rather than making you find out which kind you are running. Set
+# secondary_ssh_source_ranges = [] to close it.
 #
 # It carries its own tag rather than reusing the one above, so the port opens on the
 # workstations that need it and on nothing else. Put both tags on those workstations, since
@@ -431,7 +442,7 @@ locals {
 #
 #   providerConfig.gcp.networkTags: [ringleader-workstation, ringleader-secondary-ssh]
 resource "google_compute_firewall" "secondary_ssh" {
-  count     = var.create_network && length(var.secondary_ssh_source_ranges) > 0 ? 1 : 0
+  count     = var.create_network && length(local.secondary_ssh_ranges) > 0 ? 1 : 0
   project   = var.project_id
   name      = "${var.name_prefix}-allow-secondary-ssh"
   network   = google_compute_network.workstations[0].name
@@ -442,16 +453,18 @@ resource "google_compute_firewall" "secondary_ssh" {
     ports    = [tostring(local.secondary_ssh_port)]
   }
 
-  source_ranges = var.secondary_ssh_source_ranges
+  source_ranges = local.secondary_ssh_ranges
   target_tags   = [var.secondary_ssh_network_tag]
 }
 
-# Workstation-to-workstation traffic inside the subnet -- off unless you ask for it.
+# Workstation-to-workstation traffic inside the subnet -- on unless you turn it off.
 #
-# A custom-mode VPC has no firewall rules and GCP denies ingress by default, so today two
-# workstations here cannot reach each other at all, not even ping. That is a real posture: a
-# compromised box cannot scan its neighbours. It is also a real limit, and which one you want
-# is yours to choose.
+# This is the one default that widens rather than grants. Without it a custom-mode VPC has no
+# firewall rules and GCP denies ingress, so two workstations cannot reach each other at all,
+# not even ping -- a real posture, in which a compromised box cannot scan its neighbours. With
+# it they can, which matches what Azure's default NSG rules already allow and is what
+# workflows that split work across boxes need. Set allow_internal_traffic = false for the
+# tighter posture.
 #
 # It admits tcp/udp/icmp from the workstation subnet ranges only, never from the internet,
 # and is scoped to the workstation tag so anything else in this VPC is unaffected.

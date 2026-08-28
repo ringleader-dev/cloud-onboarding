@@ -50,14 +50,14 @@ variable "provider_id" {
   description = "Workload Identity Pool provider id."
 }
 
-# --- Optional: per-workstation runtime identities ---------------------------
+# --- Per-workstation runtime identities (on by default) ---------------------
 
 variable "enable_workstation_identities" {
   type        = bool
-  default     = false
+  default     = true
   description = <<-EOT
     Let Ringleader provision a dedicated service account per workstation user and bind roles
-    to it (so one workstation can read one bucket, say). Off by default.
+    to it (so one workstation can read one bucket, say). On by default; set false to opt out.
 
     This is not what makes a workstation run as an identity -- every workstation already
     does, on the project's default compute service account. It is only about Ringleader
@@ -65,26 +65,26 @@ variable "enable_workstation_identities" {
     by creating the service accounts yourself and naming one on the workstation
     (providerConfig.gcp.serviceAccount).
 
-    Please read before enabling: this grants roles/resourcemanager.projectIamAdmin, which can
-    grant any role in this project to any principal, including roles/owner to itself. That is
-    inherent -- setting a role binding is project-IAM administration -- so enable it only in a
-    project dedicated to Ringleader workstations.
+    This is the one default worth a deliberate decision, because it is the broadest grant
+    this module makes: roles/resourcemanager.projectIamAdmin can grant any role in this
+    project to any principal, including roles/owner to itself. That is inherent -- setting a
+    role binding is project-IAM administration -- and it is why this onboarding asks for a
+    project dedicated to Ringleader workstations. In a shared project, set this to false.
 
-    Left off, the feature fails closed with a 403; nothing else is affected.
+    Set false and the feature fails closed with a 403; nothing else is affected.
   EOT
 }
 
-# --- Optional: egress control -----------------------------------------------
+# --- Egress control (on by default) -----------------------------------------
 
 variable "enable_egress_control" {
   type        = bool
-  default     = false
+  default     = true
   description = <<-EOT
     Let Ringleader manage the VPC firewall rules that restrict where your workstations may
-    connect. Off by default, and off means nothing changes: workstations reach whatever your
-    network routes, exactly as they do today.
+    connect. On by default; set false to opt out.
 
-    Turning it on grants a custom project role with five permissions --
+    It grants a custom project role with five permissions --
     compute.firewalls.create/delete/get/list/update -- and nothing else. Deliberately not
     roles/compute.securityAdmin, which also carries Cloud Armor security policies, SSL
     policies and certificates.
@@ -92,7 +92,9 @@ variable "enable_egress_control" {
     Ringleader compiles each distinct egress policy into one firewall rule targeted by
     network tag, so a fleet sharing a policy costs one rule rather than one per workstation.
 
-    Leave it off if you only want workstations. You can enable it later by re-applying.
+    Granting it does not restrict anything on its own: until you declare an egress policy on
+    a workstation, nothing changes. It is on by default so that declaring one later does not
+    need a second onboarding pass.
   EOT
 }
 
@@ -111,12 +113,19 @@ variable "egress_role_id" {
   }
 }
 
-# --- Optional network landing pad (egress out; inbound only via ssh_source_ranges) ---
+# --- Network landing pad, on by default (egress out; inbound only via ssh_source_ranges) ---
 
 variable "create_network" {
   type        = bool
-  default     = false
-  description = "Create a minimal VPC + subnet + Cloud NAT for workstation NICs (egress out; inbound only via ssh_source_ranges). Off by default; provide your own subnet if you already have one."
+  default     = true
+  description = <<-EOT
+    Create a minimal VPC + subnet + Cloud NAT for workstation NICs (egress out; inbound only
+    via ssh_source_ranges). On by default; set false and supply your own subnet instead.
+
+    Worth knowing: Cloud NAT bills per hour and per GB, so this default starts a small meter
+    even before you run a workstation. Set it false if you already have a subnet for these
+    VMs -- everything else in this module works the same either way.
+  EOT
 }
 
 variable "ssh_source_ranges" {
@@ -142,20 +151,21 @@ variable "workstation_network_tag" {
 
 variable "secondary_ssh_source_ranges" {
   type        = list(string)
-  default     = []
+  default     = null
   description = <<-EOT
-    Opt-in, off by default. CIDRs allowed to reach the secondary SSH port (TCP 2222) on the
-    workstations you tag with secondary_ssh_network_tag, when create_network is set.
+    CIDRs allowed to reach the secondary SSH port (TCP 2222) on the workstations you tag with
+    secondary_ssh_network_tag, when create_network is set.
 
-    Empty -- the default -- creates no rule at all, so a configuration that leaves this unset
-    admits exactly what it admitted before the variable existed.
+    Unset -- the default -- mirrors ssh_source_ranges, on the reasoning that if you opened 22
+    to your engineers you almost certainly want 2222 open to the same people. Set it to []
+    to close the port explicitly, or to a narrower list to open it to fewer.
 
     Some Ringleader workstation types run their own SSH daemon on that port inside the VM,
     beside the VM's own sshd on 22, and `rl shell` dials it instead of 22 for those. Others
-    never use it. Ringleader tells you which you are running; if in doubt, leave this empty --
-    an unopened port costs you nothing but a workstation you cannot reach.
+    never use it, and for those the rule is harmless.
 
-    The port itself is not a variable: Ringleader fixes it, and this module supplies it.
+    The rule targets its own network tag, so it only ever reaches workstations you tag with
+    it. The port itself is not a variable: Ringleader fixes it, and this module supplies it.
   EOT
 }
 
@@ -185,15 +195,18 @@ variable "name_prefix" {
 
 variable "allow_internal_traffic" {
   type        = bool
-  default     = false
+  default     = true
   description = <<-EOT
     Let workstations reach each other (tcp/udp/icmp from the workstation subnet ranges).
-    Off by default, and off is not an oversight.
+    On by default; set false to opt out.
 
-    A custom-mode VPC has no firewall rules, so today two workstations here cannot reach each
-    other at all -- which means a compromised box cannot scan its neighbours. Turn this on if
-    your workflows need workstation-to-workstation traffic; leave it off otherwise. It never
-    admits anything from outside the subnets.
+    This is the one default that widens rather than grants: with it off, a custom-mode VPC has
+    no firewall rules and two workstations cannot reach each other at all, so a compromised box
+    cannot scan its neighbours. On, they can. It matches what Azure's default NSG rules already
+    allow, and it is what workflows that split work across boxes need.
+
+    It never admits anything from outside the subnets. If your boxes never talk to each other,
+    false is the tighter choice.
   EOT
 }
 
@@ -228,19 +241,19 @@ variable "additional_regions" {
   EOT
 }
 
-# --- Optional: a subnet for the future DNS / HTTPS proxy VM ------------------
+# --- A subnet for the future DNS / HTTPS proxy VM (on by default) ------------
 
 variable "create_gateway_subnet" {
   type        = bool
-  default     = false
+  default     = true
   description = <<-EOT
     Reserve a subnet for the DNS / HTTPS proxy VM that Ringleader's hostname-level egress
-    control will use. Off by default. Requires create_network.
+    control will use. On by default; set false to opt out. Needs create_network.
 
     The VM itself is not built yet and this creates nothing but an empty subnet, which GCP
-    does not bill for. It is worth doing early because the firewall rules that permit
-    workstation -> proxy traffic can then name one stable range instead of one VM's address,
-    and because carving the range now avoids renumbering later.
+    does not bill for -- which is why it is on by default. Carving the range now means the
+    firewall rules that permit workstation -> proxy traffic can name one stable range instead
+    of one VM's address, and saves renumbering later.
 
     Cloud NAT already covers every range in this region, so the proxy will have upstream
     egress with no further setup.

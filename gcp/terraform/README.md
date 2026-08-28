@@ -25,20 +25,20 @@ Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standal
 | `sa_display_name` | `Ringleader Workstations` | Display name of the onboarding SA. |
 | `pool_id` | `ringleader` | WIF pool id. |
 | `provider_id` | `oidc` | WIF provider id. |
-| `enable_workstation_identities` | `false` | Let Ringleader **create** a per-user SA and bind roles to it (workstations run as a service account either way). **Grants `roles/resourcemanager.projectIamAdmin` — which can grant any role in the project to anyone, including `roles/owner` to itself.** Dedicated projects only. |
-| `create_network` | `false` | Also create a VPC + subnet + Cloud NAT (egress out; inbound only via `ssh_source_ranges`). |
+| `enable_workstation_identities` | **`true`** | Let Ringleader **create** a per-user SA and bind roles to it (workstations run as a service account either way). Grants `roles/resourcemanager.projectIamAdmin`, which can grant any role in the project to anyone, including `roles/owner` to itself — the broadest grant here, and the reason this onboarding wants a dedicated project. Set `false` in a shared one. |
+| `create_network` | **`true`** | Create a VPC + subnet + Cloud NAT (egress out; inbound only via `ssh_source_ranges`). Cloud NAT bills per hour and per GB. Set `false` if you already have a subnet. |
 | `ssh_source_ranges` | `[]` | CIDRs allowed to reach workstations on **TCP 22**. Empty creates **no inbound rule** — workstations come up but nobody can open a shell on them (there is no bastion). Set it unless you reach the subnet privately. |
 | `workstation_network_tag` | `ringleader-workstation` | Network tag the inbound-SSH rule targets; put the same tag on your workstations. |
-| `secondary_ssh_source_ranges` | `[]` | **Opt-in.** CIDRs allowed to reach the **secondary SSH port** (TCP 2222) that some workstation types run their own SSH daemon on. Empty creates **no rule** — an existing configuration plans clean. You do not supply the port. |
+| `secondary_ssh_source_ranges` | `null` | CIDRs for the **secondary SSH port** (TCP 2222) that some workstation types run their own SSH daemon on. Unset **mirrors `ssh_source_ranges`**; `[]` closes the port. You do not supply the port number. |
 | `secondary_ssh_network_tag` | `ringleader-secondary-ssh` | Network tag that rule targets. Put it on the workstations that need the port **alongside** `workstation_network_tag`, never instead of it. |
 | `name_prefix` | `ringleader` | Prefix for the landing pad's resource names. Change it only if those names are already taken in the project; the default reproduces the names this module has always used. |
-| `allow_internal_traffic` | `false` | Let workstations on the subnet reach **each other** (tcp/udp/icmp from the subnet's own range). Off by default: a custom VPC has no rules, so today they cannot, and a compromised box cannot scan its neighbours. Never admits anything from outside the subnet. |
+| `allow_internal_traffic` | **`true`** | Let workstations reach **each other** (tcp/udp/icmp from the workstation subnet ranges). The one default that widens rather than grants: `false` means a compromised box cannot scan its neighbours. Never admits anything from outside the subnets. |
 | `region` | `us-central1` | Region for the optional network's first subnet, router and NAT. |
 | `subnet_cidr` | `10.60.0.0/20` | Primary range for the optional subnet. |
 | `additional_regions` | `{}` | More regions in the **same global VPC**, as `region => subnet CIDR`. Each also gets its own Cloud Router and Cloud NAT, since both are regional. GCP refuses overlapping ranges, so a mistake fails the apply. |
-| `enable_egress_control` | `false` | Let Ringleader manage the firewall rules that restrict where workstations may connect. Grants a **custom role** with `compute.firewalls.create/delete/get/list/update` — deliberately not `roles/compute.securityAdmin`, which reaches further. |
+| `enable_egress_control` | **`true`** | Let Ringleader manage the firewall rules that restrict where workstations may connect. Grants a **custom role** with `compute.firewalls.create/delete/get/list/update` — deliberately not `roles/compute.securityAdmin`, which reaches further. Restricts nothing until you declare a policy. |
 | `egress_role_id` | `ringleaderEgressControl` | Id of that custom role. GCP reserves a deleted custom-role id for 7 days, so a quick re-apply after a destroy may need a different one. |
-| `create_gateway_subnet` | `false` | Reserve an empty subnet for the future DNS / HTTPS proxy VM. Costs nothing; saves renumbering later. |
+| `create_gateway_subnet` | **`true`** | Reserve an empty subnet for the future DNS / HTTPS proxy VM. Costs nothing; saves renumbering later. |
 | `gateway_subnet_cidr` | `10.60.240.0/24` | Its range. Sits well clear of `subnet_cidr` so growing that one does not collide. |
 
 ## Outputs

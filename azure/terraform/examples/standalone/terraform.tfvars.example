@@ -4,39 +4,42 @@ resource_group_name   = "ringleader-workstations"
 ringleader_issuer_url = "https://oidc-app.ringleader.dev"
 org_uid               = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
 
-# Set true only if you do NOT already have a subnet for the VMs. On Azure a workstation has NO
-# public IP unless you ask for one, so without a NAT gateway it has no egress and will never
-# come up -- this landing pad provides it:
-# create_network = true
+# EVERYTHING BELOW IS ON BY DEFAULT. Uncomment a line only to turn something off.
+# The root README has the full list: ../../../README.md
 
-# WHO CAN SSH IN. Ringleader has no bastion: `rl shell`, tmux, port-forwards and VS Code Web all
-# dial the workstation on TCP 22. With this empty, workstations come up and report Ready but
-# NOBODY can open them -- correct only if you reach the VNet privately
-# (VPN / ExpressRoute / peering).
+# The landing pad: a vnet + subnet + NAT gateway + NSG. On Azure a workstation has NO public IP
+# unless you ask for one, so without a NAT gateway it has no egress and never comes up -- which
+# is why this is the default here. The NAT gateway and its public IP bill per hour. Set false
+# only if you already have a subnet with egress for these VMs.
+# create_network = false
+
+# WHO CAN SSH IN -- the one thing that is NOT on by default, and cannot be. Ringleader has no
+# bastion: `rl shell`, tmux, port-forwards and VS Code Web all dial the workstation on TCP 22.
+# With this empty, workstations come up and report Ready but nobody can open them -- correct
+# only if you reach the VNet privately (VPN / ExpressRoute / peering).
 # ssh_source_ranges = ["203.0.113.0/24"]   # the CIDRs your engineers connect from
 
-# A SECOND SSH PORT, off unless you set this. Some Ringleader workstation types run their own SSH
-# daemon on a secondary port inside the VM (the VM's own sshd keeps 22), and `rl shell` dials that
-# port for them. Ringleader tells you if the workstations you plan to run need it; leaving this
-# empty opens nothing and changes nothing. On Azure an NSG covers the whole subnet, so these
-# ranges are the only narrowing available -- the rule admits the port to every VM on it.
-# secondary_ssh_source_ranges = ["203.0.113.0/24"]
+# The secondary SSH port follows ssh_source_ranges unless you set this. Some Ringleader
+# workstation types run their own SSH daemon on it (the VM's own sshd keeps 22) and `rl shell`
+# dials it for them; for the types that do not, the rule is harmless. Set [] to close it. On
+# Azure an NSG covers the whole subnet, so these ranges are the only narrowing available.
+# secondary_ssh_source_ranges = []
 
 # Let Ringleader provision a per-user managed identity per workstation and assign roles to it.
-# Adds Microsoft.Authorization/roleAssignments/write, which built-in Contributor does NOT have.
-# enable_workstation_identities = true
+# Adds Microsoft.Authorization/roleAssignments/write, which built-in Contributor does not carry
+# -- still scoped to this one resource group.
+# enable_workstation_identities = false
 
-# EGRESS CONTROL, off unless you set this. Lets Ringleader manage the network security groups
-# that restrict where your workstations may connect -- an allowlist you declare per workstation.
-# Adds seven NSG actions to the custom role, still scoped to this resource group. Off changes
-# nothing. Note these attach to the NIC, so unlike the inbound rules above they really are
-# per workstation.
-# enable_egress_control = true
+# Let Ringleader manage the NSGs that restrict where workstations may connect. Adds seven NSG
+# actions to the custom role, still scoped to this resource group. It restricts nothing until
+# you declare an egress policy on a workstation. Note these attach to the NIC, so unlike the
+# inbound rules above they really are per workstation.
+# enable_egress_control = false
 
-# Reserve an empty subnet (10.70.240.0/24 by default) for the DNS / HTTPS proxy VM that
-# hostname-level egress control will use. The VM does not exist yet; the subnet costs nothing,
-# shares the NAT gateway, and saves renumbering later. Needs create_network.
-# create_gateway_subnet = true
+# An empty subnet (10.70.240.0/24) reserved for the DNS / HTTPS proxy VM that hostname-level
+# egress control will use. The VM does not exist yet; the subnet costs nothing, shares the NAT
+# gateway, and saves renumbering later.
+# create_gateway_subnet = false
 
 # PLANNING A SECOND REGION? Set vnet_address_space per region BEFORE the first apply. An Azure
 # VNet is regional, and global VNet peering cannot join overlapping address spaces.

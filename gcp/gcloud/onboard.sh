@@ -16,12 +16,16 @@
 #   SA            onboarding SA account id                     (default: ringleader-workstations)
 #   POOL          workload identity pool id                    (default: ringleader)
 #   PROVIDER      workload identity provider id                (default: oidc)
-#   WORKSTATION_IDENTITIES  1 to also grant the per-workstation runtime-identity
-#                 roles (see step 2b)                          (default: unset)
-#   EGRESS_CONTROL          1 to also grant a custom role that lets Ringleader
+#   WORKSTATION_IDENTITIES  0 to skip the per-workstation runtime-identity
+#                 roles (see step 2b)                          (default: 1, granted)
+#   EGRESS_CONTROL          0 to skip the custom role that lets Ringleader
 #                 manage the firewall rules restricting workstation egress
-#                 (see step 2c)                                (default: unset)
+#                 (see step 2c)                                (default: 1, granted)
 #   EGRESS_ROLE   id of that custom role                       (default: ringleaderEgressControl)
+#
+# The defaults grant what Ringleader needs for the features available today, so enabling one
+# later does not mean a second onboarding pass. Step 2b is the broadest of them -- read it
+# before onboarding a project that holds anything else.
 #
 set -euo pipefail
 
@@ -98,23 +102,23 @@ for ROLE in roles/compute.instanceAdmin.v1 roles/compute.networkUser roles/iam.s
   echo ">> granted $ROLE"
 done
 
-# 2b. OPTIONAL: per-workstation RUNTIME identities (WORKSTATION_IDENTITIES=1).
+# 2b. Per-workstation runtime identities (on by default; WORKSTATION_IDENTITIES=0 to skip).
 #
-# Lets Ringleader PROVISION a service account per workstation user and BIND ROLES to it. Every
+# Lets Ringleader provision a service account per workstation user and bind roles to it. Every
 # workstation already runs as a service account without this (step 2); this is only about
-# Ringleader creating those accounts and granting them roles. Off by default, because it is not
-# free:
+# Ringleader creating those accounts and granting them roles. It is on by default, but it is
+# the broadest grant here:
 #
 #   Worth knowing before you enable it: roles/resourcemanager.projectIamAdmin can grant any role
 #   in this project to any principal, including roles/owner to itself. That is inherent --
 #   setting a role binding is project-IAM administration -- so use it only in a project
 #   dedicated to Ringleader workstations.
 #
-# Left off, the feature simply fails closed with a 403. To run workstations as your own service
-# accounts without it, create them yourself and name one on the workstation
+# Set WORKSTATION_IDENTITIES=0 and the feature fails closed with a 403. To run workstations as
+# your own service accounts without it, create them yourself and name one on the workstation
 # (providerConfig.gcp.serviceAccount): the actAs grant in step 2 is all Ringleader needs to attach
 # an account it did not create.
-if [[ "${WORKSTATION_IDENTITIES:-0}" == "1" ]]; then
+if [[ "${WORKSTATION_IDENTITIES:-1}" == "1" ]]; then
   for ROLE in roles/iam.serviceAccountAdmin roles/resourcemanager.projectIamAdmin; do
     gcloud projects add-iam-policy-binding "$PROJECT" \
       --member "serviceAccount:${SA_EMAIL}" --role "$ROLE" --condition=None >/dev/null
@@ -122,12 +126,12 @@ if [[ "${WORKSTATION_IDENTITIES:-0}" == "1" ]]; then
   done
 fi
 
-# 2c. OPTIONAL: egress control (EGRESS_CONTROL=1).
+# 2c. Egress control (on by default; EGRESS_CONTROL=0 to skip).
 #
 # Lets Ringleader restrict where your workstations may connect -- an allowlist declared in
 # the workstation manifest, enforced by VPC firewall rules Ringleader creates and keeps up
-# to date. Without it, workstations reach whatever your network routes, which is what every
-# deployment does today.
+# to date. It restricts nothing on its own: until you declare an egress policy, workstations
+# reach whatever your network routes, exactly as they do today.
 #
 # Ringleader compiles each distinct policy into ONE firewall rule and targets it with a
 # network tag, so a fleet sharing a policy costs one rule rather than one per workstation.
@@ -141,7 +145,7 @@ fi
 # If a firewall create is ever denied on a project where this is on, the first permission to
 # add is compute.networks.updatePolicy; Google's firewall-rules docs do not list it, which is
 # why it is not here.
-if [[ "${EGRESS_CONTROL:-0}" == "1" ]]; then
+if [[ "${EGRESS_CONTROL:-1}" == "1" ]]; then
   EGRESS_PERMS="compute.firewalls.create,compute.firewalls.delete,compute.firewalls.get,compute.firewalls.list,compute.firewalls.update"
   if gcloud iam roles describe "$EGRESS_ROLE" --project "$PROJECT" >/dev/null 2>&1; then
     gcloud iam roles update "$EGRESS_ROLE" --project "$PROJECT" \

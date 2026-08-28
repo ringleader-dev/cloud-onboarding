@@ -8,9 +8,15 @@
 #     public-parameter read that resolves an AMI at launch), and
 #   - optionally, a VPC + public subnet + internet gateway + security group landing pad.
 #
-# Two further extras, both off by default: egress control (letting Ringleader manage the
-# security groups that restrict where workstations may connect) and a private subnet for
-# the DNS / HTTPS proxy VM that hostname-level egress control will use.
+# All on by default, and each one a variable you can set to false: the landing pad, a NAT
+# gateway and private route table, a private subnet for the DNS / HTTPS proxy VM that
+# hostname-level egress control will use, egress control itself (letting Ringleader manage
+# the security groups that restrict where workstations may connect), and instance profiles
+# for workstations that run as an IAM role.
+#
+# The defaults grant what Ringleader needs for the features available today, so turning one
+# on later does not mean a second onboarding pass. Only the NAT gateway costs money; see
+# variables.tf for what each one does and the README for how to switch any of them off.
 #
 # Keyless throughout: no IAM user, no access key. Revoke by removing the OIDC provider
 # (or the role) and Ringleader can no longer mint into your account. This module declares
@@ -96,6 +102,10 @@ locals {
   # drift from the port Ringleader actually dials. A wrong value would be an ingress rule
   # that exists, reads correctly in the console, and admits nothing.
   secondary_ssh_port = 2222
+
+  # Unset mirrors ssh_source_ranges: if you opened 22 to your engineers you almost certainly
+  # want 2222 open to the same people. An explicit [] closes the port.
+  secondary_ssh_ranges = var.secondary_ssh_source_ranges == null ? var.ssh_source_ranges : var.secondary_ssh_source_ranges
 }
 
 # 1. The federation trust: an IAM OIDC identity provider for Ringleader's per-org issuer.
@@ -224,8 +234,8 @@ data "aws_iam_policy_document" "permissions" {
     resources = ["arn:${data.aws_partition.current.partition}:ssm:*::parameter/aws/service/*"]
   }
 
-  # Optional: pass an instance-profile role to a workstation (runtime identities). Off unless
-  # enable_workstation_identities is set; scoped to roles under workstation_identity_path.
+  # Pass an instance-profile role to a workstation (runtime identities). On by default, and
+  # scoped to roles under workstation_identity_path -- with no roles there it reaches nothing.
   dynamic "statement" {
     for_each = var.enable_workstation_identities ? [1] : []
     content {
@@ -241,7 +251,7 @@ data "aws_iam_policy_document" "permissions" {
     }
   }
 
-  # Optional: egress control. Ringleader compiles each distinct egress policy into ONE
+  # Egress control. Ringleader compiles each distinct egress policy into one
   # security group and attaches it to the workstations that carry that policy, so a fleet
   # sharing a policy costs one group rather than one per instance -- which matters, because
   # AWS caps an ENI at 5 security groups and a region at 2,500 groups.
@@ -403,21 +413,21 @@ resource "aws_security_group" "workstations" {
     }
   }
 
-  # A second SSH port -- opened only if you ask for it.
+  # A second SSH port, opened to the same ranges as 22 unless you say otherwise.
   #
   # Some Ringleader workstation types run their own SSH daemon on a secondary port inside the
   # instance, while the instance's own sshd keeps 22, and `rl shell` dials that port for such
-  # a workstation. Others never use it; Ringleader tells you which you are running. If in
-  # doubt, leave secondary_ssh_source_ranges empty -- the default opens nothing, and a
-  # configuration that does not set it applies exactly as it did before the variable existed.
+  # a workstation. Others never use it, and for those this rule is harmless -- which is why it
+  # follows ssh_source_ranges rather than making you find out which kind you are running. Set
+  # secondary_ssh_source_ranges = [] to close it.
   dynamic "ingress" {
-    for_each = length(var.secondary_ssh_source_ranges) > 0 ? [1] : []
+    for_each = length(local.secondary_ssh_ranges) > 0 ? [1] : []
     content {
       description = "Secondary SSH port, for workstation types that run their own SSH daemon."
       from_port   = local.secondary_ssh_port
       to_port     = local.secondary_ssh_port
       protocol    = "tcp"
-      cidr_blocks = var.secondary_ssh_source_ranges
+      cidr_blocks = local.secondary_ssh_ranges
     }
   }
 
@@ -429,7 +439,9 @@ resource "aws_security_group" "workstations" {
 #
 # It lives in the public subnet (that is where a NAT gateway has to be) and is reached
 # through the private route table, which is what actually gives a private instance egress.
-# Off by default because it bills per hour plus data processing.
+# On by default, and the one default here that costs money -- it bills per hour plus data
+# processing whether or not anything uses it. Set create_nat_gateway = false (along with
+# create_gateway_subnet) if every workstation gets a public IP.
 resource "aws_eip" "nat" {
   count  = var.create_network && var.create_nat_gateway ? 1 : 0
   domain = "vpc"
@@ -459,7 +471,7 @@ resource "aws_route_table" "private" {
   tags = merge(var.tags, { Name = "ringleader-private" })
 }
 
-# A home for the future DNS / HTTPS proxy VM -- created empty, and only if you ask.
+# A home for the future DNS / HTTPS proxy VM -- created empty, and on by default.
 #
 # Ringleader's egress control can point workstations at a proxy that resolves names and
 # terminates HTTPS for the hosts you allow. That VM is not built yet, but where it will live

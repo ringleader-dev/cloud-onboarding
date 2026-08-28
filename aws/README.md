@@ -32,7 +32,7 @@ The permissions policy is exactly these three statements — no wildcard on any 
   AWS-owned public AMI parameters.
 
 No `iam:*` unless you opt into per-workstation instance profiles (Terraform
-`enable_workstation_identities`, off by default and scoped to `iam:PassRole` under one
+`enable_workstation_identities`, on by default and scoped to `iam:PassRole` under one
 path).
 
 ## Values Ringleader gives you
@@ -94,7 +94,7 @@ The Terraform module derives the thumbprint automatically.
 |---|---|---|
 | **Bringing the workstation up** | **egress** from the VM to the Ringleader control plane | a public IP + internet gateway (the default), or a NAT gateway |
 | **Using the workstation** (`rl shell`, `rl tmux`, port-forwards, VS Code Web) | **inbound TCP 22**, from wherever you run `rl` | a security-group rule (`ssh_source_ranges` / `SshSourceCidr`) — or private connectivity |
-| **Using a workstation type that runs its own SSH daemon** | additionally, **inbound on a secondary SSH port** | an opt-in rule (`secondary_ssh_source_ranges` / `SecondarySshSourceCidr`), off by default |
+| **Using a workstation type that runs its own SSH daemon** | additionally, **inbound on a secondary SSH port** | a rule that follows `ssh_source_ranges` unless you override it (`secondary_ssh_source_ranges` / `SecondarySshSourceCidr`) |
 
 A workstation gets a **public IP by default** (`providerConfig.aws.assignPublicIp`), so
 the internet gateway alone gives it egress — no NAT gateway, no hourly bill. Set
@@ -103,13 +103,13 @@ the internet gateway alone gives it egress — no NAT gateway, no hourly bill. S
 tunnel**: a workstation with no inbound path finishes setting up and reports
 Ready, but nobody can open it.
 
-**The secondary SSH port is opt-in and off by default.** Some Ringleader workstation types run
-their own SSH daemon on a second port inside the instance, while the instance's own sshd keeps 22,
-and `rl shell` dials that port for such a workstation. Set `secondary_ssh_source_ranges`
-(Terraform) or `SECONDARY_SSH_SOURCE_CIDR` (`deploy.sh`) to open it on the workstations security
-group; leave it unset and **no rule is created** — your account admits exactly what it admits
-today. Ringleader tells you whether the workstations you plan to run need it, and you never supply
-the port number: both paths carry it.
+**The secondary SSH port follows port 22.** Some Ringleader workstation types run their own SSH
+daemon on a second port inside the instance, while the instance's own sshd keeps 22, and
+`rl shell` dials that port for such a workstation; others never use it, and for those the rule is
+harmless. So rather than making you find out which kind you are running, both paths mirror
+whatever you set for 22 — `secondary_ssh_source_ranges` (Terraform) and
+`SECONDARY_SSH_SOURCE_CIDR` (`deploy.sh`) override it, and `[]` / `none` closes it. Open nothing
+for 22 and nothing opens for 2222. You never supply the port number: both paths carry it.
 
 ## Optional: egress control
 
@@ -117,14 +117,16 @@ By default a workstation can reach anything your network routes. Ringleader can 
 to an allowlist you declare in the workstation manifest — a set of IP ranges and hostnames —
 enforced by security groups that Ringleader creates and keeps in step with the manifest.
 
-It is **off by default**, and off changes nothing.
+It is **on by default**, and granting it restricts nothing on its own: until you declare an
+egress policy on a workstation, everything behaves exactly as it does today.
 
 ```hcl
-enable_egress_control = true
-egress_vpc_ids        = []   # empty uses the VPC this module creates
+egress_vpc_ids = []   # empty uses the VPC this module creates
+
+# enable_egress_control = false   # to opt out
 ```
 ```bash
-EGRESS_CONTROL=true ./deploy.sh    # the CloudFormation path
+EGRESS_CONTROL=false ./deploy.sh   # the CloudFormation path, to opt out
 ```
 
 It grants seven actions and no more:
@@ -153,18 +155,22 @@ Restricting egress by **hostname** (rather than by IP range) needs a resolver th
 workstation, and no cloud offers one — so Ringleader runs a small DNS / HTTPS proxy VM in your
 account. That VM does not exist yet, but it is worth reserving its address range now:
 
+Both are on by default (`create_nat_gateway`, and `create_gateway_subnet` at
+`10.60.240.0/24`). To skip them:
+
 ```hcl
-create_nat_gateway    = true              # the proxy has no public IP
-create_gateway_subnet = true              # 10.60.240.0/24 by default
+create_nat_gateway    = false
+create_gateway_subnet = false
 ```
 ```bash
-CREATE_GATEWAY_SUBNET=true ./deploy.sh    # turns the NAT gateway on for you
+CREATE_NAT_GATEWAY=false CREATE_GATEWAY_SUBNET=false ./deploy.sh
 ```
 
-This creates an **empty private subnet** in the same availability zone as the workstations
+It creates an **empty private subnet** in the same availability zone as the workstations
 subnet (AWS charges for cross-AZ traffic in both directions, and a proxy sits on the path of
-everything a workstation does). AWS does not bill for a subnet; the NAT gateway does bill per
-hour, which is why it is a separate, explicit choice.
+everything a workstation does). AWS does not bill for a subnet; **the NAT gateway does bill per
+hour**, which makes it the one default here that costs money. Turn both off if every
+workstation gets a public IP.
 
 **It also fixes something that was broken.** `create_nat_gateway` previously created a NAT
 gateway that nothing routed to, so a workstation with `assignPublicIp: false` had no egress at

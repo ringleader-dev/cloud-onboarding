@@ -35,26 +35,28 @@ variable "ssh_source_ranges" {
   default = []
 }
 
+# Unset mirrors ssh_source_ranges; [] closes the second SSH port.
 variable "secondary_ssh_source_ranges" {
   type    = list(string)
-  default = []
+  default = null
 }
 
-# Egress control, and a home for the proxy VM it will eventually use. Both off by default;
-# the gateway subnet is private, so it needs the NAT gateway.
+# Egress control, a NAT gateway, and a home for the proxy VM it will eventually use. All on
+# by default; the gateway subnet is private, so it needs the NAT gateway. The NAT gateway is
+# the one of these that bills hourly.
 variable "enable_egress_control" {
   type    = bool
-  default = false
+  default = true
 }
 
 variable "create_nat_gateway" {
   type    = bool
-  default = false
+  default = true
 }
 
 variable "create_gateway_subnet" {
   type    = bool
-  default = false
+  default = true
 }
 
 provider "aws" {
