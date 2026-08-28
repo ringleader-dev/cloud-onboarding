@@ -129,14 +129,16 @@ egress_vpc_ids = []   # empty uses the VPC this module creates
 EGRESS_CONTROL=false ./deploy.sh   # the CloudFormation path, to opt out
 ```
 
-It grants seven actions and no more:
+It grants two sets of actions and no more — the objects a policy compiles to, and the routing
+that makes a workstation's traffic arrive at the proxy:
 
 | action | why |
 |---|---|
 | `ec2:CreateSecurityGroup`, `ec2:DeleteSecurityGroup` | one group per distinct egress policy |
 | `ec2:AuthorizeSecurityGroupEgress`, `ec2:RevokeSecurityGroupEgress` | keep that group's rules in step with the manifest |
 | `ec2:AuthorizeSecurityGroupIngress`, `ec2:RevokeSecurityGroupIngress` | the DNS / HTTPS proxy's own group, which has to admit workstation traffic |
-| `ec2:ModifyNetworkInterfaceAttribute` | move a running workstation onto the group its policy compiled to |
+| `ec2:ModifyNetworkInterfaceAttribute` | move a running workstation onto the group its policy compiled to — and clear the source/destination check on the proxy's own interface, without which AWS silently drops every packet it forwards |
+| route-table and subnet writes (`CreateRouteTable`, `CreateRoute`, `AssociateRouteTable`, `CreateSubnet`, …) | steer a workstation's traffic at the proxy. An AWS route table is **per subnet**, so per-policy steering needs a subnet per policy |
 
 **Bound them to a VPC.** With `egress_vpc_ids` set — or with `create_network = true`, where
 the module uses the VPC it made — the permissions apply only to security groups in that VPC.
@@ -151,31 +153,49 @@ workstation would not reach fleet scale.
 
 ## Room for the DNS / HTTPS proxy
 
-Restricting egress by **hostname** (rather than by IP range) needs a resolver that answers per
-workstation, and no cloud offers one — so Ringleader runs a small DNS / HTTPS proxy VM in your
-account. That VM does not exist yet, but it is worth reserving its address range now:
+Restricting egress by **hostname** rather than by address range means the connection has to
+pass something that can read the hostname off it. Ringleader runs a small proxy VM in your
+account for that: it reads the TLS SNI on 443 and the HTTP Host on 80, checks the name against
+that workstation's policy, and re-resolves it itself rather than trusting the address the box
+was heading for. That VM does not exist yet, but it is worth reserving its address range now.
 
-Both are on by default (`create_nat_gateway`, and `create_gateway_subnet` at
-`10.60.240.0/24`). To skip them:
+`create_gateway_subnet` is on by default at `10.60.240.0/24`. To skip it:
 
 ```hcl
-create_nat_gateway    = false
 create_gateway_subnet = false
 ```
 ```bash
-CREATE_NAT_GATEWAY=false CREATE_GATEWAY_SUBNET=false ./deploy.sh
+CREATE_GATEWAY_SUBNET=false ./deploy.sh
 ```
 
-It creates an **empty private subnet** in the same availability zone as the workstations
-subnet (AWS charges for cross-AZ traffic in both directions, and a proxy sits on the path of
-everything a workstation does). AWS does not bill for a subnet; **the NAT gateway does bill per
-hour**, which makes it the one default here that costs money. Turn both off if every
-workstation gets a public IP.
+It creates an **empty subnet and its route table**, neither of which AWS bills for. Two
+properties of that subnet are cost decisions rather than conveniences:
 
-**It also fixes something that was broken.** `create_nat_gateway` previously created a NAT
-gateway that nothing routed to, so a workstation with `assignPublicIp: false` had no egress at
-all. There is now a private route table pointing at it — `private_route_table_id` — and you can
-associate any subnet that should reach the internet without a public IP with it.
+- **It is public**, routed through the internet gateway. The proxy carries a fleet's whole
+  outbound volume, and internet ingress is free on every cloud — so a proxy with its own public
+  address pays nothing for it. The same bytes through a NAT gateway meter at **$0.045/GB**.
+- **It shares the workstations subnet's availability zone.** AWS charges cross-AZ traffic in
+  **both directions** ($0.01/GB each way), so at 10 TB/month a misplaced proxy costs $200 —
+  more than the instance running it.
+
+### The NAT gateway, and why the proxy eventually replaces it
+
+`create_nat_gateway` is also on by default and is **the one thing here that costs money**:
+$0.045/hour plus **$0.045/GB processed**, whether or not anything uses it. It exists so a
+workstation with `assignPublicIp: false` still has egress. Turn it off if all your workstations
+get public IPs, which is the default and which the internet gateway already serves for free.
+
+Worth knowing for later: once the proxy ships, a fleet of private workstations can reach the
+internet through it instead, and the proxy meters nothing. At 10 TB/month that is a saving of
+roughly **$420 against managed NAT** — so for a fleet already behind NAT, egress control
+arrives *cheaper* than the status quo rather than as new spend. For a fleet whose workstations
+have public addresses today, the proxy is new spend; which of the two you are is worth working
+out before you budget for it.
+
+**One thing this also fixed.** `create_nat_gateway` previously created a NAT gateway that
+nothing routed to, so a workstation with `assignPublicIp: false` had no egress at all. There is
+now a private route table pointing at it — `private_route_table_id` — and you can associate any
+subnet that should reach the internet without a public IP with it.
 
 ## Plan your CIDRs before the second region
 

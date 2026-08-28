@@ -125,18 +125,22 @@ Parameters:
     Description: >-
       Create a NAT gateway and a private route table, so anything on this VPC without a
       public IP still has egress. On by default, and the one default here that costs money --
-      it bills per hour plus data processing whether or not anything uses it. Set false,
-      along with CreateGatewaySubnet, if every workstation gets a public IP.
+      it bills per hour plus $0.045 per GB processed, whether or not anything uses it. Set
+      false if every workstation gets a public IP, which the internet gateway already serves
+      for free. Once the DNS / HTTPS proxy ships, private workstations can egress through it
+      instead and it meters nothing.
 
   CreateGatewaySubnet:
     Type: String
     Default: "true"
     AllowedValues: ["true", "false"]
     Description: >-
-      Reserve a private subnet for the DNS / HTTPS proxy VM that Ringleader's hostname-level
-      egress control will use. On by default; set false to opt out. The VM is not built yet,
-      so this creates an empty subnet, which AWS does not bill for. It turns CreateNatGateway
-      on, because the proxy has no public IP and NAT is its only route out.
+      Reserve a subnet for the DNS / HTTPS proxy VM that Ringleader's hostname-level egress
+      control will use. On by default; set false to opt out. The VM is not built yet, so this
+      creates an empty subnet and its route table, neither of which AWS bills for. It is
+      public and in the workstations AZ, both of which are cost decisions: internet ingress is
+      free, while the same bytes through a NAT gateway meter at $0.045/GB, and AWS charges
+      cross-AZ traffic in both directions.
 
   GatewaySubnetCidr:
     Type: String
@@ -161,12 +165,9 @@ Conditions:
   WantGatewaySubnet: !And
     - !Condition WantNetwork
     - !Equals [!Ref CreateGatewaySubnet, "true"]
-  # A gateway subnet has no public IP, so it implies the NAT gateway.
   WantNat: !And
     - !Condition WantNetwork
-    - !Or
-      - !Equals [!Ref CreateNatGateway, "true"]
-      - !Equals [!Ref CreateGatewaySubnet, "true"]
+    - !Equals [!Ref CreateNatGateway, "true"]
 
 Resources:
   RingleaderOidcProvider:
@@ -263,6 +264,20 @@ Resources:
                     - "ec2:RevokeSecurityGroupEgress"
                     - "ec2:AuthorizeSecurityGroupIngress"
                     - "ec2:RevokeSecurityGroupIngress"
+                    # Steering: what makes a workstation's traffic arrive at the DNS / HTTPS
+                    # proxy when a policy names hostnames rather than address ranges. An AWS
+                    # route table is per subnet, so per-policy steering needs a subnet per
+                    # policy and a route table to go with it.
+                    - "ec2:DescribeRouteTables"
+                    - "ec2:CreateRouteTable"
+                    - "ec2:DeleteRouteTable"
+                    - "ec2:CreateRoute"
+                    - "ec2:ReplaceRoute"
+                    - "ec2:DeleteRoute"
+                    - "ec2:AssociateRouteTable"
+                    - "ec2:DisassociateRouteTable"
+                    - "ec2:CreateSubnet"
+                    - "ec2:DeleteSubnet"
                   Resource: "*"
                   Condition: !If
                     - HasAnyEgressVpc
@@ -278,9 +293,11 @@ Resources:
                       - !Ref AWS::NoValue
                 - !Ref AWS::NoValue
 
-              # The other half: moving a workstation's NIC onto the security group its policy
-              # compiled to, which is what makes a policy change take effect on a running
-              # workstation rather than only on the next one created.
+              # Two jobs: moving a workstation's NIC onto the security group its policy
+              # compiled to -- which is what makes a policy change take effect on a running
+              # workstation rather than only on the next one created -- and clearing the
+              # source/destination check on the proxy's own interface, without which AWS
+              # silently drops every packet it forwards.
               - !If
                 - WantEgressControl
                 - Sid: EgressAttachToInstances
@@ -392,16 +409,20 @@ Resources:
       DestinationCidrBlock: "0.0.0.0/0"
       NatGatewayId: !Ref NatGateway
 
-  # A home for the future DNS / HTTPS proxy VM -- created empty, and only if you ask.
+  # A home for the future DNS / HTTPS proxy VM -- created empty, and on by default.
   #
-  # Ringleader's egress control can point workstations at a proxy that resolves names and
-  # terminates HTTPS for the hosts you allow. That VM is not built yet, but where it will live
+  # Ringleader's egress control can point workstations at a proxy that reads the hostname off
+  # each connection and allows or refuses it. That VM is not built yet, but where it will live
   # is worth settling now: a subnet of its own means the security-group rules that permit
   # workstation -> proxy traffic can name one stable range instead of one instance's address,
   # and carving the range now avoids renumbering later.
   #
-  # It shares the workstations subnet's availability zone, because AWS charges for cross-AZ
-  # traffic in both directions and a proxy sits on the path of everything a workstation does.
+  # It is public, and that is the cost decision rather than a convenience. The proxy carries a
+  # fleet's whole outbound volume; internet ingress is free, so a proxy with its own public
+  # address pays nothing for it, while the same bytes through a managed NAT gateway meter at
+  # $0.045/GB. It also shares the workstations subnet's availability zone, because AWS charges
+  # cross-AZ traffic in both directions and a proxy sits on the path of everything a
+  # workstation does.
   GatewaySubnet:
     Type: AWS::EC2::Subnet
     Condition: WantGatewaySubnet
@@ -409,14 +430,34 @@ Resources:
       VpcId: !Ref Vpc
       CidrBlock: !Ref GatewaySubnetCidr
       AvailabilityZone: !GetAtt Subnet.AvailabilityZone
+      MapPublicIpOnLaunch: true
       Tags: [{ Key: Name, Value: ringleader-gateway }]
+
+  # Its own route table rather than a share of the workstations one. Same routes today, but
+  # the proxy's subnet is where a per-policy route eventually lands, and splitting it now
+  # means that change never has to touch the subnet the workstations are on.
+  GatewayRouteTable:
+    Type: AWS::EC2::RouteTable
+    Condition: WantGatewaySubnet
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: ringleader-gateway }]
+
+  GatewayDefaultRoute:
+    Type: AWS::EC2::Route
+    Condition: WantGatewaySubnet
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      RouteTableId: !Ref GatewayRouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
 
   GatewaySubnetRouteAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Condition: WantGatewaySubnet
     Properties:
       SubnetId: !Ref GatewaySubnet
-      RouteTableId: !Ref PrivateRouteTable
+      RouteTableId: !Ref GatewayRouteTable
 
   WorkstationsSecurityGroup:
     Type: AWS::EC2::SecurityGroup

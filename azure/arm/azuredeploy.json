@@ -26,7 +26,7 @@
       "type": "Bool",
       "defaultValue": true,
       "metadata": {
-        "description": "Let Ringleader manage the network security groups that restrict where workstations may connect. On by default. Adds NSG and security-rule read/write/delete plus join/action, which is what lets Ringleader attach a group to a workstation NIC. Still scoped to this resource group, and it restricts nothing on its own until you declare an egress policy. Set false to opt out."
+        "description": "Let Ringleader manage the network security groups that restrict where workstations may connect. On by default. Adds NSG and security-rule read/write/delete plus join/action, which is what lets Ringleader attach a group to a workstation NIC; and route-table read/write/delete plus subnet write, which is how a workstation's traffic is steered to the DNS / HTTPS proxy when a policy names hostnames -- an Azure route table attaches per subnet, so per-policy steering needs a subnet per policy. Still scoped to this resource group, and it restricts nothing on its own until you declare an egress policy. Set false to opt out."
       }
     }
   },
@@ -78,7 +78,15 @@
       "Microsoft.Network/networkSecurityGroups/join/action",
       "Microsoft.Network/networkSecurityGroups/securityRules/read",
       "Microsoft.Network/networkSecurityGroups/securityRules/write",
-      "Microsoft.Network/networkSecurityGroups/securityRules/delete"
+      "Microsoft.Network/networkSecurityGroups/securityRules/delete",
+      "Microsoft.Network/routeTables/read",
+      "Microsoft.Network/routeTables/write",
+      "Microsoft.Network/routeTables/delete",
+      "Microsoft.Network/routeTables/join/action",
+      "Microsoft.Network/routeTables/routes/read",
+      "Microsoft.Network/routeTables/routes/write",
+      "Microsoft.Network/routeTables/routes/delete",
+      "Microsoft.Network/virtualNetworks/subnets/write"
     ],
     "actionsWithIdentities": "[if(parameters('enableWorkstationIdentities'), union(variables('actions'), variables('identityActions')), variables('actions'))]",
     "effectiveActions": "[if(parameters('enableEgressControl'), union(variables('actionsWithIdentities'), variables('egressActions')), variables('actionsWithIdentities'))]"

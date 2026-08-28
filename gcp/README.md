@@ -184,11 +184,12 @@ enable_egress_control = false
 EGRESS_CONTROL=0 ./onboard.sh    # the gcloud path
 ```
 
-What that grants is a **custom project role** with five permissions and nothing else:
+What that grants is a **custom project role** with nine permissions and nothing else:
 
 | | |
 |---|---|
 | `compute.firewalls.create` / `delete` / `get` / `list` / `update` | create and maintain the firewall rules that carry each policy |
+| `compute.routes.create` / `delete` / `get` / `list` | the static route that steers a workstation's traffic at the DNS / HTTPS proxy, when a policy names hostnames rather than address ranges |
 
 Deliberately **not** `roles/compute.securityAdmin`, which is the usual answer and reaches
 further than this needs — it also carries Cloud Armor security policies, SSL policies and
@@ -197,8 +198,34 @@ certificates. Changing which policy a workstation is on is a network-tag change,
 
 Ringleader compiles each distinct policy into **one** firewall rule targeted by network tag,
 so a fleet of a hundred workstations sharing a policy costs one rule rather than a hundred.
+The rules are **static** — written when a policy changes, never per connection and never per
+DNS answer.
 
-You can turn this on later by re-applying; nothing about it is decided at first onboarding.
+GCP is the easiest of the three clouds to steer, and worth knowing why: a custom static route
+can be scoped by **network tag**, so per-policy steering needs no extra subnet. On AWS and
+Azure a route table attaches to a *subnet*, so per-policy steering there needs a subnet per
+policy.
+
+### The one thing left as a future opt-in
+
+Google can filter by hostname natively, through **FQDN objects in a firewall *policy* rule**.
+It is the only native option on any of the three clouds priced in the same order as running a
+small VM, and it may be the right answer for some customers.
+
+It is **not** granted, deliberately, and that is the single exception to this module's
+otherwise-everything-on defaults. Taking it needs two further grants:
+
+- **firewall policy management** — `compute.firewallPolicies.create` / `update` / `use` plus
+  `compute.networks.setFirewallPolicy`. Policy rules are a different object from the VPC
+  firewall rules above, and FQDN objects exist only in them.
+- **resource-manager tag administration**, because a policy rule targets a **secure tag**
+  rather than the network tags Ringleader already sets. This is the sharp one: tag
+  administration is a documented privilege-escalation path in an organization that uses tags
+  in IAM conditions, since whoever can set a tag can satisfy a condition written against it.
+
+So it buys a capability nobody has committed to using, at a cost that depends on how your
+organization uses tags. If you want it, add a second custom role with those permissions and
+bind it to the same service account — nothing else here changes.
 
 ## Room for the DNS / HTTPS proxy
 
@@ -238,9 +265,14 @@ Ranges must not overlap, and GCP refuses an overlapping subnet — so a mistake 
 rather than breaking routing later. Each region also gets its own Cloud Router and Cloud NAT,
 because both are regional and a subnet without them comes up unable to reach Ringleader.
 
-Two costs worth knowing: traffic between two VMs in the **same zone** is free, while
-same-region-different-zone egress is billed per GiB. If you run the proxy, pin it and the
-workstations it serves to the same zone.
+**Pin the proxy and the workstations it serves to the same zone.** Traffic between two VMs in
+one zone is free on GCP; same-region-different-zone is $0.01/GiB, charged to the sender. At 10
+TB/month that misplacement costs $100 — more than the `e2-standard-2` the proxy runs on. Zone
+is `providerConfig.gcp.zone` on the workstation.
+
+One trap worth naming: on GCP, *all* traffic to or from an **external** IPv4 address leaves the
+zone regardless of destination. So a workstation reaching its proxy by public address pays
+inter-zone rates while sitting right next to it — use internal addressing between them.
 
 ## What you return to Ringleader
 

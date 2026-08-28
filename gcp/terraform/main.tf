@@ -196,23 +196,30 @@ resource "google_project_iam_member" "workstation_project_iam_admin" {
 # Ringleader compiles each distinct policy into ONE firewall rule and targets it with a
 # network tag, so a fleet of a hundred workstations sharing a policy costs one rule rather
 # than a hundred. Moving a workstation between policies is a tag change, which
-# roles/compute.instanceAdmin.v1 above already permits.
+# roles/compute.instanceAdmin.v1 above already permits. The rules are static: they are
+# written when the policy changes, never per connection and never per DNS answer.
+#
+# The route permissions are for restricting by HOSTNAME rather than by address range, which
+# needs the workstation's traffic to arrive at a Ringleader-run proxy. On GCP that steering
+# is a custom static route with a next-hop instance, scoped by the same network tag -- so it
+# needs no extra subnet, and no change inside the workstation, where a box's own root could
+# undo it.
 #
 # A CUSTOM ROLE, not roles/compute.securityAdmin. That predefined role is the usual answer
 # and it is wider than this needs -- it also carries Cloud Armor security policies, SSL
-# policies and certificates. The five permissions below are what managing VPC firewall rules
-# actually takes, per Google's own documentation, and nothing else in this project is
+# policies and certificates. The permissions below are what managing VPC firewall rules and
+# routes actually takes, per Google's own documentation, and nothing else in this project is
 # reachable with them.
 #
-# If a firewall rule create is ever denied on a project where this is enabled, the first
-# permission to add is compute.networks.updatePolicy. Google's firewall-rules documentation
-# does not list it, which is why it is not here.
+# If a create is ever denied on a project where this is enabled, the first permission to add
+# is compute.networks.updatePolicy. Google's own documentation does not list it for either
+# operation, which is why it is not here.
 resource "google_project_iam_custom_role" "egress" {
   count       = var.enable_egress_control ? 1 : 0
   project     = var.project_id
   role_id     = var.egress_role_id
   title       = "Ringleader Egress Control"
-  description = "Manage the VPC firewall rules that restrict where Ringleader workstations may connect."
+  description = "Manage the VPC firewall rules and routes that restrict where Ringleader workstations may connect."
 
   permissions = [
     "compute.firewalls.create",
@@ -220,10 +227,36 @@ resource "google_project_iam_custom_role" "egress" {
     "compute.firewalls.get",
     "compute.firewalls.list",
     "compute.firewalls.update",
+    "compute.routes.create",
+    "compute.routes.delete",
+    "compute.routes.get",
+    "compute.routes.list",
   ]
 
   depends_on = [google_project_service.iam]
 }
+
+# Not granted, and deliberately: GCP's own FQDN filtering.
+#
+# Google can do hostname filtering natively, through FQDN objects in a network firewall
+# POLICY rule. It is the only native option on any of the three clouds priced in the same
+# order as running a small VM, and it may turn out to be the right answer for some customers.
+#
+# It is not granted here because taking it needs two further grants, and one of them is
+# sharper than it looks:
+#
+#   - firewall POLICY management (compute.firewallPolicies.create/update/use plus
+#     compute.networks.setFirewallPolicy) -- policy rules are a different object from the VPC
+#     firewall rules above, and FQDN objects exist only in them; and
+#   - resource-manager TAG administration, because a policy rule targets a SECURE tag rather
+#     than the network tags Ringleader already sets. Tag administration is a documented
+#     privilege-escalation path in an organization that uses tags in IAM conditions -- whoever
+#     can set a tag can satisfy a condition written against it.
+#
+# So this is left as a deliberate opt-in rather than folded into the default: it buys a
+# capability nobody has committed to using, at a cost that depends on how your organization
+# uses tags. If you want it, add a second custom role with those permissions and bind it to
+# the same service account -- nothing else in this module has to change.
 
 resource "google_project_iam_member" "egress" {
   count   = var.enable_egress_control ? 1 : 0

@@ -82,6 +82,27 @@ locals {
     "ec2:RevokeSecurityGroupIngress",
   ]
 
+  # Steering: what makes a workstation's traffic ARRIVE at the DNS / HTTPS proxy when a policy
+  # names hostnames rather than address ranges. On AWS a route table is per SUBNET, so
+  # per-policy steering needs a subnet per policy and a route table to go with it -- which is
+  # why subnet and route-table writes are here and are not in the base grant.
+  #
+  # ec2:ModifyNetworkInterfaceAttribute (granted separately below) does double duty: it moves a
+  # running workstation between security groups, and it clears the source/destination check on
+  # the proxy's own interface, without which AWS silently drops every packet it forwards.
+  egress_route_actions = [
+    "ec2:DescribeRouteTables",
+    "ec2:CreateRouteTable",
+    "ec2:DeleteRouteTable",
+    "ec2:CreateRoute",
+    "ec2:ReplaceRoute",
+    "ec2:DeleteRoute",
+    "ec2:AssociateRouteTable",
+    "ec2:DisassociateRouteTable",
+    "ec2:CreateSubnet",
+    "ec2:DeleteSubnet",
+  ]
+
   # The VPCs the egress permissions are bounded to. When this module created the network we
   # use that VPC; otherwise you name your own in egress_vpc_ids. Empty means the permissions
   # are bounded by region alone -- see the variable's description.
@@ -264,7 +285,7 @@ data "aws_iam_policy_document" "permissions" {
     content {
       sid       = "EgressSecurityGroups"
       effect    = "Allow"
-      actions   = local.egress_group_actions
+      actions   = concat(local.egress_group_actions, local.egress_route_actions)
       resources = ["*"]
 
       dynamic "condition" {
@@ -439,9 +460,14 @@ resource "aws_security_group" "workstations" {
 #
 # It lives in the public subnet (that is where a NAT gateway has to be) and is reached
 # through the private route table, which is what actually gives a private instance egress.
-# On by default, and the one default here that costs money -- it bills per hour plus data
-# processing whether or not anything uses it. Set create_nat_gateway = false (along with
-# create_gateway_subnet) if every workstation gets a public IP.
+# On by default, and the one default here that costs money -- it bills per hour plus $0.045
+# per GB processed, whether or not anything uses it. Set it false if every workstation gets a
+# public IP (the default), which the internet gateway already serves for free.
+#
+# Worth knowing for later: once the DNS / HTTPS proxy ships, a fleet of private workstations
+# can reach the internet through it instead, and the proxy meters nothing. At 10 TB/month
+# that is a saving of roughly $420 against managed NAT -- so for a fleet already behind NAT,
+# egress control arrives cheaper than the status quo rather than as new spend.
 resource "aws_eip" "nat" {
   count  = var.create_network && var.create_nat_gateway ? 1 : 0
   domain = "vpc"
@@ -473,33 +499,46 @@ resource "aws_route_table" "private" {
 
 # A home for the future DNS / HTTPS proxy VM -- created empty, and on by default.
 #
-# Ringleader's egress control can point workstations at a proxy that resolves names and
-# terminates HTTPS for the hosts you allow. That VM is not built yet, but where it will live
+# Ringleader's egress control can point workstations at a proxy that reads the hostname off
+# each connection and allows or refuses it. That VM is not built yet, but where it will live
 # is worth settling now: giving it a subnet of its own means the security-group rules that
 # permit workstation -> proxy traffic can name one stable range instead of one instance's
 # address, and carving the range now avoids renumbering later. AWS does not bill for a subnet.
 #
-# It is private -- no public IP, egress through the NAT gateway -- which is why
-# create_nat_gateway has to be on. It also sits in the same availability zone as the
-# workstations subnet: AWS charges for cross-AZ traffic in both directions, and a proxy is on
-# the path of everything a workstation does.
+# It is PUBLIC, routed through the internet gateway, and that is the cost decision rather
+# than a convenience. The proxy carries a fleet's whole outbound volume; internet ingress is
+# free on every cloud, and a proxy with its own public address pays nothing for it. Sending
+# the same traffic through a managed NAT gateway instead meters it at $0.045/GB, which at 10
+# TB/month is several hundred dollars for bytes the proxy could have taken for free.
+#
+# It also sits in the same availability zone as the workstations subnet: AWS charges cross-AZ
+# traffic in BOTH directions, so a misplaced proxy costs more than the instance running it.
 resource "aws_subnet" "gateway" {
-  count             = var.create_network && var.create_gateway_subnet ? 1 : 0
-  vpc_id            = aws_vpc.workstations[0].id
-  cidr_block        = var.gateway_subnet_cidr
-  availability_zone = coalesce(var.availability_zone, data.aws_availability_zones.available[0].names[0])
-  tags              = merge(var.tags, { Name = "ringleader-gateway" })
+  count                   = var.create_network && var.create_gateway_subnet ? 1 : 0
+  vpc_id                  = aws_vpc.workstations[0].id
+  cidr_block              = var.gateway_subnet_cidr
+  availability_zone       = coalesce(var.availability_zone, data.aws_availability_zones.available[0].names[0])
+  map_public_ip_on_launch = true
+  tags                    = merge(var.tags, { Name = "ringleader-gateway" })
+}
 
-  lifecycle {
-    precondition {
-      condition     = var.create_nat_gateway
-      error_message = "create_gateway_subnet needs create_nat_gateway = true: the proxy VM has no public IP, so the NAT gateway is its only route out."
-    }
+# Its own route table rather than a share of the workstations one. Same routes today, but the
+# proxy's subnet is where a per-policy route eventually lands, and splitting it now means that
+# change never has to touch the subnet the workstations are on.
+resource "aws_route_table" "gateway" {
+  count  = var.create_network && var.create_gateway_subnet ? 1 : 0
+  vpc_id = aws_vpc.workstations[0].id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.workstations[0].id
   }
+
+  tags = merge(var.tags, { Name = "ringleader-gateway" })
 }
 
 resource "aws_route_table_association" "gateway" {
-  count          = var.create_network && var.create_gateway_subnet && var.create_nat_gateway ? 1 : 0
+  count          = var.create_network && var.create_gateway_subnet ? 1 : 0
   subnet_id      = aws_subnet.gateway[0].id
-  route_table_id = aws_route_table.private[0].id
+  route_table_id = aws_route_table.gateway[0].id
 }

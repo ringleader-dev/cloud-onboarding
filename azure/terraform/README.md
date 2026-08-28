@@ -27,7 +27,7 @@ Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standal
 | `location` | `eastus` | Region for the optional network. |
 | `vnet_address_space` | `10.70.0.0/16` | One region's worth. **Give every region a distinct range from the first apply** — a second region is a second VNet, and global VNet peering cannot join overlapping spaces. |
 | `subnet_prefix` | `10.70.1.0/24` | Prefix for the optional workstations subnet. |
-| `enable_egress_control` | **`true`** | Let Ringleader manage the NSGs that restrict where workstations may connect. Adds NSG and security-rule read/write/delete plus `join/action`, still scoped to this resource group. Restricts nothing until you declare a policy. |
+| `enable_egress_control` | **`true`** | Let Ringleader manage the NSGs an egress policy compiles to, **and** the route tables and subnets that steer traffic at the DNS / HTTPS proxy. Adds fifteen actions, still scoped to this resource group. Restricts nothing until you declare a policy. |
 | `create_gateway_subnet` | **`true`** | Reserve an empty subnet for the future DNS / HTTPS proxy VM. Shares the NAT gateway, so no public IP is needed. |
 | `gateway_subnet_prefix` | `10.70.240.0/24` | Its prefix, well clear of `subnet_prefix`. |
 

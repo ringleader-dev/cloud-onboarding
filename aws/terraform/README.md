@@ -34,10 +34,10 @@ output "handoff" { value = module.ringleader_onboarding.handoff }
 | `create_network` | **`true`** | create VPC + public subnet + IGW + security group. All free; the NAT gateway is not |
 | `ssh_source_ranges` | `[]` | inbound-SSH CIDRs (empty = no inbound rule) |
 | `secondary_ssh_source_ranges` | `null` | CIDRs for the **secondary SSH port** (TCP 2222) that some workstation types run their own SSH daemon on. Unset **mirrors `ssh_source_ranges`**; `[]` closes the port. You do not supply the port number |
-| `create_nat_gateway` | **`true`** | a NAT gateway **and a private route table**, for private (no-public-IP) workstations and the gateway subnet. **The one default that bills hourly** |
-| `enable_egress_control` | **`true`** | let Ringleader manage the security groups that restrict where workstations may connect; grants six security-group actions, a rules read, and `ec2:ModifyNetworkInterfaceAttribute`. Restricts nothing until you declare a policy |
+| `create_nat_gateway` | **`true`** | a NAT gateway **and a private route table**, for workstations with no public IP. **The one default that costs money** — hourly plus $0.045/GB. The proxy replaces it later |
+| `enable_egress_control` | **`true`** | let Ringleader manage the security groups an egress policy compiles to, **and** the subnets and route tables that steer traffic at the proxy; grants six security-group actions, a rules read, ten route/subnet actions, and `ec2:ModifyNetworkInterfaceAttribute`. Restricts nothing until you declare a policy |
 | `egress_vpc_ids` | `[]` | confine those permissions to these VPCs. Empty uses the VPC this module created; empty **and** no created network means region-only scoping — check the `egress_scope` output |
-| `create_gateway_subnet` | **`true`** | reserve an empty **private** subnet for the future DNS / HTTPS proxy VM. Needs `create_nat_gateway` |
+| `create_gateway_subnet` | **`true`** | reserve an empty **public** subnet, plus its route table, for the future DNS / HTTPS proxy VM. Public and in the workstations AZ are both cost decisions — see `aws/README.md` |
 | `gateway_subnet_cidr` | `10.60.240.0/24` | its CIDR, well clear of `subnet_cidr` |
 | `vpc_cidr` | `10.60.0.0/16` | one region's worth. **Give every region a distinct range from the first apply** — a second region is a second VPC, and an inter-region Transit Gateway cannot route overlapping CIDRs |
 | `max_session_duration` | `3600` | ceiling on the life of the credentials Ringleader mints by assuming the role (AWS bounds: 3600–43200). 3600 is AWS's own default, so setting it changes nothing on an existing role |

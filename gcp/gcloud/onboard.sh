@@ -137,16 +137,25 @@ fi
 # network tag, so a fleet sharing a policy costs one rule rather than one per workstation.
 # Changing a workstation's policy is a tag change, which instanceAdmin.v1 already permits.
 #
-# A custom role, not roles/compute.securityAdmin: that predefined role is the usual answer
-# and is wider than this needs -- it also carries Cloud Armor security policies, SSL policies
-# and certificates. The five permissions below are what managing VPC firewall rules takes,
+# The route permissions are for restricting by HOSTNAME rather than by address range, which
+# needs the workstation's traffic to arrive at a Ringleader-run proxy. On GCP that steering is
+# a custom static route with a next-hop instance, scoped by the same network tag -- no extra
+# subnet, and nothing inside the workstation, where box root could undo it.
+#
+# A custom role, not roles/compute.securityAdmin: that predefined role is the usual answer and
+# is wider than this needs -- it also carries Cloud Armor security policies, SSL policies and
+# certificates. The permissions below are what managing VPC firewall rules and routes takes,
 # per Google's own documentation.
 #
-# If a firewall create is ever denied on a project where this is on, the first permission to
-# add is compute.networks.updatePolicy; Google's firewall-rules docs do not list it, which is
-# why it is not here.
+# GCP's own FQDN filtering is NOT granted here. It lives in firewall POLICY rules targeted by
+# SECURE tags, so it would need firewall-policy management plus resource-manager tag
+# administration -- and tag administration is a privilege-escalation path in an organization
+# that uses tags in IAM conditions. It is a deliberate opt-in; see gcp/README.md.
+#
+# If a create is ever denied on a project where this is on, the first permission to add is
+# compute.networks.updatePolicy; Google's docs do not list it, which is why it is not here.
 if [[ "${EGRESS_CONTROL:-1}" == "1" ]]; then
-  EGRESS_PERMS="compute.firewalls.create,compute.firewalls.delete,compute.firewalls.get,compute.firewalls.list,compute.firewalls.update"
+  EGRESS_PERMS="compute.firewalls.create,compute.firewalls.delete,compute.firewalls.get,compute.firewalls.list,compute.firewalls.update,compute.routes.create,compute.routes.delete,compute.routes.get,compute.routes.list"
   if gcloud iam roles describe "$EGRESS_ROLE" --project "$PROJECT" >/dev/null 2>&1; then
     gcloud iam roles update "$EGRESS_ROLE" --project "$PROJECT" \
       --permissions "$EGRESS_PERMS" --quiet >/dev/null

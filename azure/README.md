@@ -165,13 +165,15 @@ enable_egress_control = false
 EGRESS_CONTROL=0 ./deploy.sh    # the ARM path
 ```
 
-It adds seven actions to the custom role, still scoped to your one resource group:
+It adds fifteen actions to the custom role, still scoped to your one resource group:
 
 | action | why |
 |---|---|
 | `Microsoft.Network/networkSecurityGroups/read` / `write` / `delete` | one NSG per distinct egress policy |
 | `.../networkSecurityGroups/securityRules/read` / `write` / `delete` | keep that NSG's rules in step with the manifest |
 | `Microsoft.Network/networkSecurityGroups/join/action` | attach the NSG to a workstation's NIC — the one people forget |
+| `Microsoft.Network/routeTables/*` (with `routes/*` and `join/action`) | steer a workstation's traffic at the DNS / HTTPS proxy when a policy names hostnames |
+| `Microsoft.Network/virtualNetworks/subnets/write` | an Azure route table attaches **per subnet**, so per-policy steering needs a subnet per policy |
 
 Ringleader compiles each distinct policy into **one** NSG and attaches it to the NICs of the
 workstations carrying that policy. That matters here: Azure caps an NSG at **1,000 rules** and
@@ -200,6 +202,10 @@ It creates an **empty subnet** and nothing else. Azure does not bill for a subne
 subnet shares the landing pad's NAT gateway, so the proxy gets upstream egress without a
 public IP. No NSG is attached: Azure's defaults already allow intra-VNet traffic and deny
 inbound from the internet, which is the right posture for a proxy.
+
+**Pin the proxy and the workstations it serves to the same availability zone.** Azure charges
+cross-zone traffic in **both directions** ($0.01/GB each way), so at 10 TB/month a misplaced
+proxy costs $200 — more than the `Standard_D2as_v5` it runs on. Same-zone traffic is free.
 
 ## Plan your address space before the second region
 

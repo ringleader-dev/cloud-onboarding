@@ -56,7 +56,7 @@ output "roles_granted" {
       "roles/resourcemanager.projectIamAdmin -- workstation runtime identities",
     ] : [],
     var.enable_egress_control ? [
-      "custom ${var.egress_role_id} -- compute.firewalls.create/delete/get/list/update, for egress control",
+      "custom ${var.egress_role_id} -- compute.firewalls.* and compute.routes.* (9 permissions), for egress control",
     ] : [],
   )
 }
