@@ -28,14 +28,15 @@
 #                when CREATE_NETWORK=true                       (default: empty)
 #   CREATE_NAT_GATEWAY  true|false: NAT gateway + private route
 #                table, for instances with no public IP. Bills
-#                per hour                                       (default: true)
-#   CREATE_GATEWAY_SUBNET  true|false: reserve a private subnet for
-#                the future DNS / HTTPS proxy VM (implies NAT)   (default: true)
+#                hourly plus $0.045/GB                           (default: true)
+#   CREATE_GATEWAY_SUBNET  true|false: reserve a public subnet and
+#                route table for the future DNS / HTTPS proxy VM (default: true)
 #   GATEWAY_SUBNET_CIDR  its CIDR                               (default: 10.60.240.0/24)
 #
 # The defaults grant what Ringleader needs for the features available today, so enabling one
 # later does not mean a second onboarding pass. CREATE_NAT_GATEWAY is the only one that costs
-# money; set it and CREATE_GATEWAY_SUBNET to false if every workstation gets a public IP.
+# money -- set it false if every workstation gets a public IP, which the internet gateway
+# already serves for free. It is independent of CREATE_GATEWAY_SUBNET, whose subnet is public.
 #
 set -euo pipefail
 

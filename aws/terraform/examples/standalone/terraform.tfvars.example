@@ -30,14 +30,17 @@ ssh_source_ranges = []
 # create_network = false
 
 # A NAT gateway plus a private route table, so an instance with no public IP still has egress.
-# THE ONE DEFAULT THAT COSTS MONEY -- it bills per hour plus data processing whether or not
-# anything uses it. Set false, along with create_gateway_subnet, if every workstation gets a
-# public IP.
+# THE ONE DEFAULT THAT COSTS MONEY -- $0.045/hour plus $0.045/GB processed, whether or not
+# anything uses it. Set false if every workstation gets a public IP (the default), which the
+# internet gateway already serves for free. Once the DNS / HTTPS proxy ships, private
+# workstations can egress through it instead and it meters nothing -- roughly $420/month
+# cheaper at 10 TB.
 # create_nat_gateway = false
 
-# An empty private subnet (10.60.240.0/24) reserved for the DNS / HTTPS proxy VM that
-# hostname-level egress control will use. The VM does not exist yet; the subnet costs nothing
-# and saves renumbering later. Needs create_nat_gateway.
+# An empty PUBLIC subnet (10.60.240.0/24) plus its route table, reserved for the DNS / HTTPS
+# proxy VM that hostname-level egress control will use. The VM does not exist yet; the subnet
+# costs nothing and saves renumbering later. Public and in the workstations AZ are both cost
+# decisions: internet ingress is free, and AWS charges cross-AZ traffic both ways.
 # create_gateway_subnet = false
 
 # Let Ringleader manage the security groups that restrict where workstations may connect.

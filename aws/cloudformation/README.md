@@ -51,9 +51,9 @@ Egress control and the proxy subnet add five more: `EnableEgressControl` (`true`
 them as `EGRESS_CONTROL`, `EGRESS_VPC_ID`, `CREATE_NAT_GATEWAY`, `CREATE_GATEWAY_SUBNET` and
 `GATEWAY_SUBNET_CIDR`; [`../README.md`](../README.md#optional-egress-control) explains what
 each one grants, and [the root README](../../README.md#what-is-on-by-default-and-how-to-turn-it-off)
-lists everything that is on by default. `CreateGatewaySubnet=true` keeps the NAT gateway on,
-since the proxy VM has no public IP and NAT is its only route out — and the NAT gateway is the
-one default that bills hourly.
+lists everything that is on by default. `CreateNatGateway` is the one that costs money —
+hourly plus $0.045/GB — and it is independent of `CreateGatewaySubnet`, whose subnet is public
+and routed through the internet gateway.
 
 Deploy with `--capabilities CAPABILITY_NAMED_IAM` (the role has a fixed name).
 

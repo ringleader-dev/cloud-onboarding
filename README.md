@@ -137,13 +137,29 @@ own**, because until you declare an egress policy on a workstation, nothing chan
 Each cloud's README lists the precise actions it adds, and every module prints them back as an
 output so you can check what you granted rather than take it on trust.
 
-Restricting egress by **hostname** rather than by IP range additionally needs a small DNS /
-HTTPS proxy VM in your own account, because no cloud can answer DNS differently per VM. That
-VM is not built yet, but every module can reserve an empty subnet for it now
-(`create_gateway_subnet`), which costs nothing and saves renumbering later. If you plan to run
-workstations in more than one region, read your cloud's README on address ranges **before the
-first apply**: on AWS and Azure a second region is a second network, and joining them later is
-impossible if the ranges overlap.
+Restricting egress by **hostname** rather than by address range additionally needs a small
+proxy VM in your own account — one that reads the TLS SNI on 443 and the HTTP Host on 80,
+checks the name against that workstation's policy, and re-resolves it itself rather than
+trusting the address the box was heading for. That VM is not built yet, but every module
+reserves an empty subnet for it (`create_gateway_subnet`), which costs nothing and saves
+renumbering later.
+
+Two things follow that are worth knowing before you budget:
+
+- **Getting the traffic to the proxy is routing, not configuration inside the box.** A
+  `HTTPS_PROXY` variable is ergonomics — anyone with root can `unset` it. The enforcement is
+  the cloud's own routing plus a default-deny firewall rule, which is why the grant above
+  includes route and subnet writes. On GCP a route can be scoped by network tag, so per-policy
+  steering needs no extra subnet; on AWS and Azure a route table attaches per subnet, so it
+  does.
+- **Put the proxy in the same zone as the workstations it serves.** Same-zone traffic is free
+  on all three clouds; cross-zone is $0.01/GB, charged to the sender on GCP and to **both
+  sides** on AWS and Azure. At 10 TB/month a misplaced proxy costs $100–$200, which is more
+  than the VM it runs on.
+
+If you plan to run workstations in more than one region, read your cloud's README on address
+ranges **before the first apply**: on AWS and Azure a second region is a second network, and
+joining them later is impossible if the ranges overlap.
 
 ## What is on by default, and how to turn it off
 
@@ -154,10 +170,10 @@ is a single variable away from off.
 | | What it does | Terraform | Script | Costs money |
 |---|---|---|---|---|
 | **Landing-pad network** | VPC/VNet + subnet + egress + a security group / NSG | `create_network` | `CREATE_NETWORK` (AWS, Azure), `network-landing-pad.sh` (GCP) | GCP Cloud NAT, Azure NAT gateway + public IP |
-| **NAT gateway** (AWS) | private route table, so an instance with no public IP has egress | `create_nat_gateway` | `CREATE_NAT_GATEWAY` | yes, per hour |
+| **NAT gateway** (AWS) | private route table, so an instance with no public IP has egress | `create_nat_gateway` | `CREATE_NAT_GATEWAY` | yes — hourly **and $0.045/GB** |
 | **Proxy subnet** | an empty subnet reserved for the future DNS / HTTPS proxy VM | `create_gateway_subnet` | `CREATE_GATEWAY_SUBNET`, `GATEWAY_CIDR` (GCP) | no |
-| **Egress control** | Ringleader may create and maintain the firewall objects an egress policy compiles to | `enable_egress_control` | `EGRESS_CONTROL` | no |
-| **Workstation identities** | Ringleader may create per-user identities and bind roles to them | `enable_workstation_identities` | `WORKSTATION_IDENTITIES` | no |
+| **Egress control** | Ringleader may create and maintain the firewall objects an egress policy compiles to, and the routes that steer traffic at the proxy | `enable_egress_control` | `EGRESS_CONTROL` | no |
+| **Workstation identities** | Ringleader may create per-user identities and bind roles to them | `enable_workstation_identities` | `WORKSTATION_IDENTITIES` (GCP `onboard.sh`, Azure `deploy.sh`) — **not available on the AWS CloudFormation path**, which grants no `iam:PassRole` at all; use the AWS Terraform module if you want it | no |
 | **Workstation-to-workstation** (GCP) | boxes on the subnet can reach each other | `allow_internal_traffic` | `ALLOW_INTERNAL` | no |
 
 Two of these deserve a deliberate decision rather than a default:
@@ -169,6 +185,21 @@ Two of these deserve a deliberate decision rather than a default:
 - **`allow_internal_traffic` on GCP** widens rather than grants. Off, two workstations cannot
   reach each other at all and a compromised box cannot scan its neighbours. On, they can —
   matching what Azure's default NSG rules already allow.
+
+One capability is deliberately left **off**, and it is the only one: **GCP's own FQDN
+filtering**. It lives in firewall *policy* rules targeted by *secure tags*, so taking it would
+need firewall-policy management plus resource-manager **tag administration** — and tag
+administration is a privilege-escalation path in an organization that uses tags in IAM
+conditions. It buys a capability nobody has committed to using, at a cost that depends on how
+your organization uses tags, so it stays an explicit opt-in rather than a default.
+[`gcp/README.md`](gcp/README.md#the-one-thing-left-as-a-future-opt-in) has what it would take.
+
+**The AWS NAT gateway is worth a second look**, because it is the only default that meters
+traffic: $0.045/hour plus **$0.045/GB processed**. Once the proxy ships, private workstations
+can egress through it instead and the proxy meters nothing — roughly **$420/month cheaper at 10
+TB**. So for a fleet already behind managed NAT, egress control arrives cheaper than the status
+quo; for a fleet whose workstations have public addresses, it is new spend. Work out which you
+are before you budget for it.
 
 Inbound SSH is the one thing that is **not** on by default and cannot be: `ssh_source_ranges`
 is empty until you name the CIDRs your engineers connect from. There is no safe default for

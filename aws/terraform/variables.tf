@@ -103,16 +103,24 @@ variable "enable_egress_control" {
     Let Ringleader manage the security groups that restrict where your workstations may
     connect. On by default; set false to opt out.
 
-    It grants six security-group actions, a security-group-rules read, and
-    ec2:ModifyNetworkInterfaceAttribute -- bounded to the VPCs in egress_vpc_ids, and to
-    allowed_regions if set. Ringleader compiles each distinct egress policy into one security
-    group and attaches it to the workstations carrying that policy, so a fleet sharing a
-    policy costs one group -- which matters, because AWS caps an ENI at 5 security groups and
-    a region at 2,500.
+It grants two sets, both bounded to the VPCs in egress_vpc_ids and to allowed_regions
+    if set:
 
-    The two ingress actions in that set are for the DNS / HTTPS proxy VM, whose own group has
-    to admit workstation traffic. Read the actions_granted and egress_scope outputs to see
-    exactly what was granted and how tightly it is bounded.
+      - security-group actions, for the object each compiled policy becomes. Ringleader makes
+        one group per distinct policy and attaches it to the workstations carrying that
+        policy, so a fleet sharing a policy costs one group -- which matters, because AWS caps
+        an ENI at 5 security groups and a region at 2,500. The two ingress actions are for the
+        DNS / HTTPS proxy VM, whose own group has to admit workstation traffic.
+      - subnet and route-table actions, which is how a workstation's traffic is made to arrive
+        at that proxy. An AWS route table is per subnet, so per-policy steering needs a subnet
+        per policy.
+
+    ec2:ModifyNetworkInterfaceAttribute does double duty: moving a running workstation between
+    security groups, and clearing the source/destination check on the proxy's own interface,
+    without which AWS silently drops every packet it forwards.
+
+    Read the actions_granted and egress_scope outputs to see exactly what was granted and how
+    tightly it is bounded.
 
     Granting it does not restrict anything on its own: until you declare an egress policy on
     a workstation, nothing changes. It is on by default so that declaring one later does not
@@ -235,14 +243,19 @@ variable "create_gateway_subnet" {
   type        = bool
   default     = true
   description = <<-EOT
-    Reserve a private subnet for the DNS / HTTPS proxy VM that Ringleader's hostname-level
-    egress control will use. On by default; set false to opt out. Needs create_network and
-    create_nat_gateway.
+    Reserve a subnet for the DNS / HTTPS proxy VM that Ringleader's hostname-level egress
+    control will use. On by default; set false to opt out. Needs create_network.
 
-    The VM itself is not built yet and this creates nothing but an empty subnet, which AWS
-    does not bill for. Carving the range now means the security-group rules that permit
-    workstation -> proxy traffic can name one stable range instead of one instance's address,
-    and saves renumbering later.
+    The VM itself is not built yet and this creates nothing but an empty subnet and its route
+    table, neither of which AWS bills for. Carving the range now means the security-group
+    rules that permit workstation -> proxy traffic can name one stable range instead of one
+    instance's address, and saves renumbering later.
+
+    It is public, routed through the internet gateway, and shares the workstations subnet's
+    availability zone. Both are cost decisions: internet ingress is free, so a proxy with its
+    own public address carries a fleet's volume for nothing, while the same bytes through a
+    managed NAT gateway meter at $0.045/GB -- and AWS charges cross-AZ traffic in both
+    directions, so a misplaced proxy costs more than the instance running it.
   EOT
 }
 
@@ -253,6 +266,9 @@ variable "gateway_subnet_cidr" {
     CIDR for the gateway subnet, when create_gateway_subnet is set. Must sit inside vpc_cidr,
     and the default sits well clear of the workstations range so growing that subnet later
     does not collide. If you changed vpc_cidr for a second region, change this to match.
+
+    A /24 is deliberate headroom: per-policy steering eventually wants a subnet per policy,
+    and leaving room next to this one is cheaper than renumbering.
   EOT
 }
 

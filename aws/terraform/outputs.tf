@@ -30,7 +30,7 @@ output "vpc_id" {
 
 output "gateway_subnet_id" {
   value       = var.create_network && var.create_gateway_subnet ? aws_subnet.gateway[0].id : null
-  description = "Private subnet reserved for the future DNS / HTTPS proxy VM (only when create_gateway_subnet = true)."
+  description = "Subnet reserved for the future DNS / HTTPS proxy VM (only when create_gateway_subnet = true). Public and in the workstations AZ -- both cost decisions; see the variable's description."
 }
 
 output "gateway_subnet_cidr" {
@@ -71,6 +71,8 @@ output "actions_granted" {
     var.enable_workstation_identities ? ["iam:PassRole -- roles under ${var.workstation_identity_path}, to ec2.amazonaws.com only"] : [],
     var.enable_egress_control ? concat(
       local.egress_group_actions,
+      local.egress_route_actions,
+      local.egress_describe_actions,
       ["ec2:ModifyNetworkInterfaceAttribute"],
     ) : [],
   )
