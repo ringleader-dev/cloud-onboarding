@@ -44,9 +44,16 @@ output "handoff" { value = module.ringleader_onboarding.handoff }
 
 ## Outputs
 
-`target_role_arn`, `account_id`, `subnet_id`, `security_group_id`, and `handoff` (all of
-them in one object). Hand `handoff` back to Ringleader. Plus `vpc_id`, `gateway_subnet_id`,
-`gateway_subnet_cidr` and `private_route_table_id` when the matching options are on.
+`target_role_arn`, `account_id`, `subnet_id`, `security_group_id`,
+`inbound_only_security_group_id`, and `handoff` (all of them in one object). Hand `handoff`
+back to Ringleader. Plus `vpc_id`, `gateway_subnet_id`, `gateway_subnet_cidr` and
+`private_route_table_id` when the matching options are on.
+
+**Two security groups, and the choice is not cosmetic.** `security_group_id` is the landing
+pad: egress out, inbound SSH. `inbound_only_security_group_id` has the same inbound rules and
+**no egress rules at all**, and it is the one a workstation that declares `spec.egress` must
+carry — see [the union rule](../README.md#which-security-group-a-workstation-gets). Give a
+policy-bearing workstation the first id and Ringleader refuses to launch it.
 
 Four more are for **audit**, and none of them goes back to Ringleader — they exist so the
 security property is something you can verify after applying rather than take on trust:

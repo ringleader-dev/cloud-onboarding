@@ -137,6 +137,23 @@ locals {
   # Unset mirrors ssh_source_ranges: if you opened 22 to your engineers you almost certainly
   # want 2222 open to the same people. An explicit [] closes the port.
   secondary_ssh_ranges = var.secondary_ssh_source_ranges == null ? var.ssh_source_ranges : var.secondary_ssh_source_ranges
+
+  # The inbound rules BOTH workstation security groups carry, written once. The two groups below
+  # are deliberately identical on ingress and differ only in egress, and a second copy of this
+  # list is exactly how they would stop being identical -- leaving a workstation you can reach
+  # or one you cannot, depending on which id you handed back.
+  workstation_ingress = concat(
+    length(var.ssh_source_ranges) > 0 ? [{
+      description = "SSH from the ranges your engineers connect from."
+      port        = 22
+      cidr_blocks = var.ssh_source_ranges
+    }] : [],
+    length(local.secondary_ssh_ranges) > 0 ? [{
+      description = "Secondary SSH port, for workstation types that run their own SSH daemon."
+      port        = local.secondary_ssh_port
+      cidr_blocks = local.secondary_ssh_ranges
+    }] : [],
+  )
 }
 
 # 1. The federation trust: an IAM OIDC identity provider for Ringleader's per-org issuer.
@@ -438,6 +455,10 @@ resource "aws_route_table_association" "workstations" {
 # Egress is open (a workstation needs it to come up); ingress is 22 from ssh_source_ranges,
 # plus the opt-in secondary port, and nothing at all while both lists are empty (reach the
 # workstation privately, or over a public IP whose CIDR you list).
+#
+# This is the group for a workstation that declares NO egress policy, and the only one until
+# egress control shipped. A workstation that declares one wants the inbound-only group below
+# instead; the comment there is the whole reason there are two.
 resource "aws_security_group" "workstations" {
   count = var.create_network ? 1 : 0
   name  = "ringleader-workstations"
@@ -455,36 +476,73 @@ resource "aws_security_group" "workstations" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  # 22 from ssh_source_ranges, plus a second SSH port opened to the same ranges unless you say
+  # otherwise. Some Ringleader workstation types run their own SSH daemon on that second port
+  # inside the instance, while the instance's own sshd keeps 22, and `rl shell` dials it for
+  # such a workstation. Others never use it, and for those the rule is harmless -- which is why
+  # it follows ssh_source_ranges rather than making you find out which kind you are running.
+  # Set secondary_ssh_source_ranges = [] to close it.
   dynamic "ingress" {
-    for_each = length(var.ssh_source_ranges) > 0 ? [1] : []
+    for_each = local.workstation_ingress
     content {
-      description = "SSH from the ranges your engineers connect from."
-      from_port   = 22
-      to_port     = 22
+      description = ingress.value.description
+      from_port   = ingress.value.port
+      to_port     = ingress.value.port
       protocol    = "tcp"
-      cidr_blocks = var.ssh_source_ranges
-    }
-  }
-
-  # A second SSH port, opened to the same ranges as 22 unless you say otherwise.
-  #
-  # Some Ringleader workstation types run their own SSH daemon on a secondary port inside the
-  # instance, while the instance's own sshd keeps 22, and `rl shell` dials that port for such
-  # a workstation. Others never use it, and for those this rule is harmless -- which is why it
-  # follows ssh_source_ranges rather than making you find out which kind you are running. Set
-  # secondary_ssh_source_ranges = [] to close it.
-  dynamic "ingress" {
-    for_each = length(local.secondary_ssh_ranges) > 0 ? [1] : []
-    content {
-      description = "Secondary SSH port, for workstation types that run their own SSH daemon."
-      from_port   = local.secondary_ssh_port
-      to_port     = local.secondary_ssh_port
-      protocol    = "tcp"
-      cidr_blocks = local.secondary_ssh_ranges
+      cidr_blocks = ingress.value.cidr_blocks
     }
   }
 
   tags = merge(var.tags, { Name = "ringleader-workstations" })
+}
+
+# The same group for a workstation that DECLARES AN EGRESS POLICY: identical inbound rules, and
+# no egress rule whatsoever.
+#
+# # Why a second group rather than an edit to the one above
+#
+# A security group is ALLOW-ONLY -- it cannot express a deny -- and EC2 AGGREGATES the rules of
+# every group attached to a network interface. So the group Ringleader compiles a policy into
+# can only ever ADD to what the box's other groups already permit. Beside the landing pad above
+# it adds to `0.0.0.0/0` and narrows nothing at all; beside this one it IS the union, which is
+# what makes the policy the box's actual limit.
+#
+# Both groups have to exist. Take the egress rule off the landing pad and every workstation
+# WITHOUT a policy loses the egress it needs to come up at all.
+#
+# # An empty egress rule set is the mechanism, not an oversight
+#
+# AWS gives every new security group an allow-all egress rule; Terraform is authoritative over
+# the rules it declares and removes the ones it does not, so declaring no `egress` block leaves
+# this group with zero egress rules -- and a security group with no egress rules permits no
+# egress. Adding an egress rule here to "fix" it re-breaks every policy-bearing workstation in
+# the VPC. (The CloudFormation path cannot express this: see aws/cloudformation/.)
+#
+# Ringleader REFUSES to launch a policy-bearing workstation whose other security groups permit
+# egress, naming the offending group, rather than report a policy it cannot deliver. So handing
+# back the wrong id is a workstation that does not start -- loud, and the reason the two ids are
+# labelled separately in outputs.tf.
+resource "aws_security_group" "workstations_inbound_only" {
+  count = var.create_network && var.enable_egress_control ? 1 : 0
+  name  = "ringleader-workstations-inbound-only"
+  # `description` is ForceNew here too -- see the group above.
+  description = "Ringleader workstations with a declared egress policy: inbound SSH only, no egress."
+  vpc_id      = aws_vpc.workstations[0].id
+
+  # Deliberately no `egress` block. See above.
+
+  dynamic "ingress" {
+    for_each = local.workstation_ingress
+    content {
+      description = ingress.value.description
+      from_port   = ingress.value.port
+      to_port     = ingress.value.port
+      protocol    = "tcp"
+      cidr_blocks = ingress.value.cidr_blocks
+    }
+  }
+
+  tags = merge(var.tags, { Name = "ringleader-workstations-inbound-only" })
 }
 
 # NAT gateway, for anything on this VPC without a public IP: a workstation created with

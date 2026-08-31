@@ -79,9 +79,15 @@ THUMBPRINT=$(echo | openssl s_client -servername oidc-app.ringleader.dev \
 ## Outputs
 
 `TargetRoleArn`, `OidcProviderArn`, and — with `CreateNetwork=true` — `SubnetId`,
-`SecurityGroupId` and `VpcId`. With the proxy subnet on, also `GatewaySubnetId`; with a NAT
-gateway, `PrivateRouteTableId`. Hand the role ARN, region, and (if created) subnet +
-security group back to Ringleader.
+`SecurityGroupId` and `VpcId`; plus `InboundOnlySecurityGroupId` while egress control is on.
+With the proxy subnet on, also `GatewaySubnetId`; with a NAT gateway, `PrivateRouteTableId`.
+Hand the role ARN, region, and (if created) subnet + security group back to Ringleader.
+
+**Two security groups, and the choice is not cosmetic.** `SecurityGroupId` is the landing pad:
+egress out, inbound SSH. `InboundOnlySecurityGroupId` has the same inbound rules and no usable
+egress, and it is the one a workstation that declares `spec.egress` must carry — see
+[the union rule](../README.md#which-security-group-a-workstation-gets). Give a policy-bearing
+workstation the first id and Ringleader refuses to launch it.
 
 ## Revoke
 
