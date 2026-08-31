@@ -20,7 +20,32 @@ output "subnet_id" {
 
 output "security_group_id" {
   value       = var.create_network ? aws_security_group.workstations[0].id : null
-  description = "Hand back to Ringleader (only when create_network = true; otherwise supply your own): providerConfig.aws.securityGroupIds."
+  description = <<-EOT
+    Hand back to Ringleader (only when create_network = true; otherwise supply your own):
+    providerConfig.aws.securityGroupIds, for a workstation that declares NO egress policy.
+    Egress out, inbound SSH from ssh_source_ranges.
+
+    A workstation that DOES declare spec.egress wants inbound_only_security_group_id instead --
+    beside this group its policy can restrict nothing, and Ringleader refuses to launch it.
+  EOT
+}
+
+output "inbound_only_security_group_id" {
+  value       = var.create_network && var.enable_egress_control ? aws_security_group.workstations_inbound_only[0].id : null
+  description = <<-EOT
+    Hand back to Ringleader as providerConfig.aws.securityGroupIds for a workstation that
+    declares spec.egress. Same inbound rules as security_group_id above and NO egress rules.
+
+    EC2 aggregates the rules of every security group on an interface and a security group
+    cannot express a deny, so the group Ringleader compiles a policy into only ever ADDS to
+    what the box's other groups permit. Beside this one -- which permits no egress -- the union
+    is the policy. Beside security_group_id's allow-all it would be no restriction at all, and
+    Ringleader refuses to launch such a workstation rather than report it enforced.
+
+    Null when enable_egress_control = false: with no egress policies to compile there is
+    nothing for it to sit beside, and an unused security group still counts against the
+    account's 2,500-group cap.
+  EOT
 }
 
 output "vpc_id" {
@@ -89,11 +114,16 @@ output "egress_scope" {
 }
 
 output "handoff" {
-  description = "Everything to hand back to Ringleader, in one place."
+  description = <<-EOT
+    Everything to hand back to Ringleader, in one place. TWO security-group ids, and which one
+    a workstation gets is the difference between an enforced egress policy and a workstation
+    that will not start -- see the two outputs above.
+  EOT
   value = {
-    target_role_arn   = aws_iam_role.ringleader.arn
-    account_id        = data.aws_caller_identity.current.account_id
-    subnet_id         = var.create_network ? aws_subnet.workstations[0].id : null
-    security_group_id = var.create_network ? aws_security_group.workstations[0].id : null
+    target_role_arn                = aws_iam_role.ringleader.arn
+    account_id                     = data.aws_caller_identity.current.account_id
+    subnet_id                      = var.create_network ? aws_subnet.workstations[0].id : null
+    security_group_id              = var.create_network ? aws_security_group.workstations[0].id : null
+    inbound_only_security_group_id = var.create_network && var.enable_egress_control ? aws_security_group.workstations_inbound_only[0].id : null
   }
 }

@@ -162,6 +162,9 @@ Conditions:
   WantEgressControl: !Equals [!Ref EnableEgressControl, "true"]
   HasEgressVpc: !Not [!Equals [!Ref EgressVpcId, ""]]
   HasAnyEgressVpc: !Or [!Condition HasEgressVpc, !Condition WantNetwork]
+  WantInboundOnlyGroup: !And
+    - !Condition WantNetwork
+    - !Condition WantEgressControl
   WantGatewaySubnet: !And
     - !Condition WantNetwork
     - !Equals [!Ref CreateGatewaySubnet, "true"]
@@ -519,6 +522,57 @@ Resources:
         - !Ref AWS::NoValue
       Tags: [{ Key: Name, Value: ringleader-workstations }]
 
+  # The same group for a workstation that DECLARES AN EGRESS POLICY: identical inbound rules,
+  # and no egress it can actually use.
+  #
+  # Why a second group rather than an edit to the one above: a security group is ALLOW-ONLY and
+  # EC2 AGGREGATES the rules of every group on a network interface, so the group Ringleader
+  # compiles a policy into can only ADD to what the box's other groups already permit. Beside
+  # WorkstationsSecurityGroup's allow-all it narrows nothing; beside this one it IS the union.
+  # Both have to exist -- take the egress rule off the group above and every workstation
+  # WITHOUT a policy loses the egress it needs to come up at all.
+  #
+  # THE 127.0.0.1/32 RULE IS HOW CLOUDFORMATION SPELLS "NO EGRESS", and it is not decoration.
+  # AWS gives every new security group an allow-all egress rule, and CloudFormation only
+  # replaces it when SecurityGroupEgress names at least one rule: omitting the property leaves
+  # the allow-all, and so does an empty list -- both verified against the live API, and both
+  # silently produce a group that defeats every policy placed beside it. One rule to the
+  # loopback address is the smallest thing that displaces it. Loopback traffic never reaches the
+  # interface, so the rule permits nothing; it exists to be the rule that is not allow-all.
+  # (The Terraform path has no such constraint and declares no egress at all.)
+  InboundOnlySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: WantInboundOnlyGroup
+    Properties:
+      GroupName: ringleader-workstations-inbound-only
+      # GroupDescription requires REPLACEMENT -- see the group above.
+      GroupDescription: "Ringleader workstations with a declared egress policy: inbound SSH only, no egress."
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 127.0.0.1/32
+          Description: "No egress. Loopback placeholder: an empty egress list makes CloudFormation keep the AWS default allow-all rule."
+      SecurityGroupIngress: !If
+        - WantAnyInbound
+        - - !If
+            - WantSsh
+            - IpProtocol: tcp
+              FromPort: 22
+              ToPort: 22
+              CidrIp: !Ref SshSourceCidr
+              Description: "SSH from your ranges."
+            - !Ref AWS::NoValue
+          - !If
+            - WantSecondarySsh
+            - IpProtocol: tcp
+              FromPort: 2222
+              ToPort: 2222
+              CidrIp: !Ref SecondarySshSourceCidr
+              Description: "Secondary SSH port, for workstation types that run their own SSH daemon."
+            - !Ref AWS::NoValue
+        - !Ref AWS::NoValue
+      Tags: [{ Key: Name, Value: ringleader-workstations-inbound-only }]
+
 Outputs:
   TargetRoleArn:
     Description: "Hand back to Ringleader: spec.aws.targetRoleArn on the CloudAccount."
@@ -532,8 +586,18 @@ Outputs:
     Value: !Ref Subnet
   SecurityGroupId:
     Condition: WantNetwork
-    Description: "providerConfig.aws.securityGroupIds."
+    Description: >-
+      providerConfig.aws.securityGroupIds, for a workstation that declares NO egress policy.
+      One that declares spec.egress wants InboundOnlySecurityGroupId instead: beside this
+      group's allow-all its policy can restrict nothing, and Ringleader refuses to launch it.
     Value: !GetAtt WorkstationsSecurityGroup.GroupId
+  InboundOnlySecurityGroupId:
+    Condition: WantInboundOnlyGroup
+    Description: >-
+      providerConfig.aws.securityGroupIds, for a workstation that DOES declare spec.egress.
+      Same inbound rules as SecurityGroupId and no usable egress, so the union of the box's
+      groups is exactly the policy Ringleader compiled. Absent when EnableEgressControl=false.
+    Value: !GetAtt InboundOnlySecurityGroup.GroupId
   VpcId:
     Condition: WantNetwork
     Description: >-

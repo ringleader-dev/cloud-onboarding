@@ -85,7 +85,10 @@ The Terraform module derives the thumbprint automatically.
 
 - **`target_role_arn`** → `arn:aws:iam::<account-id>:role/ringleader-workstations`
 - your **region**
-- if you created the landing pad: **`subnet_id`** and **`security_group_id`**
+- if you created the landing pad: **`subnet_id`** and a **security-group id** — and there are
+  **two**, one for workstations with an egress policy and one for those without. Which one a
+  workstation gets is the difference between an enforced policy and a workstation that will not
+  start: see [Which security group a workstation gets](#which-security-group-a-workstation-gets).
 - if you reserved one: **`gateway_subnet_id`**, where the DNS / HTTPS proxy VM will run
 
 ## Reaching your workstations
@@ -150,6 +153,44 @@ Ringleader compiles each distinct policy into **one** security group and attache
 workstations carrying that policy. That is not just tidiness: AWS caps a network interface at
 **5 security groups** and **1,000 rules**, and a region at **2,500 groups**, so a group per
 workstation would not reach fleet scale.
+
+### Which security group a workstation gets
+
+The landing pad creates **two** security groups, and a workstation carries one of them:
+
+| Hand back | For | Inbound | Egress |
+|---|---|---|---|
+| `security_group_id` / `SecurityGroupId` | a workstation with **no** `spec.egress` | SSH from your ranges | **all** |
+| `inbound_only_security_group_id` / `InboundOnlySecurityGroupId` | a workstation that **declares** `spec.egress` | the same rules | **none** |
+
+**Why two, and why not just one narrower group.** EC2 **aggregates** the rules of every
+security group attached to a network interface, and a security group is **allow-only** — it
+cannot express a deny. So the group Ringleader compiles your policy into can only ever *add*
+to what the workstation's other groups already permit. Put it beside a group that allows
+`0.0.0.0/0` and the union is `0.0.0.0/0`: the policy restricts nothing, however correct the
+group Ringleader built. Put it beside a group with **no egress rules** and the union is exactly
+the policy. That is the entire reason the second group exists, and why it looks, wrongly, like
+a group somebody forgot to finish.
+
+Both are needed. Strip the egress rule from the first group instead and every workstation
+*without* a policy loses the egress it needs to come up at all.
+
+**Ringleader fails loudly rather than quietly.** Launch a workstation that declares
+`spec.egress` while it carries a group permitting egress and Ringleader **refuses to create
+it**, naming the offending group, rather than start a box it would have to report as enforced
+while it reaches the whole internet. If you see that message, you handed back the landing-pad
+id where the inbound-only one belonged.
+
+**Do not "fix" the inbound-only group by adding an egress rule.** It has none on purpose, and
+one rule of any kind there re-breaks every policy-bearing workstation in the VPC. The
+CloudFormation copy carries a single placeholder rule to `127.0.0.1/32` for a mechanical
+reason — CloudFormation restores AWS's own allow-all rule if the egress list is empty — and
+loopback traffic never reaches the interface, so it permits nothing.
+
+**It follows egress control.** Turn `enable_egress_control` / `EnableEgressControl` off and the
+inbound-only group is not created: with no policies to compile there is nothing for it to sit
+beside, and an unused group still counts against the account's 2,500-group cap. Turning egress
+control back on creates it in the same apply that restores the grants.
 
 ## Room for the DNS / HTTPS proxy
 
