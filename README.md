@@ -137,6 +137,22 @@ own**, because until you declare an egress policy on a workstation, nothing chan
 Each cloud's README lists the precise actions it adds, and every module prints them back as an
 output so you can check what you granted rather than take it on trust.
 
+**One cloud asks you to choose, and two do not.** A GCP firewall rule and an Azure NSG can each
+express a *deny*, so the object Ringleader compiles a policy into narrows the workstation by
+itself: nothing extra to create, and nothing extra to hand back. An AWS security group cannot
+express a deny at all, and EC2 **unions** the rules of every group on an interface — so beside the
+landing pad's `0.0.0.0/0` egress rule a policy restricts nothing, however correct the group
+Ringleader built. The AWS module therefore ships a **second, egress-less security group**, and
+which of the two ids you return per workstation is the difference between an enforced policy and a
+workstation that refuses to start. See
+[which security group a workstation gets](aws/README.md#which-security-group-a-workstation-gets).
+
+Each cloud has one way a correctly-built rule set can still be defeated from outside it, and each
+README names its own: an egress firewall rule of yours below priority 900 on
+[GCP](gcp/README.md#what-can-defeat-a-policy-here-and-the-priority-band-that-is-yours), an outbound
+`Deny` added to the subnet NSG on [Azure](azure/README.md#two-nsgs-at-two-layers--and-which-one-is-yours),
+and the wrong security group on [AWS](aws/README.md#which-security-group-a-workstation-gets).
+
 Restricting egress by **hostname** rather than by address range additionally needs a small
 proxy VM in your own account — one that reads the TLS SNI on 443 and the HTTP Host on 80,
 checks the name against that workstation's policy, and re-resolves it itself rather than

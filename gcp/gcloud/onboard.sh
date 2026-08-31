@@ -154,6 +154,15 @@ fi
 #
 # compute.networks.updatePolicy is the one easy to leave out and hard to diagnose: creating a
 # custom static route needs it in addition to compute.routes.create.
+#
+# THE PRIORITY BAND, and the one way a policy is defeated on this cloud. GCE evaluates firewall
+# rules lowest-number-first. Ringleader writes a policy's allowances at 900 and its default-deny
+# at 1000, both far below GCP's implied allow-all egress at 65535 -- which is what makes the deny
+# bite. Everything under 900 is left free ON PURPOSE, so you can always override us in your own
+# VPC. The corollary: an EGRESS rule of yours under 900 with an `allow` clause silently defeats
+# every policy in that VPC, while Ringleader goes on reporting them enforced, because it checks
+# the objects it wrote and not yours. network-landing-pad.sh creates INGRESS rules only. See
+# gcp/README.md, "What can defeat a policy here".
 if [[ "${EGRESS_CONTROL:-1}" == "1" ]]; then
   EGRESS_PERMS="compute.firewalls.create,compute.firewalls.delete,compute.firewalls.get,compute.firewalls.list,compute.firewalls.update,compute.routes.create,compute.routes.delete,compute.routes.get,compute.routes.list,compute.networks.updatePolicy"
   if gcloud iam roles describe "$EGRESS_ROLE" --project "$PROJECT" >/dev/null 2>&1; then
