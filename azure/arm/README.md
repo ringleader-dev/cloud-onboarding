@@ -62,6 +62,13 @@ actions Ringleader needs to enforce an egress policy. Also on by default; `EGRES
 skips it. See [`../README.md`](../README.md#optional-egress-control) and
 [the full list of defaults](../../README.md#what-is-on-by-default-and-how-to-turn-it-off).
 
+The NSG this template creates is the **subnet** layer, and it stays yours. A workstation that
+declares `spec.egress` gets a second NSG on its **NIC**, written by Ringleader; Azure evaluates
+both and both must allow, so this one decides who may reach the workstation and Ringleader's
+decides where the workstation may connect. Keep inbound narrowing here rather than on a NIC, and
+do not add an outbound `Deny` here — it cannot tighten a policy and it can break one. See
+[`../README.md`](../README.md#two-nsgs-at-two-layers--and-which-one-is-yours).
+
 **Why a second template rather than a `deployNetwork` flag on the first.**
 `azuredeploy.json` is also deployed by the [Terraform module](../terraform/),
 which compares Azure's normalized echo of it against the file on every plan — so

@@ -183,6 +183,40 @@ Note the difference from the inbound rules elsewhere in this module: those attac
 **subnet**, so they reach every VM on it. Egress policies attach to the **NIC**, so they are
 genuinely per workstation.
 
+### Two NSGs, at two layers — and which one is yours
+
+A workstation with a policy carries **two** network security groups, and they are not
+interchangeable:
+
+| layer | object | written by | decides |
+|---|---|---|---|
+| subnet | `ringleader-workstations-nsg`, from this module | **you** | inbound — who may reach the workstation |
+| NIC | one NSG per distinct egress policy | **Ringleader** | outbound — where the workstation may connect |
+
+Azure evaluates both and **both must allow**. Three consequences, all worth having before the
+first policy:
+
+- **Keep your inbound rules on the subnet NSG.** The group Ringleader attaches to the NIC carries
+  one deliberately neutral inbound allow. A fresh NSG ends in `DenyAllInBound`, so an
+  outbound-only group on a NIC that had none would cut SSH to the workstation's public address —
+  and the box would come up, fail to be reachable, and never say why. That neutral rule restores
+  exactly what the NIC had before it carried an NSG at all, leaving your subnet NSG the authority.
+  It cannot widen the workstation past what that subnet already permits, because both layers still
+  have to agree.
+- **A NIC NSG of your own is replaced, not merged.** A NIC carries at most one NSG. If you supply
+  the interface yourself (`providerConfig.azure.networkInterfaceId`) and narrowed inbound *there*,
+  declaring `spec.egress` overwrites that group and the subnet's rules become the whole story —
+  which **widens** inbound. Move those rules onto the subnet NSG first; Ringleader never touches
+  it.
+- **Do not add an outbound `Deny` to the subnet NSG.** It cannot make a policy tighter — the NIC
+  NSG already denies everything the policy does not list — but it can make one *break*, by
+  blocking a destination the policy allows. The failure looks like Ringleader ignoring your
+  allowlist.
+
+Unlike AWS, there is nothing extra to create or hand back: an Azure NSG expresses `Deny` directly,
+so the compiled group narrows the workstation on its own. (An AWS security group cannot, which is
+why that module ships a second, egress-less group and asks you to pick one per workstation.)
+
 ## Room for the DNS / HTTPS proxy
 
 Restricting egress by **hostname** (rather than by IP range) needs a resolver that answers per

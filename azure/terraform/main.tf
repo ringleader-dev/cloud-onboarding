@@ -154,6 +154,24 @@ resource "azurerm_subnet" "gateway" {
 # Leave ssh_source_ranges empty and only the NSG (with Azure's defaults) is created. Choose
 # that only if you reach the VNet privately (VPN / ExpressRoute / peering) from wherever you
 # run `rl`.
+#
+# THIS GROUP IS THE SUBNET LAYER, and a workstation with an egress policy carries a SECOND one.
+# Azure evaluates the subnet NSG and the NIC NSG and both must allow. Ringleader compiles a
+# policy into a NIC-level NSG, so the two layers divide cleanly: this one decides who may REACH
+# the workstation, and Ringleader's decides where the workstation may CONNECT. Two rules follow.
+#
+# Keep inbound narrowing HERE rather than on a NIC. A NIC carries at most one NSG, so declaring
+# spec.egress on a box whose interface you supplied yourself
+# (providerConfig.azure.networkInterfaceId) REPLACES whatever group was on it -- and Ringleader's
+# carries a deliberately neutral inbound allow, because a fresh NSG ends in DenyAllInBound and an
+# outbound-only group on a NIC that had none would cut SSH to the box's public address. Neutral
+# means this subnet's rules become the whole story, which WIDENS inbound if that NIC group was
+# narrowing anything. Ringleader never touches the subnet, so rules here always survive.
+#
+# And do not add an OUTBOUND Deny here. It cannot tighten a policy -- the NIC NSG already denies
+# whatever the policy does not list -- but it can BREAK one, by blocking a destination the policy
+# allows, which reads as Ringleader ignoring the allowlist. See azure/README.md, "Two NSGs, at
+# two layers".
 resource "azurerm_network_security_group" "workstations" {
   count               = var.create_network ? 1 : 0
   name                = "${var.name_prefix}-workstations-nsg"

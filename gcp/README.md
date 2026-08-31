@@ -207,6 +207,54 @@ can be scoped by **network tag**, so per-policy steering needs no extra subnet. 
 Azure a route table attaches to a *subnet*, so per-policy steering there needs a subnet per
 policy.
 
+### What can defeat a policy here, and the priority band that is yours
+
+Nothing in this module changes when a workstation declares a policy, and there is no second
+subnet, tag or id to hand back. That is a property of the cloud rather than of the module: a GCE
+firewall rule can carry an explicit `denied` clause, so the rule set Ringleader compiles narrows
+the workstation on its own. (An AWS security group cannot express a deny at all, which is why
+that module ships a **second** security group and asks you to choose between them. GCP and Azure
+need no equivalent.)
+
+What *can* defeat a policy is an egress rule of your own, because GCE evaluates firewall rules by
+priority and **the lowest number wins**:
+
+| priority | rule |
+|---|---|
+| `0`–`899` | **yours** — deliberately left free, so you can always override Ringleader in your own VPC |
+| `900` | the policy's allowances, written by Ringleader |
+| `1000` | the policy's default-deny, written by Ringleader |
+| `65535` | GCP's own implied allow-all egress, which the deny above exists to beat |
+
+So an `EGRESS` / `allow` rule of yours below `900` wins over the deny, and a workstation carrying
+the policy reaches whatever that rule permits — while Ringleader still reports the policy as
+enforced, because it checks the objects it wrote and not yours. That is the intended escape hatch
+rather than a defect, but it is worth knowing before the first policy, and it is the one thing on
+this cloud that makes an enforced-looking workstation unenforced.
+
+**This module creates no egress rule at all**, so a VPC it built is clear. In a VPC you already
+had, check before you rely on a policy:
+
+```bash
+gcloud compute firewall-rules list --project "$PROJECT" --filter='direction=EGRESS' \
+  --format='table(name, network.basename(), priority, disabled,
+                  targetTags.list():label=TARGET_TAGS,
+                  destinationRanges.list():label=DEST_RANGES,
+                  allowed[].map().firewall_rule().list():label=ALLOW)'
+```
+
+Anything there with a priority under 900, an `ALLOW` clause and either no target tags or a tag
+your workstations carry is wider than the policy you are about to declare.
+
+### A policy also stops workstations reaching each other
+
+`allow_internal_traffic` (on by default) creates an **ingress** rule, and until a workstation
+declares a policy that is the whole story — GCP's implied egress rule is what lets the box open
+the connection in the first place. Once it carries a policy, the default-deny applies to what the
+box *initiates* too, so workstation-to-workstation traffic stops unless the policy names the
+subnet range. If your workflows split work across boxes, list `subnet_cidr` (and any
+`additional_regions` range) among that policy's allowed destinations.
+
 ### The one thing left as a future opt-in
 
 Google can filter by hostname natively, through **FQDN objects in a firewall *policy* rule**.

@@ -215,6 +215,17 @@ resource "google_project_iam_member" "workstation_project_iam_admin" {
 # creating a custom static route needs it in addition to compute.routes.create. Google's
 # firewall-rules documentation does not list it for firewall rules, so it may be redundant
 # there -- but it is required for routes, and a role that has it once covers both.
+#
+# THE PRIORITY BAND, and the one way a policy is defeated on this cloud. GCE evaluates firewall
+# rules lowest-number-first, and Ringleader writes a policy's allowances at 900 and its
+# default-deny at 1000 -- both far below GCP's implied allow-all egress at 65535, which is what
+# makes the deny bite. Everything under 900 is left free ON PURPOSE, so an operator can always
+# override us in their own VPC.
+#
+# The corollary binds this file: an EGRESS rule added below with a priority under 900 and an
+# `allow` clause silently defeats every policy in this VPC, while Ringleader goes on reporting
+# them enforced -- it checks the objects it wrote, not yours. Every rule this module creates is
+# INGRESS, and that is a property to keep. See gcp/README.md, "What can defeat a policy here".
 resource "google_project_iam_custom_role" "egress" {
   count       = var.enable_egress_control ? 1 : 0
   project     = var.project_id
