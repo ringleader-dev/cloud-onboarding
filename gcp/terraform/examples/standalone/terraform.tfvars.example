@@ -44,6 +44,13 @@ org_uid               = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
 # renumbering later.
 # create_gateway_subnet = false
 
+# OFF by default here, unlike the AWS and Azure modules. A subnet for the workstations the
+# proxy governs. On those clouds a route table attaches per subnet, so the governed fleet needs
+# one of its own; on GCP the steering route is scoped by NETWORK TAG, so a box is governed by
+# carrying that tag and an untagged neighbour on the same subnet is untouched. Turn it on only
+# if you want the governed fleet in a range of its own.
+# create_governed_subnet = true
+
 # Let workstations reach each other. The one default that widens rather than grants: false
 # means a compromised box cannot scan its neighbours.
 # allow_internal_traffic = false

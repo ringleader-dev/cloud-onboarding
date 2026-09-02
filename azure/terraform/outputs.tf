@@ -33,6 +33,16 @@ output "gateway_subnet_prefix" {
   description = "The gateway subnet's prefix. This is what an egress allowlist names to let workstations reach the proxy, so it is worth recording."
 }
 
+output "governed_subnet_id" {
+  value       = var.create_network && var.create_governed_subnet ? azurerm_subnet.governed[0].id : null
+  description = "Subnet for the workstations a gateway governs (only when create_governed_subnet = true). Hand it back as providerConfig.azure.subnetId on the workstations that carry an egress policy -- placing a box in it is what makes it gateway-governed."
+}
+
+output "governed_subnet_prefix" {
+  value       = var.create_network && var.create_governed_subnet ? var.governed_subnet_prefix : null
+  description = "The governed subnet's prefix. Worth recording: it is the source range the gateway keys its policies on."
+}
+
 output "role_extras_granted" {
   description = "Optional action sets folded into the custom role, for audit. The base action list is in ../arm/azuredeploy.json."
   value = concat(
@@ -48,5 +58,6 @@ output "handoff" {
     subscription_id      = var.subscription_id
     resource_group_name  = var.resource_group_name
     subnet_id            = var.create_network ? azurerm_subnet.workstations[0].id : null
+    governed_subnet_id   = var.create_network && var.create_governed_subnet ? azurerm_subnet.governed[0].id : null
   }
 }

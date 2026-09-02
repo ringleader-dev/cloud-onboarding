@@ -82,9 +82,12 @@ locals {
   ]
 
   # Steering: what makes a workstation's traffic ARRIVE at the DNS / HTTPS proxy when a policy
-  # names hostnames rather than address ranges. On AWS a route table is per SUBNET, so
-  # per-policy steering needs a subnet per policy and a route table to go with it -- which is
-  # why subnet and route-table writes are here and are not in the base grant.
+  # names hostnames rather than address ranges. On AWS a route table is per SUBNET, so steering
+  # is per subnet rather than per workstation -- which is why subnet and route-table writes are
+  # here and are not in the base grant. It is NOT a subnet per policy: the gateway tells
+  # policies apart by SOURCE ADDRESS, so one subnet and one route table serve a whole governed
+  # fleet on many different policies. What per-subnet steering does force is placement, which is
+  # what create_governed_subnet below exists to give you.
   #
   # ec2:ModifyNetworkInterfaceAttribute (granted separately below) does double duty: it moves a
   # running workstation between security groups, and it clears the source/destination check on
@@ -631,4 +634,37 @@ resource "aws_route_table_association" "gateway" {
   count          = var.create_network && var.create_gateway_subnet ? 1 : 0
   subnet_id      = aws_subnet.gateway[0].id
   route_table_id = aws_route_table.gateway[0].id
+}
+
+# And a home for the WORKSTATIONS that gateway governs -- also empty, also on by default.
+#
+# A gateway steers a whole subnet and serves only the boxes it holds a policy for, so a steered
+# subnet has to hold governed boxes and nothing else. ringleader-workstations above is where
+# every workstation in the VPC goes, governed or not; steering that one would take the egress
+# of every box in it that has no policy. Hence a second range.
+#
+# It has NO ROUTE TABLE, and that is the point rather than an omission. Ringleader claims the
+# subnet by creating its own table and associating it, and it refuses a subnet that already
+# carries one: taking over an existing association needs ec2:ReplaceRouteTableAssociation, which
+# is in no grant here, and nothing could put the customer's association back afterwards. So the
+# subnet is handed over unclaimed.
+#
+# Two consequences worth knowing before you put a box in it:
+#
+#   - Until a gateway steers it, this subnet falls back to the VPC's MAIN route table, which
+#     carries only the local route. A workstation in here has no egress at all and will not
+#     converge. That is the fail-safe direction -- a governed box egresses through its gateway
+#     or not at all -- but the gateway has to exist first.
+#   - Once steering lands, 0.0.0.0/0 points at the gateway's interface, which is also the reply
+#     path for anything dialling the box from OUTSIDE the VPC. Reach a governed workstation on
+#     its private address (VPN / peering / Direct Connect), and create it with
+#     providerConfig.aws.assignPublicIp: false -- which is why this subnet, unlike the
+#     workstations one, does not hand out public IPs.
+resource "aws_subnet" "governed" {
+  count                   = var.create_network && var.create_governed_subnet ? 1 : 0
+  vpc_id                  = aws_vpc.workstations[0].id
+  cidr_block              = var.governed_subnet_cidr
+  availability_zone       = coalesce(var.availability_zone, data.aws_availability_zones.available[0].names[0])
+  map_public_ip_on_launch = false
+  tags                    = merge(var.tags, { Name = "ringleader-governed" })
 }

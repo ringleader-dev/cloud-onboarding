@@ -42,6 +42,13 @@ org_uid               = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
 # gateway, and saves renumbering later.
 # create_gateway_subnet = false
 
+# The subnet the workstations that proxy GOVERNS go in (10.70.224.0/20). It carries the
+# workstations NSG, so `rl shell` still reaches a box in it, and deliberately neither a route
+# table nor the NAT gateway -- a governed box's egress is the proxy's job. Name it as
+# providerConfig.azure.subnetId on the workstations that carry an egress policy; mixing
+# governed and ungoverned boxes in one subnet is what Ringleader refuses.
+# create_governed_subnet = false
+
 # PLANNING A SECOND REGION? Set vnet_address_space per region BEFORE the first apply. An Azure
 # VNet is regional, and global VNet peering cannot join overlapping address spaces.
 #   first region  10.70.0.0/16, second 10.71.0.0/16, third 10.72.0.0/16 ...

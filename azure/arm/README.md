@@ -57,6 +57,15 @@ reserves an empty subnet for the DNS / HTTPS proxy VM that hostname-level egress
 use, and prints its id. It shares the NAT gateway, so the proxy needs no public IP. Set it to
 `false` to skip.
 
+`CREATE_GOVERNED_SUBNET` is also on by default (with `GOVERNED_SUBNET_CIDR`,
+`10.70.224.0/20`): it reserves the subnet the workstations that proxy **governs** go in, and
+prints its id as `governed subnet`. A proxy steers a whole subnet and serves only the boxes it
+holds a policy for, so mixing governed and ungoverned workstations in one is what Ringleader
+refuses. It carries the workstations NSG (so `rl shell` still reaches a box in it) and
+deliberately neither a route table nor the NAT gateway; see
+[`../README.md`](../README.md#and-a-subnet-for-the-workstations-that-proxy-governs). Set it to
+`false` to skip.
+
 `EGRESS_CONTROL` is separate and goes on the **role**, not the network: it adds the NSG
 actions Ringleader needs to enforce an egress policy. Also on by default; `EGRESS_CONTROL=0`
 skips it. See [`../README.md`](../README.md#optional-egress-control) and

@@ -29,6 +29,7 @@ Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standal
 | `subnet_prefix` | `10.70.1.0/24` | Prefix for the optional workstations subnet. |
 | `enable_egress_control` | **`true`** | Let Ringleader manage the NSGs an egress policy compiles to, **and** the route tables and subnets that steer traffic at the DNS / HTTPS proxy. Adds sixteen actions, still scoped to this resource group. Restricts nothing until you declare a policy. |
 | `create_gateway_subnet` | **`true`** | Reserve an empty subnet for the future DNS / HTTPS proxy VM. Shares the NAT gateway, so no public IP is needed. |
+| `create_governed_subnet` | **`true`** | Reserve the subnet the workstations that proxy **governs** go in, at `10.70.224.0/20`. Carries the workstations NSG so `rl shell` still reaches a box in it; carries neither a route table nor the NAT gateway. See `azure/README.md`. |
 | `gateway_subnet_prefix` | `10.70.240.0/24` | Its prefix, well clear of `subnet_prefix`. |
 
 ## Outputs

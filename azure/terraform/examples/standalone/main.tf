@@ -60,6 +60,11 @@ variable "create_gateway_subnet" {
   default = true
 }
 
+variable "create_governed_subnet" {
+  type    = bool
+  default = true
+}
+
 module "ringleader" {
   source = "../.."
 
@@ -72,8 +77,9 @@ module "ringleader" {
   ssh_source_ranges           = var.ssh_source_ranges
   secondary_ssh_source_ranges = var.secondary_ssh_source_ranges
 
-  enable_egress_control = var.enable_egress_control
-  create_gateway_subnet = var.create_gateway_subnet
+  enable_egress_control  = var.enable_egress_control
+  create_gateway_subnet  = var.create_gateway_subnet
+  create_governed_subnet = var.create_governed_subnet
 }
 
 output "handoff" {

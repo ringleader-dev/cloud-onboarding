@@ -296,6 +296,34 @@ NAT already covers every range in the region, so the proxy will have upstream eg
 further setup. Doing it now means the firewall rules that let workstations reach the proxy
 can name one stable range instead of one VM's address — and saves renumbering later.
 
+### GCP needs no subnet for the workstations that proxy governs
+
+This is the one place the three onboarding modules deliberately differ, and it is worth knowing
+before you compare them.
+
+On AWS and Azure a route table attaches to a *subnet*, so the proxy steers every box in the one it
+is given — and since it serves only the boxes it holds a policy for, an ungoverned workstation
+sharing that subnet would lose its egress. Both of those modules therefore carve a second subnet
+(`create_governed_subnet`, on by default) for the governed fleet.
+
+On GCP the steering route is a custom static route scoped by **network tag** — the same tag
+`providerConfig.gcp.networkTags` already sets. A workstation is governed by carrying that tag, and
+an untagged workstation on the same subnet is not steered and keeps its egress. So there is
+nothing here for a second subnet to fix, and `create_governed_subnet` is **off by default**:
+
+```hcl
+create_governed_subnet = true
+governed_subnet_cidr   = "10.60.224.0/20"
+```
+```bash
+GOVERNED_CIDR=10.60.224.0/20 ./network-landing-pad.sh
+```
+
+Turn it on if you want the governed fleet in a range of your own firewall rules can name, or
+simply to keep one manifest shape across all three clouds. It buys no isolation the tag does not
+already give you. When it is on, `allow_internal_traffic` covers its range too — a workstation
+does not stop being a workstation because a proxy steers it.
+
 ## More than one region
 
 A GCP VPC is a **global** resource whose subnets are regional, and instances in any region
@@ -332,6 +360,7 @@ inter-zone rates while sitting right next to it — use internal addressing betw
 | **workload identity provider** (`//iam.googleapis.com/projects/…/providers/…`) | the token-exchange audience |
 | **subnet self-link** (only if you created a network) | the subnet Ringleader attaches NICs to |
 | **gateway subnet self-link** (only if you reserved one) | where the DNS / HTTPS proxy VM will run |
+| **governed subnet self-link** (only if you turned it on) | an optional range for the governed fleet. GCP governs by network tag, so this is organizational rather than required |
 
 ## Revoking
 

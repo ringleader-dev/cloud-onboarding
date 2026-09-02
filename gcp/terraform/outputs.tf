@@ -33,6 +33,16 @@ output "gateway_subnet_cidr" {
   description = "The gateway subnet's range. This is what an egress allowlist names to let workstations reach the proxy, so it is worth recording."
 }
 
+output "governed_subnetwork_self_link" {
+  value       = var.create_network && var.create_governed_subnet ? google_compute_subnetwork.governed[0].self_link : null
+  description = "Subnet for the workstations a gateway governs (only when create_governed_subnet = true, which is OFF by default here). On GCP a box is governed by its network tag, not by which subnet it is in -- see the variable's description."
+}
+
+output "governed_subnet_cidr" {
+  value       = var.create_network && var.create_governed_subnet ? var.governed_subnet_cidr : null
+  description = "The governed subnet's range, if you created one."
+}
+
 # --- Audit: read these back and confirm they say what you expect --------------------
 #
 # None of these goes back to Ringleader. They exist so the module's security properties are
@@ -64,9 +74,10 @@ output "roles_granted" {
 output "handoff" {
   description = "Everything to hand back to Ringleader, in one place."
   value = {
-    target_service_account_email = google_service_account.onboarding.email
-    workload_identity_provider   = "//iam.googleapis.com/${google_iam_workload_identity_pool_provider.ringleader.name}"
-    project_id                   = var.project_id
-    subnetwork_self_link         = var.create_network ? google_compute_subnetwork.workstations[0].self_link : null
+    target_service_account_email  = google_service_account.onboarding.email
+    workload_identity_provider    = "//iam.googleapis.com/${google_iam_workload_identity_pool_provider.ringleader.name}"
+    project_id                    = var.project_id
+    subnetwork_self_link          = var.create_network ? google_compute_subnetwork.workstations[0].self_link : null
+    governed_subnetwork_self_link = var.create_network && var.create_governed_subnet ? google_compute_subnetwork.governed[0].self_link : null
   }
 }

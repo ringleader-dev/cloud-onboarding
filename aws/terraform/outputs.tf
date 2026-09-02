@@ -63,6 +63,16 @@ output "gateway_subnet_cidr" {
   description = "The gateway subnet's range. This is what an egress allowlist names to let workstations reach the proxy, so it is worth recording."
 }
 
+output "governed_subnet_id" {
+  value       = var.create_network && var.create_governed_subnet ? aws_subnet.governed[0].id : null
+  description = "Subnet for the workstations a gateway governs (only when create_governed_subnet = true). Hand it back as providerConfig.aws.subnetId on the workstations that carry an egress policy -- placing a box in it is what makes it gateway-governed. It has no route table on purpose; see the variable's description."
+}
+
+output "governed_subnet_cidr" {
+  value       = var.create_network && var.create_governed_subnet ? var.governed_subnet_cidr : null
+  description = "The governed subnet's range. Worth recording: it is the source range the gateway keys its policies on."
+}
+
 output "private_route_table_id" {
   value       = var.create_network && var.create_nat_gateway ? aws_route_table.private[0].id : null
   description = "Route table sending 0.0.0.0/0 to the NAT gateway. Associate any subnet that should reach the internet without a public IP with it."
@@ -117,12 +127,14 @@ output "handoff" {
   description = <<-EOT
     Everything to hand back to Ringleader, in one place. TWO security-group ids, and which one
     a workstation gets is the difference between an enforced egress policy and a workstation
-    that will not start -- see the two outputs above.
+    that will not start -- see the two outputs above. TWO subnet ids for the same reason: a
+    workstation that carries a policy goes in governed_subnet_id, every other one in subnet_id.
   EOT
   value = {
     target_role_arn                = aws_iam_role.ringleader.arn
     account_id                     = data.aws_caller_identity.current.account_id
     subnet_id                      = var.create_network ? aws_subnet.workstations[0].id : null
+    governed_subnet_id             = var.create_network && var.create_governed_subnet ? aws_subnet.governed[0].id : null
     security_group_id              = var.create_network ? aws_security_group.workstations[0].id : null
     inbound_only_security_group_id = var.create_network && var.enable_egress_control ? aws_security_group.workstations_inbound_only[0].id : null
   }

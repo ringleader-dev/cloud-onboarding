@@ -141,7 +141,7 @@ that makes a workstation's traffic arrive at the proxy:
 | `ec2:AuthorizeSecurityGroupEgress`, `ec2:RevokeSecurityGroupEgress` | keep that group's rules in step with the manifest |
 | `ec2:AuthorizeSecurityGroupIngress`, `ec2:RevokeSecurityGroupIngress` | the DNS / HTTPS proxy's own group, which has to admit workstation traffic |
 | `ec2:ModifyNetworkInterfaceAttribute` | move a running workstation onto the group its policy compiled to — and clear the source/destination check on the proxy's own interface, without which AWS silently drops every packet it forwards |
-| route-table and subnet writes (`CreateRouteTable`, `CreateRoute`, `AssociateRouteTable`, `CreateSubnet`, …) | steer a workstation's traffic at the proxy. An AWS route table is **per subnet**, so per-policy steering needs a subnet per policy |
+| route-table and subnet writes (`CreateRouteTable`, `CreateRoute`, `AssociateRouteTable`, `CreateSubnet`, …) | steer a workstation's traffic at the proxy. An AWS route table is **per subnet**, so steering is per subnet rather than per workstation — which is what `create_governed_subnet` below exists to give it. Not a subnet per policy: one proxy serves many policies from one subnet, telling them apart by source address |
 
 **Bound them to a VPC.** With `egress_vpc_ids` set — or with `create_network = true`, where
 the module uses the VPC it made — the permissions apply only to security groups in that VPC.
@@ -219,6 +219,45 @@ properties of that subnet are cost decisions rather than conveniences:
   **both directions** ($0.01/GB each way), so at 10 TB/month a misplaced proxy costs $200 —
   more than the instance running it.
 
+### And a subnet for the workstations that proxy governs
+
+`create_governed_subnet` is also on by default, at `10.60.224.0/20`. It is the subnet you put a
+workstation in **once it carries an egress policy**, and placing a box there is the whole of what
+makes it proxy-governed.
+
+```hcl
+create_governed_subnet = false
+```
+```bash
+CREATE_GOVERNED_SUBNET=false ./deploy.sh
+```
+
+**Why it cannot just be the workstations subnet.** An AWS route table attaches to a *subnet*, so
+the proxy steers everything in the one it is given, and it serves only the boxes it holds a policy
+for — an unknown source is refused. `ringleader-workstations` is where every workstation in this
+VPC goes, policy or no policy, so steering that one would take the egress of every box in it that
+has none. One proxy still serves many policies from this one subnet; it tells them apart by
+**source address**, so you never need a subnet per policy.
+
+Two properties of this subnet are deliberate, and both will surprise you if you do not know them:
+
+- **It has no route table**, and Ringleader will not take one over. It claims the subnet by
+  creating its own table and associating it, and it refuses a subnet that already carries an
+  association: re-associating needs `ec2:ReplaceRouteTableAssociation`, which is in no grant here,
+  and nothing could put yours back afterwards. So until a proxy steers it, this subnet falls back
+  to the VPC's **main** route table — which carries only the local route. **A workstation created
+  in here before the proxy exists has no egress at all and will not converge.** That is the
+  fail-safe direction rather than a bug: a governed box reaches the internet through its proxy or
+  not at all.
+- **It hands out no public IPs**, and you should create governed workstations with
+  `providerConfig.aws.assignPublicIp: false`. Once steering lands, `0.0.0.0/0` points at the
+  proxy's interface — which is also the reply path for anything dialling the box from outside the
+  VPC. Reach a governed workstation on its private address (VPN, peering or Direct Connect).
+
+It shares the workstations subnet's availability zone, for the reason the proxy's own subnet does:
+AWS charges cross-AZ traffic in both directions, and every packet a governed box sends crosses to
+the proxy.
+
 ### The NAT gateway, and why the proxy eventually replaces it
 
 `create_nat_gateway` is also on by default and is **the one thing here that costs money**:
@@ -247,11 +286,14 @@ the fix at that point is to renumber and re-onboard.
 
 So pick the ranges up front, even if you only need one region today:
 
-| region | `vpc_cidr` | `subnet_cidr` | `gateway_subnet_cidr` |
-|---|---|---|---|
-| first | `10.60.0.0/16` | `10.60.0.0/20` | `10.60.240.0/24` |
-| second | `10.61.0.0/16` | `10.61.0.0/20` | `10.61.240.0/24` |
-| third | `10.62.0.0/16` | `10.62.0.0/20` | `10.62.240.0/24` |
+| region | `vpc_cidr` | `subnet_cidr` | `governed_subnet_cidr` | `gateway_subnet_cidr` |
+|---|---|---|---|---|
+| first | `10.60.0.0/16` | `10.60.0.0/20` | `10.60.224.0/20` | `10.60.240.0/24` |
+| second | `10.61.0.0/16` | `10.61.0.0/20` | `10.61.224.0/20` | `10.61.240.0/24` |
+| third | `10.62.0.0/16` | `10.62.0.0/20` | `10.62.224.0/20` | `10.62.240.0/24` |
+
+The two egress-control ranges sit at the top of the VPC on purpose: it keeps them together and
+leaves `subnet_cidr` free to grow from a `/20` to a `/17` without colliding with either.
 
 Ringleader's proxy VMs are regional, so each region runs its own; nothing here requires the
 regions to be joined at all until you want one proxy to serve several.
