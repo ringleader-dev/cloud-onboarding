@@ -32,6 +32,9 @@
 #   CREATE_GATEWAY_SUBNET  true|false: reserve a public subnet and
 #                route table for the future DNS / HTTPS proxy VM (default: true)
 #   GATEWAY_SUBNET_CIDR  its CIDR                               (default: 10.60.240.0/24)
+#   CREATE_GOVERNED_SUBNET  true|false: reserve the subnet the
+#                workstations a gateway GOVERNS go in            (default: true)
+#   GOVERNED_SUBNET_CIDR  its CIDR                              (default: 10.60.224.0/20)
 #
 # The defaults grant what Ringleader needs for the features available today, so enabling one
 # later does not mean a second onboarding pass. CREATE_NAT_GATEWAY is the only one that costs
@@ -59,6 +62,8 @@ EGRESS_VPC_ID="${EGRESS_VPC_ID:-}"
 CREATE_NAT_GATEWAY="${CREATE_NAT_GATEWAY:-true}"
 CREATE_GATEWAY_SUBNET="${CREATE_GATEWAY_SUBNET:-true}"
 GATEWAY_SUBNET_CIDR="${GATEWAY_SUBNET_CIDR:-10.60.240.0/24}"
+CREATE_GOVERNED_SUBNET="${CREATE_GOVERNED_SUBNET:-true}"
+GOVERNED_SUBNET_CIDR="${GOVERNED_SUBNET_CIDR:-10.60.224.0/20}"
 
 case "$ISSUER_URL" in
   https://*/) echo "ISSUER_URL must not end in a slash" >&2; exit 1 ;;
@@ -94,7 +99,7 @@ echo ">> thumbprint:    $THUMBPRINT"
 echo ">> create network:$CREATE_NETWORK  ssh cidr: ${SSH_SOURCE_CIDR:-<none>}"
 echo ">> secondary ssh cidr: ${SECONDARY_SSH_SOURCE_CIDR:-<none>}"
 echo ">> egress control:$EGRESS_CONTROL  vpc: ${EGRESS_VPC_ID:-<the one this stack creates>}"
-echo ">> gateway subnet:$CREATE_GATEWAY_SUBNET  nat: $CREATE_NAT_GATEWAY"
+echo ">> gateway subnet:$CREATE_GATEWAY_SUBNET  governed subnet: $CREATE_GOVERNED_SUBNET  nat: $CREATE_NAT_GATEWAY"
 
 # Substitute the one placeholder CloudFormation cannot parameterize (a condition KEY).
 RENDERED="$(mktemp)"
@@ -120,7 +125,9 @@ aws cloudformation deploy \
     EgressVpcId="$EGRESS_VPC_ID" \
     CreateNatGateway="$CREATE_NAT_GATEWAY" \
     CreateGatewaySubnet="$CREATE_GATEWAY_SUBNET" \
-    GatewaySubnetCidr="$GATEWAY_SUBNET_CIDR"
+    GatewaySubnetCidr="$GATEWAY_SUBNET_CIDR" \
+    CreateGovernedSubnet="$CREATE_GOVERNED_SUBNET" \
+    GovernedSubnetCidr="$GOVERNED_SUBNET_CIDR"
 
 echo
 echo "================ hand these back to Ringleader ================"

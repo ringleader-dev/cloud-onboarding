@@ -275,3 +275,35 @@ variable "gateway_subnet_cidr" {
     clear of the workstations range so growing that subnet later does not collide.
   EOT
 }
+
+# --- A subnet for the boxes a gateway governs (OFF by default -- GCP does not need one) ------
+
+variable "create_governed_subnet" {
+  type        = bool
+  default     = false
+  description = <<-EOT
+    Reserve a subnet for the workstations a gateway governs. OFF by default, and it is the one
+    switch here that differs from the AWS and Azure modules, where the same subnet is on.
+
+    On those clouds a route table attaches to a SUBNET, so a gateway steers every box in the one
+    it is given, and a governed fleet needs a range of its own or the ungoverned workstations
+    beside it lose their egress. On GCP the steering route is scoped by NETWORK TAG -- the tag
+    providerConfig.gcp.networkTags already sets -- so a box is governed by carrying that tag and
+    by nothing else, and an untagged workstation on the same subnet is untouched.
+
+    So this buys no isolation the tag does not already give you. Turn it on if you want a
+    governed fleet in a range of its own for firewall rules of your own to name, or to keep one
+    manifest shape across all three clouds. GCP does not bill for a subnet either way.
+  EOT
+}
+
+variable "governed_subnet_cidr" {
+  type        = string
+  default     = "10.60.224.0/20"
+  description = <<-EOT
+    IP range for the governed subnet, when create_governed_subnet is set. The default sits
+    immediately below the gateway subnet, which groups the two egress-control ranges together
+    and leaves the workstations range free to grow. Keep it clear of every entry in
+    additional_regions.
+  EOT
+}

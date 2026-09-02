@@ -59,6 +59,11 @@ variable "create_gateway_subnet" {
   default = true
 }
 
+variable "create_governed_subnet" {
+  type    = bool
+  default = true
+}
+
 provider "aws" {
   region = var.region
 }
@@ -80,9 +85,10 @@ module "ringleader_onboarding" {
   # Off unless you set it: the secondary SSH port some workstation types use.
   secondary_ssh_source_ranges = var.secondary_ssh_source_ranges
 
-  enable_egress_control = var.enable_egress_control
-  create_nat_gateway    = var.create_nat_gateway
-  create_gateway_subnet = var.create_gateway_subnet
+  enable_egress_control  = var.enable_egress_control
+  create_nat_gateway     = var.create_nat_gateway
+  create_gateway_subnet  = var.create_gateway_subnet
+  create_governed_subnet = var.create_governed_subnet
 }
 
 output "handoff" {

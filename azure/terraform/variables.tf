@@ -122,6 +122,44 @@ variable "gateway_subnet_prefix" {
   EOT
 }
 
+# --- A subnet for the boxes a gateway GOVERNS (on by default) ----------------
+
+variable "create_governed_subnet" {
+  type        = bool
+  default     = true
+  description = <<-EOT
+    Reserve a second subnet -- the one you put the WORKSTATIONS a gateway governs in. On by
+    default; set false to opt out. Needs create_network.
+
+    A gateway steers a whole SUBNET, and it serves only the boxes it holds a policy for, so a
+    steered subnet must hold governed boxes and nothing else: put one ungoverned workstation in
+    it and that box loses its egress the moment steering lands. The workstations subnet is where
+    EVERY workstation in the VNet goes, governed or not, which is why the governed fleet needs a
+    prefix of its own.
+
+    It is created empty, carries the same NSG as the workstations subnet (so `rl shell` still
+    reaches a box in it), and carries NEITHER a route table NOR a NAT gateway. Ringleader claims
+    the subnet by putting its own UDR on it and declines one that already references a route
+    table; and a governed box's egress is meant to be the gateway's, not a NAT gateway's.
+
+    Azure does not bill for a subnet, so leaving this on costs nothing until you use it.
+  EOT
+}
+
+variable "governed_subnet_prefix" {
+  type        = string
+  default     = "10.70.224.0/20"
+  description = <<-EOT
+    Prefix for the governed subnet, when create_governed_subnet is set. Must sit inside
+    vnet_address_space. The default sits immediately below the gateway subnet at the top of the
+    VNet, which groups the two egress-control ranges together and leaves the workstations prefix
+    at the bottom free to grow. If you changed vnet_address_space for a second region, change
+    this to match.
+
+    It is sized like a fleet rather than like the gateway subnet, which holds one VM.
+  EOT
+}
+
 # --- Network landing pad, on by default (egress out; inbound only via ssh_source_ranges) ---
 
 variable "create_network" {

@@ -34,6 +34,9 @@
 #   CREATE_GATEWAY_SUBNET  false to skip the empty subnet reserved for
 #                the future DNS / HTTPS proxy VM               (default: true)
 #   GATEWAY_SUBNET_CIDR  its prefix                            (default: 10.70.240.0/24)
+#   CREATE_GOVERNED_SUBNET  false to skip the subnet the workstations
+#                a gateway GOVERNS go in                       (default: true)
+#   GOVERNED_SUBNET_CIDR  its prefix                           (default: 10.70.224.0/20)
 #
 # The defaults grant what Ringleader needs for the features available today, so enabling one
 # later does not mean a second onboarding pass. Only the landing pad costs money.
@@ -70,6 +73,8 @@ if [ "$SECONDARY_SSH_SOURCE_CIDR" = "none" ]; then
 fi
 CREATE_GATEWAY_SUBNET="${CREATE_GATEWAY_SUBNET:-true}"
 GATEWAY_SUBNET_CIDR="${GATEWAY_SUBNET_CIDR:-10.70.240.0/24}"
+CREATE_GOVERNED_SUBNET="${CREATE_GOVERNED_SUBNET:-true}"
+GOVERNED_SUBNET_CIDR="${GOVERNED_SUBNET_CIDR:-10.70.224.0/20}"
 if [[ "${WORKSTATION_IDENTITIES:-1}" == "1" ]]; then
   ENABLE_IDENTITIES=true
 else
@@ -152,7 +157,7 @@ if [ "$CREATE_NETWORK" = "true" ]; then
   echo ">> deploying the network landing pad (${NAME_PREFIX}-vnet, NAT gateway, NSG)"
   echo ">>   inbound 22:   ${SSH_SOURCE_CIDR:-<none>}"
   echo ">>   secondary:    ${SECONDARY_SSH_SOURCE_CIDR:-<none>}"
-  SUBNET_ID="$(az deployment group create \
+  NETWORK_OUTPUTS="$(az deployment group create \
     --resource-group "$RG" \
     --name ringleader-onboarding-network \
     --template-file "${SCRIPT_DIR}/azuredeploy-network.json" \
@@ -161,7 +166,11 @@ if [ "$CREATE_NETWORK" = "true" ]; then
                  secondarySshSourceCidr="$SECONDARY_SSH_SOURCE_CIDR" \
                  createGatewaySubnet="$CREATE_GATEWAY_SUBNET" \
                  gatewaySubnetCidr="$GATEWAY_SUBNET_CIDR" \
-    --query 'properties.outputs.subnetId.value' -o tsv)"
+                 createGovernedSubnet="$CREATE_GOVERNED_SUBNET" \
+                 governedSubnetCidr="$GOVERNED_SUBNET_CIDR" \
+    --query '[properties.outputs.subnetId.value, properties.outputs.governedSubnetId.value]' -o tsv)"
+  SUBNET_ID="$(echo "$NETWORK_OUTPUTS" | sed -n 1p)"
+  GOVERNED_SUBNET_ID="$(echo "$NETWORK_OUTPUTS" | sed -n 2p)"
 fi
 
 cat <<EOF
@@ -174,5 +183,10 @@ cat <<EOF
 EOF
 if [ -n "$SUBNET_ID" ]; then
   echo "  subnet id        : ${SUBNET_ID}"
+fi
+# The governed subnet is where a workstation that carries an egress POLICY goes: a gateway
+# steers a whole subnet, so mixing governed and ungoverned boxes in one is what the arm refuses.
+if [ -n "${GOVERNED_SUBNET_ID:-}" ]; then
+  echo "  governed subnet  : ${GOVERNED_SUBNET_ID}   (use for workstations with an egress policy)"
 fi
 echo "==============================================================="

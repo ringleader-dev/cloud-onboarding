@@ -149,6 +149,28 @@ Parameters:
       CIDR for the gateway subnet. Must sit inside VpcCidr; the default sits well clear of
       SubnetCidr so growing that subnet later does not collide.
 
+  CreateGovernedSubnet:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Reserve a second subnet -- the one you put the WORKSTATIONS a gateway governs in. On by
+      default; set false to opt out. A gateway steers a whole subnet and serves only the boxes
+      it holds a policy for, so a steered subnet must hold governed boxes and nothing else; the
+      workstations subnet is where every workstation in the VPC goes, governed or not. This
+      subnet is created empty, with NO route table and NO public IPs -- Ringleader claims it by
+      creating its own table, and it refuses a subnet that already carries one. Until a gateway
+      steers it, a box in here has no egress at all, which is the fail-safe direction. AWS does
+      not bill for a subnet.
+
+  GovernedSubnetCidr:
+    Type: String
+    Default: "10.60.224.0/20"
+    Description: >-
+      CIDR for the governed subnet. Must sit inside VpcCidr; the default sits immediately below
+      GatewaySubnetCidr at the top of the VPC, so the two egress-control ranges stay together
+      and SubnetCidr is free to grow.
+
 Conditions:
   HasRegionCondition: !Not [!Equals [!Ref AllowedRegion, ""]]
   WantNetwork: !Equals [!Ref CreateNetwork, "true"]
@@ -168,6 +190,9 @@ Conditions:
   WantGatewaySubnet: !And
     - !Condition WantNetwork
     - !Equals [!Ref CreateGatewaySubnet, "true"]
+  WantGovernedSubnet: !And
+    - !Condition WantNetwork
+    - !Equals [!Ref CreateGovernedSubnet, "true"]
   WantNat: !And
     - !Condition WantNetwork
     - !Equals [!Ref CreateNatGateway, "true"]
@@ -482,6 +507,33 @@ Resources:
       SubnetId: !Ref GatewaySubnet
       RouteTableId: !Ref GatewayRouteTable
 
+  # And a home for the WORKSTATIONS that gateway governs -- also empty, also on by default.
+  #
+  # A gateway steers a whole subnet and serves only the boxes it holds a policy for, so a
+  # steered subnet has to hold governed boxes and nothing else. The workstations subnet above
+  # is where every workstation in the VPC goes, governed or not; steering that one would take
+  # the egress of every box in it that has no policy.
+  #
+  # It has NO ROUTE TABLE ASSOCIATION, deliberately. Ringleader claims the subnet by creating
+  # its own table and associating it, and refuses one that already carries an association --
+  # taking yours over would need ec2:ReplaceRouteTableAssociation, which no grant here
+  # includes, and nothing could put yours back. Until a gateway steers it the subnet falls back
+  # to the VPC's main route table, which carries only the local route, so a workstation in here
+  # has no egress and will not converge: the gateway has to exist first. And once steering
+  # lands, 0.0.0.0/0 points at the gateway's interface, which is also the reply path for
+  # anything dialling the box from outside the VPC -- so reach a governed workstation on its
+  # private address and create it with assignPublicIp: false, which is why this subnet hands
+  # out no public IPs.
+  GovernedSubnet:
+    Type: AWS::EC2::Subnet
+    Condition: WantGovernedSubnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref GovernedSubnetCidr
+      AvailabilityZone: !GetAtt Subnet.AvailabilityZone
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: ringleader-governed }]
+
   WorkstationsSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Condition: WantNetwork
@@ -608,6 +660,13 @@ Outputs:
     Condition: WantGatewaySubnet
     Description: "Private subnet reserved for the future DNS / HTTPS proxy VM."
     Value: !Ref GatewaySubnet
+  GovernedSubnetId:
+    Condition: WantGovernedSubnet
+    Description: >-
+      Subnet for the workstations a gateway governs. Hand it back as
+      providerConfig.aws.subnetId on the workstations that carry an egress policy -- placing a
+      box in it is what makes it gateway-governed. It has no route table on purpose.
+    Value: !Ref GovernedSubnet
   PrivateRouteTableId:
     Condition: WantNat
     Description: >-

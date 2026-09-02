@@ -60,6 +60,20 @@
       "metadata": {
         "description": "Prefix for the gateway subnet. Must sit inside vnetCidr, and the default sits well clear of the workstations subnet so growing that one later does not collide."
       }
+    },
+    "createGovernedSubnet": {
+      "type": "Bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Reserve a second subnet -- the one you put the WORKSTATIONS a gateway governs in. On by default. A gateway steers a whole subnet and serves only the boxes it holds a policy for, so a steered subnet must hold governed boxes and nothing else; the workstations subnet is where every workstation in the VNet goes, governed or not. It carries the same NSG as the workstations subnet, so rl shell still reaches a box in it, and NEITHER a route table NOR the NAT gateway: Ringleader claims the subnet by putting its own UDR on it and declines one that already references a route table, and a governed box's egress is meant to be its gateway's. Azure does not bill for a subnet."
+      }
+    },
+    "governedSubnetCidr": {
+      "type": "String",
+      "defaultValue": "10.70.224.0/20",
+      "metadata": {
+        "description": "Prefix for the governed subnet. Must sit inside vnetCidr; the default sits immediately below gatewaySubnetCidr at the top of the VNet, so the two egress-control ranges stay together and the workstations prefix is free to grow."
+      }
     }
   },
   "variables": {
@@ -100,6 +114,7 @@
     ],
     "effectiveSecurityRules": "[concat(if(equals(parameters('sshSourceCidr'), ''), createArray(), variables('sshRules')), if(equals(parameters('secondarySshSourceCidr'), ''), createArray(), variables('secondarySshRules')))]",
     "gatewaySubnetName": "gateway",
+    "governedSubnetName": "governed",
     "workstationSubnets": [
       {
         "name": "[variables('subnetName')]",
@@ -125,7 +140,18 @@
         }
       }
     ],
-    "effectiveSubnets": "[concat(variables('workstationSubnets'), if(parameters('createGatewaySubnet'), variables('gatewaySubnets'), createArray()))]"
+    "governedSubnets": [
+      {
+        "name": "[variables('governedSubnetName')]",
+        "properties": {
+          "addressPrefix": "[parameters('governedSubnetCidr')]",
+          "networkSecurityGroup": {
+            "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+          }
+        }
+      }
+    ],
+    "effectiveSubnets": "[concat(variables('workstationSubnets'), if(parameters('createGatewaySubnet'), variables('gatewaySubnets'), createArray()), if(parameters('createGovernedSubnet'), variables('governedSubnets'), createArray()))]"
   },
   "resources": [
     {
@@ -193,6 +219,13 @@
       "value": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('subnetName'))]",
       "metadata": {
         "description": "Hand back to Ringleader: providerConfig.azure.subnetId."
+      }
+    },
+    "governedSubnetId": {
+      "type": "String",
+      "value": "[if(parameters('createGovernedSubnet'), resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('governedSubnetName')), '')]",
+      "metadata": {
+        "description": "The subnet for the workstations a gateway governs, or empty if createGovernedSubnet was false. Hand it back as providerConfig.azure.subnetId on the workstations that carry an egress policy."
       }
     },
     "gatewaySubnetId": {

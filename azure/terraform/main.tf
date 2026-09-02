@@ -274,3 +274,40 @@ resource "azurerm_subnet_nat_gateway_association" "gateway" {
   subnet_id      = azurerm_subnet.gateway[0].id
   nat_gateway_id = azurerm_nat_gateway.workstations[0].id
 }
+
+# And a home for the WORKSTATIONS that gateway governs -- also empty, also on by default.
+#
+# A gateway steers a whole subnet, and it serves only the boxes it holds a policy for, so a
+# steered subnet has to hold governed boxes and nothing else. The workstations subnet above is
+# where every workstation in this VNet goes, governed or not; steering that one would take the
+# egress of every box in it that has no policy. Hence a second prefix.
+#
+# It gets the SAME NSG as the workstations subnet, and for the same reason: Azure denies inbound
+# from the internet by default and Ringleader ships no bastion, so without it a governed box
+# comes up healthy and nobody can `rl shell` into it. The NSG narrows inbound only -- Azure's
+# AllowInternetOutBound at 65001 is untouched -- so attaching it grants the box no egress.
+#
+# It gets NO NAT gateway and NO route table, and both omissions are deliberate:
+#
+#   - No route table, because Ringleader claims the subnet by PUTting a UDR of its own onto it
+#     and declines a subnet that already references one. It could technically put yours back --
+#     unlike AWS, where the permission to re-associate simply does not exist -- but it declines
+#     for the same fail-safe reason, so an operator learns one rule across both clouds.
+#   - No NAT gateway, because a governed box's egress is the gateway's job. Attaching one would
+#     hand every box in here an unpoliced path to the internet for the whole window before
+#     steering lands, and the UDR overrides it the moment it does. A box with its own public IP
+#     still has Azure's own outbound until then; that is Azure's behaviour, not something this
+#     module can take away, and it is a reason to create governed boxes without one.
+resource "azurerm_subnet" "governed" {
+  count                = var.create_network && var.create_governed_subnet ? 1 : 0
+  name                 = "governed"
+  resource_group_name  = var.resource_group_name
+  virtual_network_name = azurerm_virtual_network.workstations[0].name
+  address_prefixes     = [var.governed_subnet_prefix]
+}
+
+resource "azurerm_subnet_network_security_group_association" "governed" {
+  count                     = var.create_network && var.create_governed_subnet ? 1 : 0
+  subnet_id                 = azurerm_subnet.governed[0].id
+  network_security_group_id = azurerm_network_security_group.workstations[0].id
+}

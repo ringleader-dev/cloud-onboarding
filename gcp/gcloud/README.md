@@ -12,7 +12,7 @@ already exists, so run it once, against a project with no Ringleader network yet
 | [`onboard.sh`](onboard.sh) | Creates the onboarding SA, grants the three project roles, and creates a Workload Identity Pool + OIDC provider trusting Ringleader's issuer for your org, plus the `workloadIdentityUser` binding. |
 | [`verify.sh`](verify.sh) | Checks the three required roles are present, then prints the provider's issuer/audience/condition and the impersonation binding. |
 | [`revoke.sh`](revoke.sh) | Deletes the WIF pool (cuts federation; default) or also deletes the SA (`FULL=1`). |
-| [`network-landing-pad.sh`](network-landing-pad.sh) | Optional: a minimal VPC + subnet + Cloud NAT, an inbound-SSH rule if you set `SSH_RANGES` (with 2222 following it), a workstation-to-workstation rule, and an empty subnet for the future DNS / HTTPS proxy VM; prints the subnet self-links. |
+| [`network-landing-pad.sh`](network-landing-pad.sh) | Optional: a minimal VPC + subnet + Cloud NAT, an inbound-SSH rule if you set `SSH_RANGES` (with 2222 following it), a workstation-to-workstation rule, an empty subnet for the future DNS / HTTPS proxy VM, and — only if you set `GOVERNED_CIDR` — a subnet for the workstations that proxy governs; prints the subnet self-links. |
 
 Two grants on `onboard.sh` are **on by default**: `WORKSTATION_IDENTITIES` (let Ringleader
 create per-user service accounts — the broadest grant here, so read
@@ -36,6 +36,13 @@ export ORG_UID='0192f5bf-af83-7178-8d0a-f1c7aea06bde' # ...and this
 `onboard.sh` prints the service account email, project id, and workload identity
 provider resource name to hand back to Ringleader. If you ran
 `network-landing-pad.sh`, hand back the printed subnet self-link too.
+
+`GOVERNED_CIDR` is empty by default and creates nothing, which is the one place this path
+differs from the AWS and Azure ones. There a proxy steers a whole subnet, so a governed fleet
+needs a subnet of its own; on GCP the steering route is scoped by **network tag**, so a
+workstation is governed by carrying that tag and an untagged neighbour on the same subnet is
+untouched. Set `GOVERNED_CIDR=10.60.224.0/20` if you want the governed fleet in its own range
+anyway — see [`../README.md`](../README.md#gcp-needs-no-subnet-for-the-workstations-that-proxy-governs).
 
 Adding a region later is one more subnet in the same VPC — a GCP VPC is global — plus its
 own Cloud Router and Cloud NAT, which are regional. `network-landing-pad.sh` prints the

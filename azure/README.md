@@ -173,7 +173,7 @@ It adds sixteen actions to the custom role, still scoped to your one resource gr
 | `.../networkSecurityGroups/securityRules/read` / `write` / `delete` | keep that NSG's rules in step with the manifest |
 | `Microsoft.Network/networkSecurityGroups/join/action` | attach the NSG to a workstation's NIC — the one people forget |
 | `Microsoft.Network/routeTables/*` (with `routes/*` and `join/action`) | steer a workstation's traffic at the DNS / HTTPS proxy when a policy names hostnames |
-| `Microsoft.Network/virtualNetworks/subnets/write` / `delete` | an Azure route table attaches **per subnet**, so per-policy steering needs a subnet per policy — and one Ringleader creates, it must also be able to collect |
+| `Microsoft.Network/virtualNetworks/subnets/write` / `delete` | an Azure route table attaches **per subnet**, so steering is per subnet rather than per workstation — which is what `create_governed_subnet` below exists to give it — and a route table Ringleader creates, it must also be able to detach and collect. Not a subnet per policy: one proxy serves many policies from one subnet, telling them apart by source address |
 
 Ringleader compiles each distinct policy into **one** NSG and attaches it to the NICs of the
 workstations carrying that policy. That matters here: Azure caps an NSG at **1,000 rules** and
@@ -240,6 +240,43 @@ inbound from the internet, which is the right posture for a proxy.
 **Pin the proxy and the workstations it serves to the same availability zone.** Azure charges
 cross-zone traffic in **both directions** ($0.01/GB each way), so at 10 TB/month a misplaced
 proxy costs $200 — more than the `Standard_D2as_v5` it runs on. Same-zone traffic is free.
+
+### And a subnet for the workstations that proxy governs
+
+`create_governed_subnet` is also on by default, at `10.70.224.0/20`. It is the subnet you put a
+workstation in **once it carries an egress policy**, and placing a box there is the whole of what
+makes it proxy-governed.
+
+```hcl
+create_governed_subnet = false
+```
+```bash
+CREATE_GOVERNED_SUBNET=false ./deploy.sh
+```
+
+**Why it cannot just be the workstations subnet.** A route table (a UDR with a virtual-appliance
+next hop) attaches to a *subnet*, so the proxy steers everything in the one it is given, and it
+serves only the boxes it holds a policy for — an unknown source is refused. The `workstations`
+subnet is where every workstation in this VNet goes, policy or no policy, so steering that one
+would take the egress of every box in it that has none. One proxy still serves many policies from
+this one subnet; it tells them apart by **source address**, so you never need a subnet per policy.
+
+What it gets and what it deliberately does not:
+
+- **The same NSG as the workstations subnet.** Azure denies inbound from the internet by default
+  and Ringleader ships no bastion, so without it a governed workstation comes up healthy and
+  nobody can `rl shell` into it. The NSG narrows inbound only — `AllowInternetOutBound` at 65001
+  is untouched — so attaching it grants the box no egress of its own.
+- **No route table.** Ringleader claims the subnet by putting its own UDR on it and declines one
+  that already references a route table. It *could* put yours back, unlike AWS where the
+  permission to re-associate does not exist at all — it declines for the same fail-safe reason, so
+  you learn one rule across both clouds.
+- **No NAT gateway**, unlike the workstations and gateway subnets. A governed box's egress is the
+  proxy's job; attaching one would hand every box in here an unpoliced path to the internet for
+  the whole window before steering lands, and the UDR overrides it the moment it does. A box with
+  its own public IP still has Azure's own outbound until then — that is Azure's behaviour, not
+  something this module can remove, and it is a reason to create governed workstations without
+  one.
 
 ## Plan your address space before the second region
 

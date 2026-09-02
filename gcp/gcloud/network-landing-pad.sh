@@ -18,6 +18,8 @@
 #                network tag that rule targets        (default: ringleader-secondary-ssh)
 #   GATEWAY_CIDR an empty subnet reserved for the future DNS / HTTPS proxy VM
 #                (default: 10.60.240.0/24; set to "none" to skip it)
+#   GOVERNED_CIDR  a subnet for the workstations a gateway governs
+#                (default: EMPTY -- none is created; see below)
 #   ALLOW_INTERNAL  1 to let workstations reach each other inside the subnet
 #                (default: 1; set 0 for the tighter posture)
 #
@@ -68,6 +70,19 @@ GATEWAY_CIDR="${GATEWAY_CIDR:-10.60.240.0/24}"
 if [ "$GATEWAY_CIDR" = "none" ]; then
   GATEWAY_CIDR=""
 fi
+# A subnet for the workstations a gateway GOVERNS -- and the one thing here that is off by
+# default where the AWS and Azure onboarding paths have it on.
+#
+# On those clouds a route table attaches to a SUBNET, so a gateway steers every box in the one
+# it is given, and a governed fleet needs a range of its own or the ungoverned workstations
+# beside it lose their egress. On GCP the steering route is scoped by NETWORK TAG -- the tag
+# providerConfig.gcp.networkTags already sets -- so a box is governed by carrying that tag and
+# an untagged workstation on the same subnet is untouched. Set GOVERNED_CIDR (10.60.224.0/20 is
+# the range the Terraform module uses) if you want the governed fleet in its own range anyway.
+GOVERNED_CIDR="${GOVERNED_CIDR:-}"
+if [ "$GOVERNED_CIDR" = "none" ]; then
+  GOVERNED_CIDR=""
+fi
 ALLOW_INTERNAL="${ALLOW_INTERNAL:-1}"
 
 gcloud compute networks create ringleader-vpc --project "$PROJECT" --subnet-mode custom
@@ -86,6 +101,12 @@ if [[ -n "$GATEWAY_CIDR" ]]; then
     --network ringleader-vpc --region "$REGION" --range "$GATEWAY_CIDR" \
     --enable-private-ip-google-access
   echo ">> gateway subnet ringleader-gateway created at ${GATEWAY_CIDR}"
+fi
+if [[ -n "$GOVERNED_CIDR" ]]; then
+  gcloud compute networks subnets create ringleader-governed --project "$PROJECT" \
+    --network ringleader-vpc --region "$REGION" --range "$GOVERNED_CIDR" \
+    --enable-private-ip-google-access
+  echo ">> governed subnet ringleader-governed created at ${GOVERNED_CIDR}"
 fi
 
 gcloud compute routers create ringleader-router --project "$PROJECT" \
@@ -121,10 +142,16 @@ fi
 # other at all -- a tighter posture, in which a compromised box cannot scan its neighbours.
 # Set ALLOW_INTERNAL=0 for that. It never admits anything from outside the subnet.
 if [[ "$ALLOW_INTERNAL" == "1" ]]; then
+  # The governed subnet counts as a workstation range when you asked for one: a workstation does
+  # not stop being a workstation because a gateway steers it.
+  INTERNAL_RANGES="$CIDR"
+  if [[ -n "$GOVERNED_CIDR" ]]; then
+    INTERNAL_RANGES="${CIDR},${GOVERNED_CIDR}"
+  fi
   gcloud compute firewall-rules create ringleader-allow-internal --project "$PROJECT" \
     --network ringleader-vpc --direction INGRESS --action allow \
-    --rules tcp,udp,icmp --source-ranges "$CIDR" --target-tags "$SSH_TAG"
-  echo ">> workstations tagged ${SSH_TAG} can reach each other within ${CIDR}"
+    --rules tcp,udp,icmp --source-ranges "$INTERNAL_RANGES" --target-tags "$SSH_TAG"
+  echo ">> workstations tagged ${SSH_TAG} can reach each other within ${INTERNAL_RANGES}"
 fi
 
 echo

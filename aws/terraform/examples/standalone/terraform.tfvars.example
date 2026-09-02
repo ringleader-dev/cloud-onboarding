@@ -43,6 +43,14 @@ ssh_source_ranges = []
 # decisions: internet ingress is free, and AWS charges cross-AZ traffic both ways.
 # create_gateway_subnet = false
 
+# The subnet the workstations that proxy GOVERNS go in (10.60.224.0/20). Empty, with no route
+# table and no public IPs, both on purpose: Ringleader claims it by associating a table of its
+# own and refuses one that already carries an association -- so until a proxy steers it, a box
+# in there has no egress at all. Name it as providerConfig.aws.subnetId on the workstations
+# that carry an egress policy; mixing governed and ungoverned boxes in one subnet is what
+# Ringleader refuses.
+# create_governed_subnet = false
+
 # Let Ringleader manage the security groups that restrict where workstations may connect.
 # Bounded to the VPC this module creates; read the egress_scope output after applying to
 # confirm. It restricts nothing until you declare an egress policy on a workstation.

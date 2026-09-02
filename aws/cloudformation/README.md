@@ -45,15 +45,25 @@ sed -i "s|__OIDC_PROVIDER__|oidc-app.ringleader.dev/org/<org-id>|g" ringleader-o
 `Thumbprint`, `RoleName`, `AllowedRegion`, `CreateNetwork`, `VpcCidr`, `SubnetCidr`,
 `SshSourceCidr`, `SecondarySshSourceCidr`.
 
-Egress control and the proxy subnet add five more: `EnableEgressControl` (`true`),
-`EgressVpcId` (empty — uses the VPC this stack creates), `CreateNatGateway` (`true`),
-`CreateGatewaySubnet` (`true`) and `GatewaySubnetCidr` (`10.60.240.0/24`). `deploy.sh` exposes
-them as `EGRESS_CONTROL`, `EGRESS_VPC_ID`, `CREATE_NAT_GATEWAY`, `CREATE_GATEWAY_SUBNET` and
-`GATEWAY_SUBNET_CIDR`; [`../README.md`](../README.md#optional-egress-control) explains what
+Egress control and the two egress-control subnets add seven more: `EnableEgressControl`
+(`true`), `EgressVpcId` (empty — uses the VPC this stack creates), `CreateNatGateway` (`true`),
+`CreateGatewaySubnet` (`true`), `GatewaySubnetCidr` (`10.60.240.0/24`), `CreateGovernedSubnet`
+(`true`) and `GovernedSubnetCidr` (`10.60.224.0/20`). `deploy.sh` exposes them as
+`EGRESS_CONTROL`, `EGRESS_VPC_ID`, `CREATE_NAT_GATEWAY`, `CREATE_GATEWAY_SUBNET`,
+`GATEWAY_SUBNET_CIDR`, `CREATE_GOVERNED_SUBNET` and `GOVERNED_SUBNET_CIDR`;
+[`../README.md`](../README.md#optional-egress-control) explains what
 each one grants, and [the root README](../../README.md#what-is-on-by-default-and-how-to-turn-it-off)
 lists everything that is on by default. `CreateNatGateway` is the one that costs money —
 hourly plus $0.045/GB — and it is independent of `CreateGatewaySubnet`, whose subnet is public
 and routed through the internet gateway.
+
+The two subnets are for different things and only the second holds workstations:
+`GatewaySubnet` is where the DNS / HTTPS proxy VM will run, and `GovernedSubnet` is where the
+workstations that proxy **governs** go. The stack gives `GovernedSubnet` no route-table
+association and no public IPs on purpose — Ringleader claims the subnet by associating a table
+of its own, and refuses one that already carries an association. Until a proxy steers it, a
+workstation in there has no egress at all; see
+[`../README.md`](../README.md#and-a-subnet-for-the-workstations-that-proxy-governs).
 
 Deploy with `--capabilities CAPABILITY_NAMED_IAM` (the role has a fixed name).
 

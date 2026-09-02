@@ -158,16 +158,25 @@ proxy VM in your own account — one that reads the TLS SNI on 443 and the HTTP 
 checks the name against that workstation's policy, and re-resolves it itself rather than
 trusting the address the box was heading for. That VM is not built yet, but every module
 reserves an empty subnet for it (`create_gateway_subnet`), which costs nothing and saves
-renumbering later.
+renumbering later. The AWS and Azure modules reserve a **second** one
+(`create_governed_subnet`) for the workstations that proxy will govern; GCP does not need one,
+because a box there is governed by its network tag rather than by where it sits.
 
 Two things follow that are worth knowing before you budget:
 
 - **Getting the traffic to the proxy is routing, not configuration inside the box.** A
   `HTTPS_PROXY` variable is ergonomics — anyone with root can `unset` it. The enforcement is
   the cloud's own routing plus a default-deny firewall rule, which is why the grant above
-  includes route and subnet writes. On GCP a route can be scoped by network tag, so per-policy
-  steering needs no extra subnet; on AWS and Azure a route table attaches per subnet, so it
-  does.
+  includes route and subnet writes. On GCP a route can be scoped by network tag, so a box is
+  governed by carrying that tag and the workstations beside it are untouched. On AWS and Azure
+  a route table attaches per subnet, so a proxy steers a whole **subnet** — which is why those
+  two modules carve a second one (`create_governed_subnet`) for the workstations it governs.
+  One proxy still serves many policies from that one subnet; it tells them apart by source
+  address, so this is never a subnet per policy.
+- **A steered subnet is governed wholesale, so put only governed workstations in it.** The
+  proxy holds a rule per box and refuses a source it has no rule for, so an ungoverned
+  workstation sharing a steered subnet loses its egress the moment steering lands. That is the
+  whole reason for a second subnet rather than steering the landing pad's own.
 - **Put the proxy in the same zone as the workstations it serves.** Same-zone traffic is free
   on all three clouds; cross-zone is $0.01/GB, charged to the sender on GCP and to **both
   sides** on AWS and Azure. At 10 TB/month a misplaced proxy costs $100–$200, which is more
@@ -188,6 +197,7 @@ is a single variable away from off.
 | **Landing-pad network** | VPC/VNet + subnet + egress + a security group / NSG | `create_network` | `CREATE_NETWORK` (AWS, Azure), `network-landing-pad.sh` (GCP) | GCP Cloud NAT, Azure NAT gateway + public IP |
 | **NAT gateway** (AWS) | private route table, so an instance with no public IP has egress | `create_nat_gateway` | `CREATE_NAT_GATEWAY` | yes — hourly **and $0.045/GB** |
 | **Proxy subnet** | an empty subnet reserved for the future DNS / HTTPS proxy VM | `create_gateway_subnet` | `CREATE_GATEWAY_SUBNET`, `GATEWAY_CIDR` (GCP) | no |
+| **Governed subnet** | an empty subnet for the workstations that proxy governs. On by default on AWS and Azure, **off on GCP**, which governs by network tag instead | `create_governed_subnet` | `CREATE_GOVERNED_SUBNET`, `GOVERNED_CIDR` (GCP) | no |
 | **Egress control** | Ringleader may create and maintain the firewall objects an egress policy compiles to, and the routes that steer traffic at the proxy | `enable_egress_control` | `EGRESS_CONTROL` | no |
 | **Workstation identities** | Ringleader may create per-user identities and bind roles to them | `enable_workstation_identities` | `WORKSTATION_IDENTITIES` (GCP `onboard.sh`, Azure `deploy.sh`) — **not available on the AWS CloudFormation path**, which grants no `iam:PassRole` at all; use the AWS Terraform module if you want it | no |
 | **Workstation-to-workstation** (GCP) | boxes on the subnet can reach each other | `allow_internal_traffic` | `ALLOW_INTERNAL` | no |
@@ -232,6 +242,7 @@ have today:
 create_network                = false   # or leave true if you already use this module's network
 create_nat_gateway            = false   # AWS only
 create_gateway_subnet         = false
+create_governed_subnet        = false   # AWS and Azure; already off on GCP
 enable_egress_control         = false
 enable_workstation_identities = false
 allow_internal_traffic        = false   # GCP only
@@ -249,6 +260,11 @@ Each cloud's README lists the exact values. In short:
 - **Azure** — app client id, tenant id, subscription id, resource group, and (if
   created) subnet id.
 - **AWS** — role ARN, region, and (if created) subnet id and security group id.
+
+Each module also prints a **governed subnet id** where it created one. That is the subnet you
+name on a workstation that carries an **egress policy** — placing a box in it is what puts it
+behind the proxy, and mixing governed and ungoverned boxes in one subnet is what Ringleader
+refuses.
 
 ## Layout
 

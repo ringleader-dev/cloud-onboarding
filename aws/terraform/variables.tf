@@ -267,8 +267,52 @@ variable "gateway_subnet_cidr" {
     and the default sits well clear of the workstations range so growing that subnet later
     does not collide. If you changed vpc_cidr for a second region, change this to match.
 
-    A /24 is deliberate headroom: per-policy steering eventually wants a subnet per policy,
-    and leaving room next to this one is cheaper than renumbering.
+    A /24 is deliberate headroom. One gateway serves many policies from one subnet -- it tells
+    them apart by source address, not by where they sit -- so this range never has to grow per
+    policy; the headroom is for a second gateway, or a second region's proxy.
+  EOT
+}
+
+# --- A subnet for the boxes a gateway GOVERNS (on by default) ----------------
+
+variable "create_governed_subnet" {
+  type        = bool
+  default     = true
+  description = <<-EOT
+    Reserve a second subnet -- the one you put the WORKSTATIONS a gateway governs in. On by
+    default; set false to opt out. Needs create_network.
+
+    A gateway steers a whole SUBNET, and it serves only the boxes it holds a policy for, so a
+    steered subnet must hold governed boxes and nothing else: put one ungoverned workstation in
+    it and that box loses its egress the moment steering lands. The landing pad's
+    ringleader-workstations subnet is where EVERY workstation in the VPC goes, governed or not,
+    which is why the governed fleet needs a range of its own.
+
+    It is created EMPTY and with NO route table -- deliberately, and it is the whole point.
+    Ringleader claims the subnet by creating its own table and associating it, and it refuses
+    a subnet that already carries one, because taking over yours would need
+    ec2:ReplaceRouteTableAssociation (which the grant does not include) and nothing could put
+    yours back. Until a gateway steers it, a box in here has NO route off the subnet at all:
+    the VPC's main route table carries only the local route. That is the fail-safe direction --
+    a governed box reaches the internet THROUGH its gateway or not at all -- but it does mean
+    the gateway has to exist before the boxes do.
+
+    AWS does not bill for a subnet, so leaving this on costs nothing until you use it.
+  EOT
+}
+
+variable "governed_subnet_cidr" {
+  type        = string
+  default     = "10.60.224.0/20"
+  description = <<-EOT
+    CIDR for the governed subnet, when create_governed_subnet is set. Must sit inside vpc_cidr.
+    The default sits immediately below the gateway subnet at the top of the VPC, which groups
+    the two egress-control ranges together and leaves the workstations range at the bottom free
+    to grow from a /20 to a /17 without colliding with either. If you changed vpc_cidr for a
+    second region, change this to match.
+
+    It is sized like the workstations subnet rather than like the gateway one: this holds a
+    FLEET, where the gateway subnet holds a VM.
   EOT
 }
 

@@ -365,6 +365,29 @@ resource "google_compute_subnetwork" "gateway" {
   private_ip_google_access = true
 }
 
+# An optional home for the WORKSTATIONS that gateway governs -- and the one place this module
+# differs from its AWS and Azure siblings, where the same subnet is on by default.
+#
+# On those clouds a route table attaches to a SUBNET, so a gateway steers every box in the one
+# it takes, and a governed fleet needs a subnet of its own or the ungoverned boxes beside it
+# lose their egress. On GCP steering is a custom static route scoped by NETWORK TAG -- the same
+# tag providerConfig.gcp.networkTags already sets -- so a box is governed by carrying the tag
+# and by nothing else. An untagged workstation on the same subnet is not steered and keeps its
+# egress. GCP therefore needs no governed subnet, and this is off by default.
+#
+# It exists anyway, for the operator who wants one: to give a governed fleet its own range for
+# firewall rules of their own to name, or simply to keep one manifest shape across three clouds.
+# It buys no isolation that the tag does not already give you.
+resource "google_compute_subnetwork" "governed" {
+  count                    = var.create_network && var.create_governed_subnet ? 1 : 0
+  project                  = var.project_id
+  name                     = "${var.name_prefix}-governed"
+  region                   = var.region
+  network                  = google_compute_network.workstations[0].id
+  ip_cidr_range            = var.governed_subnet_cidr
+  private_ip_google_access = true
+}
+
 # Extra regions, in the SAME global VPC.
 #
 # One entry per region you want workstations in, mapped to that region's subnet range;
@@ -513,7 +536,10 @@ resource "google_compute_firewall" "secondary_ssh" {
 # tighter posture.
 #
 # It admits tcp/udp/icmp from the workstation subnet ranges only, never from the internet,
-# and is scoped to the workstation tag so anything else in this VPC is unaffected.
+# and is scoped to the workstation tag so anything else in this VPC is unaffected. The governed
+# subnet is one of those ranges when you create one: a workstation does not stop being a
+# workstation because a gateway steers it, and leaving it out would give a governed box a
+# quietly different posture from the box beside it.
 resource "google_compute_firewall" "internal" {
   count     = var.create_network && var.allow_internal_traffic ? 1 : 0
   project   = var.project_id
@@ -521,8 +547,12 @@ resource "google_compute_firewall" "internal" {
   network   = google_compute_network.workstations[0].name
   direction = "INGRESS"
 
-  source_ranges = concat([var.subnet_cidr], values(var.additional_regions))
-  target_tags   = [var.workstation_network_tag]
+  source_ranges = concat(
+    [var.subnet_cidr],
+    var.create_governed_subnet ? [var.governed_subnet_cidr] : [],
+    values(var.additional_regions),
+  )
+  target_tags = [var.workstation_network_tag]
 
   allow { protocol = "tcp" }
   allow { protocol = "udp" }

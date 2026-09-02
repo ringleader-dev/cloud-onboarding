@@ -26,7 +26,7 @@
       "type": "Bool",
       "defaultValue": true,
       "metadata": {
-        "description": "Let Ringleader manage the network security groups that restrict where workstations may connect. On by default. Adds NSG and security-rule read/write/delete plus join/action, which is what lets Ringleader attach a group to a workstation NIC; and route-table read/write/delete plus subnet write and delete, which is how a workstation's traffic is steered to the DNS / HTTPS proxy when a policy names hostnames -- an Azure route table attaches per subnet, so per-policy steering needs a subnet per policy. Still scoped to this resource group, and it restricts nothing on its own until you declare an egress policy. Set false to opt out."
+        "description": "Let Ringleader manage the network security groups that restrict where workstations may connect. On by default. Adds NSG and security-rule read/write/delete plus join/action, which is what lets Ringleader attach a group to a workstation NIC; and route-table read/write/delete plus subnet write and delete, which is how a workstation's traffic is steered to the DNS / HTTPS proxy when a policy names hostnames -- an Azure route table attaches per subnet, so steering is per subnet rather than per workstation, which is what the landing pad's governed subnet exists to give it. Not a subnet per policy: one proxy serves many policies from one subnet, telling them apart by source address. Still scoped to this resource group, and it restricts nothing on its own until you declare an egress policy. Set false to opt out."
       }
     }
   },
