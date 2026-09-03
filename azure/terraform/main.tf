@@ -103,15 +103,63 @@ resource "azurerm_resource_group_template_deployment" "role" {
 #
 # One region's worth. An Azure VNet is regional, so a second region means a second VNet
 # joined by global VNet peering -- which is non-transitive and cannot join overlapping
-# address spaces. Give every region a distinct vnet_address_space from the first apply; see
-# that variable's description and azure/README.md for a suggested plan.
+# address spaces. Two regions applied on one range can never be peered, and the only remedy
+# is to renumber and re-onboard, so the allocation has to be right from the FIRST apply.
+#
+# Hence the ranges are DERIVED rather than documented. region_indexes maps each location to
+# the /16 its landing pad takes, and the module reads the index for var.location -- so two
+# regions given one map cannot take one range whatever order they are applied in. Every subnet
+# then comes out of that /16, so there is no second variable to keep in step and no way to
+# move the VNet and leave a subnet behind.
+#
+# Every default below reproduces the literal this module shipped before the derivation, so an
+# existing single-region landing pad plans as a no-op: see azure/README.md for the table.
+
+locals {
+  # An unlisted location falls back to index 0 so the expressions below stay evaluable; the
+  # precondition on the VNet is what actually refuses it, with a message that names the region.
+  region_index = try(var.region_indexes[var.location], 0)
+
+  region_index_known = contains(keys(var.region_indexes), var.location)
+
+  # 10.(70 + index).0.0/16. Index 0 is 10.70.0.0/16, this module's historical default.
+  vnet_address_space = var.vnet_address_space != null ? var.vnet_address_space : cidrsubnet("10.0.0.0/8", 8, 70 + local.region_index)
+
+  # The three subnets, carved out of whichever /16 the VNet took. The offsets reproduce the
+  # literals these variables used to default to: the second /24, the 15th /20 immediately below
+  # the gateway range, and the 241st /24 at the top.
+  subnet_prefix          = var.subnet_prefix != null ? var.subnet_prefix : cidrsubnet(local.vnet_address_space, 8, 1)
+  governed_subnet_prefix = var.governed_subnet_prefix != null ? var.governed_subnet_prefix : cidrsubnet(local.vnet_address_space, 4, 14)
+  gateway_subnet_prefix  = var.gateway_subnet_prefix != null ? var.gateway_subnet_prefix : cidrsubnet(local.vnet_address_space, 8, 240)
+}
 
 resource "azurerm_virtual_network" "workstations" {
   count               = var.create_network ? 1 : 0
   name                = "${var.name_prefix}-vnet"
   location            = var.location
   resource_group_name = var.resource_group_name
-  address_space       = [var.vnet_address_space]
+  address_space       = [local.vnet_address_space]
+
+  # The allocation has to be DECLARED, because Terraform cannot discover it. There is no signal
+  # in a fresh state that says "this is the second region", so a module that accepted silence
+  # would hand the second apply the first one's range and only find out at the peering months
+  # later, when renumbering means re-onboarding. Refusing silence is what makes the collision
+  # impossible instead of merely discouraged -- and the right moment to insist is the FIRST
+  # apply, which is the only one where the answer is still free.
+  #
+  # Both preconditions are skipped entirely when create_network is false: a customer who brings
+  # their own network never carves a range here and has nothing to declare.
+  lifecycle {
+    precondition {
+      condition     = length(var.region_indexes) > 0 || var.vnet_address_space != null
+      error_message = "region_indexes is empty, so this landing pad cannot know whether ${var.location} is your first region or your second. Name every region you onboard -- region_indexes = { \"${var.location}\" = 0 } keeps this one on 10.70.0.0/16, the range it has always had -- and give the next region index 1. Or set vnet_address_space to allocate the ranges yourself."
+    }
+
+    precondition {
+      condition     = local.region_index_known || var.vnet_address_space != null
+      error_message = "region_indexes does not name ${var.location}, the location this landing pad is being created in, so this apply would take index 0's range a second time. Add \"${var.location}\" with an index no other region uses, or set vnet_address_space to allocate this region's range yourself."
+    }
+  }
 }
 
 resource "azurerm_subnet" "workstations" {
@@ -119,7 +167,7 @@ resource "azurerm_subnet" "workstations" {
   name                 = "workstations"
   resource_group_name  = var.resource_group_name
   virtual_network_name = azurerm_virtual_network.workstations[0].name
-  address_prefixes     = [var.subnet_prefix]
+  address_prefixes     = [local.subnet_prefix]
 }
 
 # A home for the future DNS / HTTPS proxy VM -- created empty, and on by default.
@@ -138,7 +186,7 @@ resource "azurerm_subnet" "gateway" {
   name                 = "gateway"
   resource_group_name  = var.resource_group_name
   virtual_network_name = azurerm_virtual_network.workstations[0].name
-  address_prefixes     = [var.gateway_subnet_prefix]
+  address_prefixes     = [local.gateway_subnet_prefix]
 }
 
 # Inbound SSH -- the difference between a workstation that comes up and one you can use.
@@ -309,7 +357,7 @@ resource "azurerm_subnet" "governed" {
   name                            = "governed"
   resource_group_name             = var.resource_group_name
   virtual_network_name            = azurerm_virtual_network.workstations[0].name
-  address_prefixes                = [var.governed_subnet_prefix]
+  address_prefixes                = [local.governed_subnet_prefix]
   default_outbound_access_enabled = false
 }
 

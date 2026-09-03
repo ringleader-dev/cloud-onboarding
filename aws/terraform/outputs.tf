@@ -18,6 +18,20 @@ output "subnet_id" {
   description = "Hand back to Ringleader (only when create_network = true; otherwise supply your own): providerConfig.aws.subnetId."
 }
 
+output "vpc_cidr" {
+  value       = var.create_network ? local.vpc_cidr : null
+  description = <<-EOT
+    The range this region's VPC took, derived from region_indexes unless you set vpc_cidr.
+    Worth recording: it is what the NEXT region has to stay clear of, and what an inter-region
+    Transit Gateway will one day have to route.
+  EOT
+}
+
+output "subnet_cidr" {
+  value       = var.create_network ? local.subnet_cidr : null
+  description = "The workstations subnet's range, carved out of vpc_cidr."
+}
+
 output "security_group_id" {
   value       = var.create_network ? aws_security_group.workstations[0].id : null
   description = <<-EOT
@@ -59,7 +73,7 @@ output "gateway_subnet_id" {
 }
 
 output "gateway_subnet_cidr" {
-  value       = var.create_network && var.create_gateway_subnet ? var.gateway_subnet_cidr : null
+  value       = var.create_network && var.create_gateway_subnet ? local.gateway_subnet_cidr : null
   description = "The gateway subnet's range. This is what an egress allowlist names to let workstations reach the proxy, so it is worth recording."
 }
 
@@ -69,7 +83,7 @@ output "governed_subnet_id" {
 }
 
 output "governed_subnet_cidr" {
-  value       = var.create_network && var.create_governed_subnet ? var.governed_subnet_cidr : null
+  value       = var.create_network && var.create_governed_subnet ? local.governed_subnet_cidr : null
   description = "The governed subnet's range. Worth recording: it is the source range the gateway keys its policies on."
 }
 

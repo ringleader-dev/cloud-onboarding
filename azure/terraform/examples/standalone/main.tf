@@ -65,6 +65,25 @@ variable "create_governed_subnet" {
   default = true
 }
 
+# Where the landing pad goes, and which /16 it takes. Both are forwarded below for the reason
+# above -- a variable this root did not declare would be accepted with a warning and then
+# IGNORED, leaving the second region on the first one's range.
+variable "location" {
+  type    = string
+  default = "eastus"
+}
+
+variable "region_indexes" {
+  type    = map(number)
+  default = {}
+}
+
+# Bring your own range instead; unset derives it from region_indexes.
+variable "vnet_address_space" {
+  type    = string
+  default = null
+}
+
 module "ringleader" {
   source = "../.."
 
@@ -80,6 +99,12 @@ module "ringleader" {
   enable_egress_control  = var.enable_egress_control
   create_gateway_subnet  = var.create_gateway_subnet
   create_governed_subnet = var.create_governed_subnet
+
+  # The landing pad's location and its range. region_indexes keys off location, so the same map
+  # in a second region's tfvars gives that region a different /16 by construction.
+  location           = var.location
+  region_indexes     = var.region_indexes
+  vnet_address_space = var.vnet_address_space
 }
 
 output "handoff" {

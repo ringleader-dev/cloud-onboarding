@@ -74,12 +74,15 @@ outputs.
 
 ```sh
 cd terraform/examples/standalone
-cp terraform.tfvars.example terraform.tfvars   # fill in issuer + org_uid
+cp terraform.tfvars.example terraform.tfvars   # issuer + org_uid; region in TWO places
 terraform init && terraform apply
 terraform output handoff
 ```
 
-The Terraform module derives the thumbprint automatically.
+The Terraform module derives the thumbprint automatically. The two places the region appears
+are `region` and the `region_indexes` key beside it — the second is what decides the landing
+pad's range, and the plan fails rather than guessing if they disagree. See
+[A second region](#a-second-region-name-it-do-not-renumber-it).
 
 ## What you hand back to Ringleader
 
@@ -200,7 +203,8 @@ account for that: it reads the TLS SNI on 443 and the HTTP Host on 80, checks th
 that workstation's policy, and re-resolves it itself rather than trusting the address the box
 was heading for. That VM does not exist yet, but it is worth reserving its address range now.
 
-`create_gateway_subnet` is on by default at `10.60.240.0/24`. To skip it:
+`create_gateway_subnet` is on by default, taking the 241st `/24` of the VPC — `10.60.240.0/24`
+in a first region, and following the VPC into whichever `/16` a later one takes. To skip it:
 
 ```hcl
 create_gateway_subnet = false
@@ -221,7 +225,8 @@ properties of that subnet are cost decisions rather than conveniences:
 
 ### And a subnet for the workstations that proxy governs
 
-`create_governed_subnet` is also on by default, at `10.60.224.0/20`. It is the subnet you put a
+`create_governed_subnet` is also on by default, taking the 15th `/20` of the VPC —
+`10.60.224.0/20` in a first region. It is the subnet you put a
 workstation in **once it carries an egress policy**, and placing a box there is the whole of what
 makes it proxy-governed.
 
@@ -277,26 +282,83 @@ nothing routed to, so a workstation with `assignPublicIp: false` had no egress a
 now a private route table pointing at it — `private_route_table_id` — and you can associate any
 subnet that should reach the internet without a public IP with it.
 
-## Plan your CIDRs before the second region
+## A second region: name it, do not renumber it
 
 An AWS VPC is regional. A second region means a second VPC, and joining them later needs an
-**inter-region Transit Gateway**, which cannot route overlapping CIDRs. Applying this module
-in another region on the default `vpc_cidr` gives you two VPCs that can never be peered, and
-the fix at that point is to renumber and re-onboard.
+**inter-region Transit Gateway**, which cannot route overlapping CIDRs. Two regions on one
+range can never be peered, and the fix at that point is to renumber and re-onboard — so the
+allocation has to be right from the **first** apply, not fixed when you need it.
 
-So pick the ranges up front, even if you only need one region today:
+The Terraform module therefore derives the ranges rather than asking you to plan them. Name
+your regions in `region_indexes`, and use the **same map in every region**:
 
-| region | `vpc_cidr` | `subnet_cidr` | `governed_subnet_cidr` | `gateway_subnet_cidr` |
-|---|---|---|---|---|
-| first | `10.60.0.0/16` | `10.60.0.0/20` | `10.60.224.0/20` | `10.60.240.0/24` |
-| second | `10.61.0.0/16` | `10.61.0.0/20` | `10.61.224.0/20` | `10.61.240.0/24` |
-| third | `10.62.0.0/16` | `10.62.0.0/20` | `10.62.224.0/20` | `10.62.240.0/24` |
+```hcl
+region_indexes = {
+  "us-east-1" = 0
+  "eu-west-1" = 1
+}
+```
+
+The module looks up the region it is actually being applied in, so those two applies take
+`10.60.0.0/16` and `10.61.0.0/16` whichever order you run them in and whichever `tfvars` file
+you reach for.
+
+**Naming them is required**, from one region onwards, whenever the module creates the landing
+pad. There is no signal in a fresh Terraform state that says "this is the second region", so a
+module that accepted silence would hand your second apply the first one's range without a word
+— the declaration is the signal, and it costs one line:
+
+```hcl
+region_indexes = { "us-east-1" = 0 }   # index 0 is the range you already have
+```
+
+Three mistakes are then refused at plan time rather than discovered at the peering: a region
+the map does not name, two regions sharing an index, and an index outside `0`–`9`. What no
+module can catch is an operator who *replaces* an entry instead of adding one — Terraform
+cannot read the other region's state. Keep one map, shared.
+
+Every subnet is carved out of whichever `/16` the VPC took, so there is nothing else to keep
+in step:
+
+| index | region | `vpc_cidr` | `subnet_cidr` | `governed_subnet_cidr` | `gateway_subnet_cidr` |
+|---|---|---|---|---|---|
+| `0` | first | `10.60.0.0/16` | `10.60.0.0/20` | `10.60.224.0/20` | `10.60.240.0/24` |
+| `1` | second | `10.61.0.0/16` | `10.61.0.0/20` | `10.61.224.0/20` | `10.61.240.0/24` |
+| `2` | third | `10.62.0.0/16` | `10.62.0.0/20` | `10.62.224.0/20` | `10.62.240.0/24` |
+
+Index `0` is what this module has always created, so an existing single-region landing pad
+plans as a **no-op** once you name its region at `0` — nothing is renumbered by adopting this,
+and the one-line addition is the whole migration. Indexes run `0`–`9`
+(`10.60.0.0/16`–`10.69.0.0/16`), which keeps clear of the Azure module's `10.70.0.0/16` block
+so onboarding both clouds does not overlap them either.
 
 The two egress-control ranges sit at the top of the VPC on purpose: it keeps them together and
 leaves `subnet_cidr` free to grow from a `/20` to a `/17` without colliding with either.
 
+**Bringing your own IPAM?** Set `vpc_cidr` and the subnets follow it; `region_indexes` is then
+ignored and keeping the regions distinct is yours to do. Overriding an individual subnet still
+works too.
+
+> **The CloudFormation template does not enforce any of this yet — a known gap.** Its
+> `VpcCidr`, `SubnetCidr`, `GatewaySubnetCidr` and `GovernedSubnetCidr` are four independent
+> parameters with the fixed defaults in the table's first row: nothing derives them from each
+> other, nothing ties them to a region, and deploying the stack a second time in a second
+> region on the defaults succeeds and gives you two VPCs that can never be peered. If you will
+> ever run more than one region, **use the Terraform module**, which refuses that. If you must
+> use CloudFormation, set all four parameters per region from the table above, on the first
+> apply — getting it wrong is not fixable later.
+
 Ringleader's proxy VMs are regional, so each region runs its own; nothing here requires the
 regions to be joined at all until you want one proxy to serve several.
+
+### Checking the allocation without an AWS account
+
+The module ships its allocation rules as tests, so a change to them cannot quietly renumber a
+landing pad. They mock both providers and only ever `plan`, so they need no credentials:
+
+```console
+$ cd aws/terraform && terraform init && terraform test
+```
 
 ## Workstations hold no AWS identity by default
 

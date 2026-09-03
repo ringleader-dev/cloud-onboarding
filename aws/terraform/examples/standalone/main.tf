@@ -64,6 +64,20 @@ variable "create_governed_subnet" {
   default = true
 }
 
+# Which /16 each region's landing pad takes. Forwarded below, so a value set in
+# terraform.tfvars actually takes effect -- a variable this root did not declare would be
+# accepted with a warning and then IGNORED, leaving the second region on the first one's range.
+variable "region_indexes" {
+  type    = map(number)
+  default = {}
+}
+
+# Bring your own range instead; unset derives it from region_indexes.
+variable "vpc_cidr" {
+  type    = string
+  default = null
+}
+
 provider "aws" {
   region = var.region
 }
@@ -76,6 +90,11 @@ module "ringleader_onboarding" {
 
   # Bound the role to the region you actually use.
   allowed_regions = [var.region]
+
+  # The landing pad's range. region_indexes keys off the provider's region above, so the same
+  # map in a second region's tfvars gives that region a different /16 by construction.
+  region_indexes = var.region_indexes
+  vpc_cidr       = var.vpc_cidr
 
   # A public-subnet landing pad: egress out (so a workstation can come up) + inbound SSH
   # from your ranges.

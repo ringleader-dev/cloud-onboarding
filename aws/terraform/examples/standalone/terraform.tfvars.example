@@ -61,8 +61,30 @@ ssh_source_ranges = []
 # no roles under that path it reaches nothing.
 # enable_workstation_identities = false
 
-# PLANNING A SECOND REGION? Set vpc_cidr per region BEFORE the first apply. An AWS VPC is
-# regional, and joining two regions later needs an inter-region Transit Gateway, which cannot
-# route overlapping CIDRs -- so two regions on the default range can never be joined.
-#   first region  10.60.0.0/16, second 10.61.0.0/16, third 10.62.0.0/16 ...
+# WHICH RANGE THIS REGION TAKES. Required whenever the landing pad is created (above) and you
+# have not set vpc_cidr below -- from ONE region onwards, not just from two. Index 0 is
+# 10.60.0.0/16, the range this module has always created, so naming your region at 0 changes
+# nothing.
+region_indexes = {
+  "us-east-1" = 0
+}
+
+# PLANNING A SECOND REGION? Add it here and use the SAME map in every region's tfvars. The
+# module looks up the region it is applying in, so index 1 takes 10.61.0.0/16 and every subnet
+# follows -- there is nothing else to keep in step, and the two applies cannot land on one
+# range whichever order you run them in. Copy this file to a second region and forget to extend
+# the map and the plan FAILS, naming the region.
+#
+# This matters before the first apply, not when you need the second region: an AWS VPC is
+# regional, joining two regions later needs an inter-region Transit Gateway, and a Transit
+# Gateway cannot route overlapping CIDRs. Two regions on one range can never be joined and the
+# only fix is to renumber and re-onboard.
+#
+# region_indexes = {
+#   "us-east-1" = 0
+#   "eu-west-1" = 1
+# }
+
+# Bringing your own IPAM instead? Set vpc_cidr and the subnets are carved out of it;
+# region_indexes is then ignored and keeping every region distinct is yours to do.
 # vpc_cidr = "10.60.0.0/16"

@@ -23,13 +23,27 @@ output "subnet_id" {
   description = "Hand back to Ringleader (only when create_network = true; otherwise supply your own subnet)."
 }
 
+output "vnet_address_space" {
+  value       = var.create_network ? local.vnet_address_space : null
+  description = <<-EOT
+    The range this region's VNet took, derived from region_indexes unless you set
+    vnet_address_space. Worth recording: it is what the NEXT region has to stay clear of, and
+    what a global VNet peering will one day have to join.
+  EOT
+}
+
+output "subnet_prefix" {
+  value       = var.create_network ? local.subnet_prefix : null
+  description = "The workstations subnet's prefix, carved out of vnet_address_space."
+}
+
 output "gateway_subnet_id" {
   value       = var.create_network && var.create_gateway_subnet ? azurerm_subnet.gateway[0].id : null
   description = "Subnet reserved for the future DNS / HTTPS proxy VM (only when create_gateway_subnet = true)."
 }
 
 output "gateway_subnet_prefix" {
-  value       = var.create_network && var.create_gateway_subnet ? var.gateway_subnet_prefix : null
+  value       = var.create_network && var.create_gateway_subnet ? local.gateway_subnet_prefix : null
   description = "The gateway subnet's prefix. This is what an egress allowlist names to let workstations reach the proxy, so it is worth recording."
 }
 
@@ -39,7 +53,7 @@ output "governed_subnet_id" {
 }
 
 output "governed_subnet_prefix" {
-  value       = var.create_network && var.create_governed_subnet ? var.governed_subnet_prefix : null
+  value       = var.create_network && var.create_governed_subnet ? local.governed_subnet_prefix : null
   description = "The governed subnet's prefix. Worth recording: it is the source range the gateway keys its policies on."
 }
 
