@@ -40,7 +40,7 @@
 #                run their own SSH daemon inside the VM. "none"
 #                closes it                     (default: same as SSH_SOURCE_CIDR)
 #   CREATE_GATEWAY_SUBNET  false to skip the empty subnet reserved for
-#                the future DNS / HTTPS proxy VM               (default: true)
+#                the egress gateway VM                         (default: true)
 #   GATEWAY_SUBNET_CIDR  override; empty derives the 241st /24  (default: empty)
 #   CREATE_GOVERNED_SUBNET  false to skip the subnet the workstations
 #                a gateway GOVERNS go in                       (default: true)

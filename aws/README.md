@@ -110,7 +110,7 @@ pad's range, and the plan fails rather than guessing if they disagree. See
   **two**, one for workstations with an egress policy and one for those without. Which one a
   workstation gets is the difference between an enforced policy and a workstation that will not
   start: see [Which security group a workstation gets](#which-security-group-a-workstation-gets).
-- if you reserved one: **`gateway_subnet_id`**, where the DNS / HTTPS proxy VM will run
+- if you reserved one: **`gateway_subnet_id`**, where the egress gateway VM runs
 
 ## Reaching your workstations
 
@@ -160,7 +160,7 @@ that makes a workstation's traffic arrive at the proxy:
 |---|---|
 | `ec2:CreateSecurityGroup`, `ec2:DeleteSecurityGroup` | one group per distinct egress policy |
 | `ec2:AuthorizeSecurityGroupEgress`, `ec2:RevokeSecurityGroupEgress` | keep that group's rules in step with the manifest |
-| `ec2:AuthorizeSecurityGroupIngress`, `ec2:RevokeSecurityGroupIngress` | the DNS / HTTPS proxy's own group, which has to admit workstation traffic |
+| `ec2:AuthorizeSecurityGroupIngress`, `ec2:RevokeSecurityGroupIngress` | the egress gateway's own group, which has to admit workstation traffic |
 | `ec2:ModifyNetworkInterfaceAttribute` | move a running workstation onto the group its policy compiled to — and clear the source/destination check on the proxy's own interface, without which AWS silently drops every packet it forwards |
 | route-table and subnet writes (`CreateRouteTable`, `CreateRoute`, `AssociateRouteTable`, `CreateSubnet`, …) | steer a workstation's traffic at the proxy. An AWS route table is **per subnet**, so steering is per subnet rather than per workstation — which is what `create_governed_subnet` below exists to give it. Not a subnet per policy: one proxy serves many policies from one subnet, telling them apart by source address |
 
@@ -213,13 +213,15 @@ inbound-only group is not created: with no policies to compile there is nothing 
 beside, and an unused group still counts against the account's 2,500-group cap. Turning egress
 control back on creates it in the same apply that restores the grants.
 
-## Room for the DNS / HTTPS proxy
+## Room for the egress gateway
 
 Restricting egress by **hostname** rather than by address range means the connection has to
-pass something that can read the hostname off it. Ringleader runs a small proxy VM in your
-account for that: it reads the TLS SNI on 443 and the HTTP Host on 80, checks the name against
-that workstation's policy, and re-resolves it itself rather than trusting the address the box
-was heading for. That VM does not exist yet, but it is worth reserving its address range now.
+pass something that can read the hostname off it. Ringleader runs a small **egress gateway** VM
+in your account for that: it reads the TLS SNI on 443 and the HTTP Host on 80, checks the name
+against that workstation's policy, and re-resolves it itself rather than trusting the address
+the box was heading for. Ringleader builds and maintains that VM itself, once a workstation
+declares a policy naming hostnames, and it is a **billed** instance. Reserving its address range
+now is what keeps you from renumbering later.
 
 `create_gateway_subnet` is on by default, taking the 241st `/24` of the VPC — `10.60.240.0/24`
 in a first region, and following the VPC into whichever `/16` a later one takes. To skip it:

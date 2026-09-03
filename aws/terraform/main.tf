@@ -62,9 +62,10 @@ locals {
   # with the other mutating lifecycle actions and takes their region bound.
   #
   # The same API also sets user-data, and IAM has no condition key to tell the two apart. Ringleader
-  # does not use that form on a workstation (nor on an egress gateway, whose document is baked in at
-  # create time), and the role already holds RunInstances, which can launch an instance with any
-  # user-data at all -- so the action widens nothing this grant did not already permit.
+  # does not use that form: a workstation never does, and an egress gateway's user-data carries only
+  # its agent bootstrap, written once at create -- its egress policy arrives over the agent's own
+  # config stream, not through this API. The role already holds RunInstances, which can launch an
+  # instance with any user-data at all, so the action widens nothing this grant did not permit.
   lifecycle_actions = [
     "ec2:RunInstances",
     "ec2:TerminateInstances",

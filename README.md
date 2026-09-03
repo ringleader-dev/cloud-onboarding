@@ -154,13 +154,16 @@ README names its own: an egress firewall rule of yours below priority 900 on
 and the wrong security group on [AWS](aws/README.md#which-security-group-a-workstation-gets).
 
 Restricting egress by **hostname** rather than by address range additionally needs a small
-proxy VM in your own account — one that reads the TLS SNI on 443 and the HTTP Host on 80,
-checks the name against that workstation's policy, and re-resolves it itself rather than
-trusting the address the box was heading for. That VM is not built yet, but every module
-reserves an empty subnet for it (`create_gateway_subnet`), which costs nothing and saves
-renumbering later. The AWS and Azure modules reserve a **second** one
-(`create_governed_subnet`) for the workstations that proxy will govern; GCP does not need one,
-because a box there is governed by its network tag rather than by where it sits.
+**egress gateway** VM in your own account — one that reads the TLS SNI on 443 and the HTTP Host
+on 80, checks the name against that workstation's policy, and re-resolves it itself rather than
+trusting the address the box was heading for. Ringleader builds and maintains that VM for you on
+all three clouds once you declare a policy naming hostnames; it is a **billed** instance, roughly
+one to two extra workstations per region, and it is the one object in this whole grant that costs
+money without your creating it by name. Every module reserves an empty subnet for it
+(`create_gateway_subnet`), which costs nothing and saves renumbering later. The AWS and Azure
+modules reserve a **second** one (`create_governed_subnet`) for the workstations that gateway
+governs; GCP does not need one, because a box there is governed by its network tag rather than by
+where it sits.
 
 Two things follow that are worth knowing before you budget:
 
@@ -221,9 +224,9 @@ is a single variable away from off.
 |---|---|---|---|---|
 | **Landing-pad network** | VPC/VNet + subnet + egress + a security group / NSG | `create_network` | `CREATE_NETWORK` (AWS, Azure), `network-landing-pad.sh` (GCP) | GCP Cloud NAT, Azure NAT gateway + public IP |
 | **NAT gateway** (AWS) | private route table, so an instance with no public IP has egress | `create_nat_gateway` | `CREATE_NAT_GATEWAY` | yes — hourly **and $0.045/GB** |
-| **Proxy subnet** | an empty subnet reserved for the future DNS / HTTPS proxy VM | `create_gateway_subnet` | `CREATE_GATEWAY_SUBNET`, `GATEWAY_CIDR` (GCP) | no |
-| **Governed subnet** | an empty subnet for the workstations that proxy governs. On by default on AWS and Azure, **off on GCP**, which governs by network tag instead | `create_governed_subnet` | `CREATE_GOVERNED_SUBNET`, `GOVERNED_CIDR` (GCP) | no |
-| **Egress control** | Ringleader may create and maintain the firewall objects an egress policy compiles to, and the routes that steer traffic at the proxy | `enable_egress_control` | `EGRESS_CONTROL` | no |
+| **Gateway subnet** | an empty subnet reserved for the egress gateway VM | `create_gateway_subnet` | `CREATE_GATEWAY_SUBNET`, `GATEWAY_CIDR` (GCP) | the subnet, no — the gateway VM Ringleader puts in it, **yes** |
+| **Governed subnet** | an empty subnet for the workstations that gateway governs. On by default on AWS and Azure, **off on GCP**, which governs by network tag instead | `create_governed_subnet` | `CREATE_GOVERNED_SUBNET`, `GOVERNED_CIDR` (GCP) | no |
+| **Egress control** | Ringleader may create and maintain the firewall objects an egress policy compiles to, the routes that steer traffic at the gateway, and the gateway VM itself | `enable_egress_control` | `EGRESS_CONTROL` | only if you declare a policy naming hostnames, which builds the gateway VM |
 | **Workstation identities** | Ringleader may create per-user identities and bind roles to them | `enable_workstation_identities` | `WORKSTATION_IDENTITIES` (GCP `onboard.sh`, Azure `deploy.sh`) — **not available on the AWS CloudFormation path**, which grants no `iam:PassRole` at all; use the AWS Terraform module if you want it | no |
 | **Workstation-to-workstation** (GCP) | boxes on the subnet can reach each other | `allow_internal_traffic` | `ALLOW_INTERNAL` | no |
 
