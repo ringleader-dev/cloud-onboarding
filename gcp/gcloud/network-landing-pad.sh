@@ -66,6 +66,9 @@ if [ "$SECONDARY_SSH_RANGES" = "none" ]; then
   SECONDARY_SSH_RANGES=""
 fi
 SECONDARY_SSH_TAG="${SECONDARY_SSH_TAG:-ringleader-secondary-ssh}"
+# The tag Ringleader puts on the egress gateway VM it builds here. Not a knob: nothing of yours
+# carries it, and it has to match what Ringleader actually tags or the rule below admits nothing.
+GATEWAY_TAG="ringleader-egress-gateway"
 GATEWAY_CIDR="${GATEWAY_CIDR:-10.60.240.0/24}"
 if [ "$GATEWAY_CIDR" = "none" ]; then
   GATEWAY_CIDR=""
@@ -141,18 +144,39 @@ fi
 # Without it a custom-mode VPC has no firewall rules and two workstations cannot reach each
 # other at all -- a tighter posture, in which a compromised box cannot scan its neighbours.
 # Set ALLOW_INTERNAL=0 for that. It never admits anything from outside the subnet.
+# The workstation ranges, computed once because two rules name them. The governed subnet counts as
+# one when you asked for one: a workstation does not stop being a workstation because a gateway
+# steers it.
+WORKSTATION_RANGES="$CIDR"
+if [[ -n "$GOVERNED_CIDR" ]]; then
+  WORKSTATION_RANGES="${CIDR},${GOVERNED_CIDR}"
+fi
+
 if [[ "$ALLOW_INTERNAL" == "1" ]]; then
-  # The governed subnet counts as a workstation range when you asked for one: a workstation does
-  # not stop being a workstation because a gateway steers it.
-  INTERNAL_RANGES="$CIDR"
-  if [[ -n "$GOVERNED_CIDR" ]]; then
-    INTERNAL_RANGES="${CIDR},${GOVERNED_CIDR}"
-  fi
   gcloud compute firewall-rules create ringleader-allow-internal --project "$PROJECT" \
     --network ringleader-vpc --direction INGRESS --action allow \
-    --rules tcp,udp,icmp --source-ranges "$INTERNAL_RANGES" --target-tags "$SSH_TAG"
-  echo ">> workstations tagged ${SSH_TAG} can reach each other within ${INTERNAL_RANGES}"
+    --rules tcp,udp,icmp --source-ranges "$WORKSTATION_RANGES" --target-tags "$SSH_TAG"
+  echo ">> workstations tagged ${SSH_TAG} can reach each other within ${WORKSTATION_RANGES}"
 fi
+
+# Workstation-to-GATEWAY traffic. Without it, hostname-level egress control is a silent total
+# outage: Ringleader's proxy VM comes up, the steering route exists, every object check passes, and
+# a custom-mode VPC drops every forwarded packet at that VM's own NIC.
+#
+# It needs its own rule rather than allow-internal because the gateway VM does not carry the
+# workstation tag -- it cannot, since Ringleader's steering route is scoped by tag and a gateway
+# wearing a workstation's tag would route its traffic into itself. GATEWAY_TAG is fixed by
+# Ringleader, like SECONDARY_SSH_PORT: a value that drifted from the one it actually tags would be a
+# rule that reads correctly in the console and admits nothing.
+#
+# It follows no switch, including ALLOW_INTERNAL. That one is a posture choice about lateral movement
+# between workstations; this admits them to the one machine that polices their egress, so turning it
+# off would harden nothing and break egress control while leaving it looking enforced. Without
+# hostname-level egress control there is no gateway VM and the rule admits nobody.
+gcloud compute firewall-rules create ringleader-allow-gateway --project "$PROJECT" \
+  --network ringleader-vpc --direction INGRESS --action allow \
+  --rules tcp,udp,icmp --source-ranges "$WORKSTATION_RANGES" --target-tags "$GATEWAY_TAG"
+echo ">> workstations within ${WORKSTATION_RANGES} can reach the egress gateway tagged ${GATEWAY_TAG}"
 
 echo
 echo ">> subnet self-link (hand back to Ringleader as your workstation subnet):"

@@ -30,7 +30,7 @@ output "gateway_subnetwork_self_link" {
 
 output "gateway_subnet_cidr" {
   value       = var.create_network && var.create_gateway_subnet ? var.gateway_subnet_cidr : null
-  description = "The gateway subnet's range. This is what an egress allowlist names to let workstations reach the proxy, so it is worth recording."
+  description = "The gateway subnet's range. Ringleader does not place the DNS / HTTPS proxy here today -- the proxy goes where the workstations it governs are, and ringleader-allow-gateway admits them to it by network tag -- so this is a range reserved for you, not one Ringleader consumes."
 }
 
 output "governed_subnetwork_self_link" {

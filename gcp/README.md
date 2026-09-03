@@ -276,13 +276,35 @@ So it buys a capability nobody has committed to using, at a cost that depends on
 organization uses tags. If you want it, add a second custom role with those permissions and
 bind it to the same service account — nothing else here changes.
 
-## Room for the DNS / HTTPS proxy
+## Reaching the DNS / HTTPS proxy
 
 Restricting egress by **hostname** (rather than by IP range) needs a resolver that answers
-per workstation, and no cloud offers one — so Ringleader runs a small DNS / HTTPS proxy VM in
-your project. That VM does not exist yet, but it is worth reserving its address range now:
+per workstation, and no cloud offers one — so Ringleader builds a small DNS / HTTPS proxy VM
+in your project and writes a static route that sends a governed workstation's traffic to it.
 
-It is on by default (`10.60.240.0/24`). To skip it:
+**Nothing here is a knob, and the one rule this needs is created for you.** The proxy VM lands
+in the same subnet as the workstations it governs, and it carries the network tag
+`ringleader-egress-gateway`. `ringleader-allow-gateway` — created alongside
+`ringleader-allow-internal`, over the same ranges and the same protocols — is what admits your
+workstations to it.
+
+It cannot be folded into `ringleader-allow-internal`, because that rule targets the
+**workstation** tag and the proxy VM does not carry one: Ringleader's steering route is itself
+scoped by tag, and a proxy wearing a workstation's tag would route its own traffic back into
+itself. Without `ringleader-allow-gateway` a custom-mode VPC drops every forwarded packet at
+the proxy's own NIC — the workstation runs, the route exists, Ringleader reports the proxy
+healthy, and nothing reaches the internet.
+
+`ringleader-allow-gateway` follows no switch of its own. `allow_internal_traffic = false` (or
+`ALLOW_INTERNAL=0`) still turns off workstation-to-workstation traffic — a real posture choice — and
+leaves this rule in place, because admitting your workstations to the machine that polices their
+egress hardens nothing when removed and breaks egress control while leaving it looking enforced. If
+you never use hostname-level egress control there is no proxy VM, nothing carries the tag, and the
+rule admits nobody.
+
+### The gateway subnet
+
+A subnet is also reserved for the proxy, on by default (`10.60.240.0/24`). To skip it:
 
 ```hcl
 create_gateway_subnet = false
@@ -291,10 +313,10 @@ create_gateway_subnet = false
 GATEWAY_CIDR=none ./network-landing-pad.sh
 ```
 
-It creates an **empty subnet** and nothing else. GCP does not bill for a subnet, and Cloud
-NAT already covers every range in the region, so the proxy will have upstream egress with no
-further setup. Doing it now means the firewall rules that let workstations reach the proxy
-can name one stable range instead of one VM's address — and saves renumbering later.
+It creates an **empty subnet** and nothing else, and Ringleader does not place the proxy in it
+today — the proxy goes where the workstations it governs are, so its firewall rule can be scoped
+by the tag above rather than by a range. GCP does not bill for a subnet, so it costs nothing to
+keep the range carved for a proxy of your own or for a later placement that wants one.
 
 ### GCP needs no subnet for the workstations that proxy governs
 
