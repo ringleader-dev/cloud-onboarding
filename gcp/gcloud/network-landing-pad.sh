@@ -7,7 +7,7 @@
 #
 #   PROJECT      your project id                     (required)
 #   REGION       region for the subnet/NAT           (default: us-central1)
-#   CIDR         subnet primary range                (default: 10.60.0.0/20)
+#   CIDR         subnet primary range                (default: 10.80.0.0/20)
 #   SSH_RANGES   comma-separated CIDRs allowed to reach workstations on TCP 22
 #                (default: empty -- NO inbound rule is created)
 #   SSH_TAG      network tag the rule targets        (default: ringleader-workstation)
@@ -17,11 +17,26 @@
 #   SECONDARY_SSH_TAG
 #                network tag that rule targets        (default: ringleader-secondary-ssh)
 #   GATEWAY_CIDR an empty subnet reserved for the future DNS / HTTPS proxy VM
-#                (default: 10.60.240.0/24; set to "none" to skip it)
+#                (default: 10.80.240.0/24; set to "none" to skip it)
 #   GOVERNED_CIDR  a subnet for the workstations a gateway governs
 #                (default: EMPTY -- none is created; see below)
 #   ALLOW_INTERNAL  1 to let workstations reach each other inside the subnet
 #                (default: 1; set 0 for the tighter posture)
+#
+# ADDRESSING -- 10.80.x, and why it is not 10.60.x.
+#
+# Each cloud's onboarding assets allocate a block of their own: AWS 10.60-10.69, Azure
+# 10.70-10.79, GCP 10.80-10.89. They used to overlap -- GCP and AWS both defaulted into 10.60.x
+# -- so a customer onboarding both clouds on the documented happy path held two networks that
+# could never be joined by a VPN or an interconnect.
+#
+# This script creates the VPC, so it errors rather than renumbering if one already exists. If
+# you built your landing pad on the old defaults and are adding to it, pass the ranges you
+# already have (CIDR=10.60.0.0/20, GATEWAY_CIDR=10.60.240.0/24) -- a subnet in the wrong block
+# is accepted by GCP and only bites later, at the peering.
+#
+# The Terraform module derives all three from one network_cidr and refuses to guess it; here
+# they are three separate variables because the script cannot do CIDR arithmetic.
 #
 # REACHABILITY -- the part that decides whether your workstations are USABLE.
 #
@@ -56,7 +71,7 @@ SECONDARY_SSH_PORT=2222
 
 PROJECT="${PROJECT:?set PROJECT to your GCP project id}"
 REGION="${REGION:-us-central1}"
-CIDR="${CIDR:-10.60.0.0/20}"
+CIDR="${CIDR:-10.80.0.0/20}"
 SSH_RANGES="${SSH_RANGES:-}"
 SSH_TAG="${SSH_TAG:-ringleader-workstation}"
 # 2222 follows 22 unless you say otherwise: if you opened one to your engineers you almost
@@ -66,7 +81,7 @@ if [ "$SECONDARY_SSH_RANGES" = "none" ]; then
   SECONDARY_SSH_RANGES=""
 fi
 SECONDARY_SSH_TAG="${SECONDARY_SSH_TAG:-ringleader-secondary-ssh}"
-GATEWAY_CIDR="${GATEWAY_CIDR:-10.60.240.0/24}"
+GATEWAY_CIDR="${GATEWAY_CIDR:-10.80.240.0/24}"
 if [ "$GATEWAY_CIDR" = "none" ]; then
   GATEWAY_CIDR=""
 fi
@@ -77,8 +92,8 @@ fi
 # it is given, and a governed fleet needs a range of its own or the ungoverned workstations
 # beside it lose their egress. On GCP the steering route is scoped by NETWORK TAG -- the tag
 # providerConfig.gcp.networkTags already sets -- so a box is governed by carrying that tag and
-# an untagged workstation on the same subnet is untouched. Set GOVERNED_CIDR (10.60.224.0/20 is
-# the range the Terraform module uses) if you want the governed fleet in its own range anyway.
+# an untagged workstation on the same subnet is untouched. Set GOVERNED_CIDR (10.80.224.0/20 is
+# the range the Terraform module derives) if you want the governed fleet in its own range anyway.
 GOVERNED_CIDR="${GOVERNED_CIDR:-}"
 if [ "$GOVERNED_CIDR" = "none" ]; then
   GOVERNED_CIDR=""

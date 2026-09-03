@@ -25,7 +25,15 @@
 #                + NSG landing pad. Its NAT gateway and public IP
 #                bill per hour                                 (default: true)
 #   NAME_PREFIX  prefix for the landing pad's resources        (default: ringleader)
-#   VNET_CIDR / SUBNET_CIDR  its address space / subnet prefix (defaults: 10.70.0.0/16, 10.70.1.0/24)
+#   REGION_INDEX which /16 this region's landing pad takes:     (REQUIRED when
+#                the VNet gets 10.(70 + REGION_INDEX).0.0/16      CREATE_NETWORK=true)
+#                and every subnet is carved out of it. Give your
+#                FIRST region 0 -- that is the range this template
+#                has always created, so an existing deployment is
+#                unchanged -- and the next region 1. Never reuse an
+#                index: two VNets on one range can never be peered.
+#   VNET_CIDR / SUBNET_CIDR  overrides; empty derives them from
+#                REGION_INDEX                                    (default: empty)
 #   SSH_SOURCE_CIDR  one CIDR allowed inbound on TCP 22        (default: empty = no inbound rule)
 #   SECONDARY_SSH_SOURCE_CIDR  one CIDR allowed inbound on the
 #                secondary SSH port, for workstation types that
@@ -33,10 +41,10 @@
 #                closes it                     (default: same as SSH_SOURCE_CIDR)
 #   CREATE_GATEWAY_SUBNET  false to skip the empty subnet reserved for
 #                the future DNS / HTTPS proxy VM               (default: true)
-#   GATEWAY_SUBNET_CIDR  its prefix                            (default: 10.70.240.0/24)
+#   GATEWAY_SUBNET_CIDR  override; empty derives the 241st /24  (default: empty)
 #   CREATE_GOVERNED_SUBNET  false to skip the subnet the workstations
 #                a gateway GOVERNS go in                       (default: true)
-#   GOVERNED_SUBNET_CIDR  its prefix                           (default: 10.70.224.0/20)
+#   GOVERNED_SUBNET_CIDR  override; empty derives the 15th /20  (default: empty)
 #
 # The defaults grant what Ringleader needs for the features available today, so enabling one
 # later does not mean a second onboarding pass. Only the landing pad costs money.
@@ -62,8 +70,21 @@ APP_NAME="${APP_NAME:-ringleader-workstations}"
 ROLE_NAME="${ROLE_NAME:-Ringleader Workstation Operator}"
 CREATE_NETWORK="${CREATE_NETWORK:-true}"
 NAME_PREFIX="${NAME_PREFIX:-ringleader}"
-VNET_CIDR="${VNET_CIDR:-10.70.0.0/16}"
-SUBNET_CIDR="${SUBNET_CIDR:-10.70.1.0/24}"
+VNET_CIDR="${VNET_CIDR:-}"
+SUBNET_CIDR="${SUBNET_CIDR:-}"
+
+# The landing pad's /16 allocation. There is no default and there deliberately cannot be one:
+# nothing here can tell a first region from a second, so a default would hand the second one the
+# first one's range in silence, and two VNets on one range can never be peered. An existing
+# single-region deployment keeps every range it has by passing 0.
+REGION_INDEX="${REGION_INDEX:-}"
+if [ "$CREATE_NETWORK" = "true" ] && [ -z "$VNET_CIDR" ] && [ -z "$REGION_INDEX" ]; then
+  echo "set REGION_INDEX to which /16 this region's landing pad takes (0-9)." >&2
+  echo "  REGION_INDEX=0 is 10.70.0.0/16, the range this template has always created --" >&2
+  echo "  pass 0 for your FIRST region and 1 for the next, never the same index twice." >&2
+  echo "  Or set VNET_CIDR to allocate the range yourself." >&2
+  exit 1
+fi
 SSH_SOURCE_CIDR="${SSH_SOURCE_CIDR:-}"
 # 2222 follows 22 unless you say otherwise: if you opened one to your engineers you almost
 # certainly want the other open to the same people. "none" closes it.
@@ -72,9 +93,9 @@ if [ "$SECONDARY_SSH_SOURCE_CIDR" = "none" ]; then
   SECONDARY_SSH_SOURCE_CIDR=""
 fi
 CREATE_GATEWAY_SUBNET="${CREATE_GATEWAY_SUBNET:-true}"
-GATEWAY_SUBNET_CIDR="${GATEWAY_SUBNET_CIDR:-10.70.240.0/24}"
+GATEWAY_SUBNET_CIDR="${GATEWAY_SUBNET_CIDR:-}"
 CREATE_GOVERNED_SUBNET="${CREATE_GOVERNED_SUBNET:-true}"
-GOVERNED_SUBNET_CIDR="${GOVERNED_SUBNET_CIDR:-10.70.224.0/20}"
+GOVERNED_SUBNET_CIDR="${GOVERNED_SUBNET_CIDR:-}"
 if [[ "${WORKSTATION_IDENTITIES:-1}" == "1" ]]; then
   ENABLE_IDENTITIES=true
 else
@@ -161,7 +182,12 @@ if [ "$CREATE_NETWORK" = "true" ]; then
     --resource-group "$RG" \
     --name ringleader-onboarding-network \
     --template-file "${SCRIPT_DIR}/azuredeploy-network.json" \
-    --parameters namePrefix="$NAME_PREFIX" vnetCidr="$VNET_CIDR" subnetCidr="$SUBNET_CIDR" \
+    --parameters namePrefix="$NAME_PREFIX" \
+                 `# regionIndex has no default in the template, so it must always be passed. The` \
+                 `# guard above has already refused an empty one unless VNET_CIDR overrides the` \
+                 `# derivation, and on that path the index is inert -- so 0 here is not a guess.` \
+                 regionIndex="${REGION_INDEX:-0}" \
+                 vnetCidr="$VNET_CIDR" subnetCidr="$SUBNET_CIDR" \
                  sshSourceCidr="$SSH_SOURCE_CIDR" \
                  secondarySshSourceCidr="$SECONDARY_SSH_SOURCE_CIDR" \
                  createGatewaySubnet="$CREATE_GATEWAY_SUBNET" \

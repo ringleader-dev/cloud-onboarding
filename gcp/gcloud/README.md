@@ -41,7 +41,7 @@ provider resource name to hand back to Ringleader. If you ran
 differs from the AWS and Azure ones. There a proxy steers a whole subnet, so a governed fleet
 needs a subnet of its own; on GCP the steering route is scoped by **network tag**, so a
 workstation is governed by carrying that tag and an untagged neighbour on the same subnet is
-untouched. Set `GOVERNED_CIDR=10.60.224.0/20` if you want the governed fleet in its own range
+untouched. Set `GOVERNED_CIDR=10.80.224.0/20` if you want the governed fleet in its own range
 anyway — see [`../README.md`](../README.md#gcp-needs-no-subnet-for-the-workstations-that-proxy-governs).
 
 Adding a region later is one more subnet in the same VPC — a GCP VPC is global — plus its

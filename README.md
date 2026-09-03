@@ -182,9 +182,34 @@ Two things follow that are worth knowing before you budget:
   sides** on AWS and Azure. At 10 TB/month a misplaced proxy costs $100–$200, which is more
   than the VM it runs on.
 
-If you plan to run workstations in more than one region, read your cloud's README on address
-ranges **before the first apply**: on AWS and Azure a second region is a second network, and
-joining them later is impossible if the ranges overlap.
+### Address ranges — get them right on the FIRST apply
+
+Every module here allocates out of `10.0.0.0/8`, and **each cloud has a block of its own** so
+that onboarding more than one does not leave you holding networks that can never be joined:
+
+| Cloud | Block | Declared as |
+|---|---|---|
+| AWS | `10.60.0.0/16`–`10.69.0.0/16` | `region_indexes` (Terraform), `RegionIndex` (CloudFormation) |
+| Azure | `10.70.0.0/16`–`10.79.0.0/16` | `region_indexes` (Terraform), `regionIndex` (ARM) |
+| GCP | `10.80.0.0/16`–`10.89.0.0/16` | `network_cidr` (Terraform), `CIDR` (`network-landing-pad.sh`) |
+
+**On every Terraform, CloudFormation and ARM path this has no default, and that is the
+mechanism.** Nothing in a fresh Terraform state or a first CloudFormation deploy says "this is
+your second region", so a path that guessed would hand it the first one's range in silence — and
+on AWS and Azure a second region is a second network that an inter-region link can never join
+across overlapping ranges, while on GCP a subnet's range is force-new, so renumbering destroys
+the subnet your workstations sit in. Those paths therefore refuse to apply until you say which
+allocation this is, and the message names the answer that keeps an existing landing pad exactly
+as it is.
+
+`gcp/gcloud/network-landing-pad.sh` is the exception: it is a create-once bootstrap that cannot
+renumber anything (it creates the VPC, so a second run fails on the one that exists), so it
+simply **defaults** `CIDR` into GCP's block rather than refusing. If you built your landing pad
+on the ranges that predate the block split, pass the ones you already have — its own header says
+which.
+
+Read your cloud's README before the first apply; the index tables there say which range each
+answer produces.
 
 ## What is on by default, and how to turn it off
 

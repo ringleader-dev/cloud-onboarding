@@ -12,6 +12,15 @@
 #                  e.g. https://oidc-app.ringleader.dev
 #   ORG_UID      your Ringleader organization id (a UUID)      (required)
 #   REGION       AWS region for the stack + workstations       (default: us-east-1)
+#   REGION_INDEX which /16 this region's landing pad takes:     (REQUIRED when
+#                the VPC gets 10.(60 + REGION_INDEX).0.0/16      CREATE_NETWORK=true)
+#                and every subnet is carved out of it. Give
+#                your FIRST region 0 -- that is the range this
+#                template has always created, so an existing
+#                stack is unchanged -- and the next region 1.
+#                Never reuse an index: two regions on one range
+#                can never be peered, and the only remedy is to
+#                renumber and re-onboard.
 #   STACK_NAME   CloudFormation stack name                     (default: ringleader-onboarding)
 #   ROLE_NAME    IAM role name Ringleader assumes              (default: ringleader-workstations)
 #   CREATE_NETWORK  true|false: create a landing-pad network   (default: true)
@@ -31,10 +40,16 @@
 #                hourly plus $0.045/GB                           (default: true)
 #   CREATE_GATEWAY_SUBNET  true|false: reserve a public subnet and
 #                route table for the future DNS / HTTPS proxy VM (default: true)
-#   GATEWAY_SUBNET_CIDR  its CIDR                               (default: 10.60.240.0/24)
+#   GATEWAY_SUBNET_CIDR  override its CIDR; empty derives the
+#                241st /24 of the VPC range                      (default: empty)
 #   CREATE_GOVERNED_SUBNET  true|false: reserve the subnet the
 #                workstations a gateway GOVERNS go in            (default: true)
-#   GOVERNED_SUBNET_CIDR  its CIDR                              (default: 10.60.224.0/20)
+#   GOVERNED_SUBNET_CIDR  override its CIDR; empty derives the
+#                15th /20 of the VPC range                       (default: empty)
+#   VPC_CIDR     override the whole VPC range; empty derives it
+#                from REGION_INDEX                               (default: empty)
+#   SUBNET_CIDR  override the workstations subnet; empty derives
+#                the first /20 of the VPC range                  (default: empty)
 #
 # The defaults grant what Ringleader needs for the features available today, so enabling one
 # later does not mean a second onboarding pass. CREATE_NAT_GATEWAY is the only one that costs
@@ -57,13 +72,28 @@ if [ "$SECONDARY_SSH_SOURCE_CIDR" = "none" ]; then
   SECONDARY_SSH_SOURCE_CIDR=""
 fi
 ALLOWED_REGION="${ALLOWED_REGION:-$REGION}"
+VPC_CIDR="${VPC_CIDR:-}"
+SUBNET_CIDR="${SUBNET_CIDR:-}"
+
+# The landing pad's /16 allocation. There is no default and there deliberately cannot be one:
+# nothing here can tell a first region from a second, so a default would hand the second one the
+# first one's range in silence, and two regions on one range can never be peered. An existing
+# single-region stack keeps every range it has by passing 0.
+REGION_INDEX="${REGION_INDEX:-}"
+if [ "$CREATE_NETWORK" = "true" ] && [ -z "$VPC_CIDR" ] && [ -z "$REGION_INDEX" ]; then
+  echo "set REGION_INDEX to which /16 this region's landing pad takes (0-9)." >&2
+  echo "  REGION_INDEX=0 is 10.60.0.0/16, the range this template has always created --" >&2
+  echo "  pass 0 for your FIRST region and 1 for the next, never the same index twice." >&2
+  echo "  Or set VPC_CIDR to allocate the range yourself." >&2
+  exit 1
+fi
 EGRESS_CONTROL="${EGRESS_CONTROL:-true}"
 EGRESS_VPC_ID="${EGRESS_VPC_ID:-}"
 CREATE_NAT_GATEWAY="${CREATE_NAT_GATEWAY:-true}"
 CREATE_GATEWAY_SUBNET="${CREATE_GATEWAY_SUBNET:-true}"
-GATEWAY_SUBNET_CIDR="${GATEWAY_SUBNET_CIDR:-10.60.240.0/24}"
+GATEWAY_SUBNET_CIDR="${GATEWAY_SUBNET_CIDR:-}"
 CREATE_GOVERNED_SUBNET="${CREATE_GOVERNED_SUBNET:-true}"
-GOVERNED_SUBNET_CIDR="${GOVERNED_SUBNET_CIDR:-10.60.224.0/20}"
+GOVERNED_SUBNET_CIDR="${GOVERNED_SUBNET_CIDR:-}"
 
 case "$ISSUER_URL" in
   https://*/) echo "ISSUER_URL must not end in a slash" >&2; exit 1 ;;
@@ -102,6 +132,29 @@ echo ">> egress control:$EGRESS_CONTROL  vpc: ${EGRESS_VPC_ID:-<the one this sta
 echo ">> gateway subnet:$CREATE_GATEWAY_SUBNET  governed subnet: $CREATE_GOVERNED_SUBNET  nat: $CREATE_NAT_GATEWAY"
 
 # Substitute the one placeholder CloudFormation cannot parameterize (a condition KEY).
+# All four CIDR overrides are passed ONLY when set. `aws cloudformation deploy` keeps a stack's
+# existing value for a parameter it is not given, so an operator who created the stack by hand with
+# their own range keeps it across a deploy.sh run. Passing an empty string instead would look like
+# "derive it" and silently renumber them on the next run -- and an AWS::EC2::VPC or ::Subnet
+# CidrBlock change is a REPLACEMENT: the landing pad and every workstation in it. Empty is the
+# template's own default, so a first deploy still derives.
+#
+# `if`, not `x && y`: this script runs under `set -e`, where a `&&` list whose test is false is a
+# non-zero statement and kills the run.
+CIDR_OVERRIDES=()
+if [ -n "$VPC_CIDR" ]; then
+  CIDR_OVERRIDES+=("VpcCidr=$VPC_CIDR")
+fi
+if [ -n "$SUBNET_CIDR" ]; then
+  CIDR_OVERRIDES+=("SubnetCidr=$SUBNET_CIDR")
+fi
+if [ -n "$GATEWAY_SUBNET_CIDR" ]; then
+  CIDR_OVERRIDES+=("GatewaySubnetCidr=$GATEWAY_SUBNET_CIDR")
+fi
+if [ -n "$GOVERNED_SUBNET_CIDR" ]; then
+  CIDR_OVERRIDES+=("GovernedSubnetCidr=$GOVERNED_SUBNET_CIDR")
+fi
+
 RENDERED="$(mktemp)"
 trap 'rm -f "$RENDERED"' EXIT
 sed "s|__OIDC_PROVIDER__|${OIDC_PROVIDER}|g" "${SCRIPT_DIR}/ringleader-onboarding.yaml" > "$RENDERED"
@@ -125,9 +178,13 @@ aws cloudformation deploy \
     EgressVpcId="$EGRESS_VPC_ID" \
     CreateNatGateway="$CREATE_NAT_GATEWAY" \
     CreateGatewaySubnet="$CREATE_GATEWAY_SUBNET" \
-    GatewaySubnetCidr="$GATEWAY_SUBNET_CIDR" \
     CreateGovernedSubnet="$CREATE_GOVERNED_SUBNET" \
-    GovernedSubnetCidr="$GOVERNED_SUBNET_CIDR"
+    ${CIDR_OVERRIDES[@]+"${CIDR_OVERRIDES[@]}"} \
+    `# RegionIndex has no default in the template, so it must always be passed -- an empty` \
+    `# value is refused by its AllowedValues. The guard above has already insisted on a real` \
+    `# one unless there is no landing pad to allocate, or VPC_CIDR overrides the derivation;` \
+    `# on those paths the index is inert, so 0 here is not a guess.` \
+    RegionIndex="${REGION_INDEX:-0}"
 
 echo
 echo "================ hand these back to Ringleader ================"

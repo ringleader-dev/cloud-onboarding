@@ -56,11 +56,21 @@ locals {
     "ec2:DescribeAvailabilityZones",
   ]
 
+  # ModifyInstanceAttribute is what a machine RESIZE issues. EC2 refuses it on anything but a
+  # stopped instance, so Ringleader stops the workstation, resizes it and starts it again; without
+  # this action that cycle ends in UnauthorizedOperation and the workstation rests stopped. It sits
+  # with the other mutating lifecycle actions and takes their region bound.
+  #
+  # The same API also sets user-data, and IAM has no condition key to tell the two apart. Ringleader
+  # does not use that form on a workstation (nor on an egress gateway, whose document is baked in at
+  # create time), and the role already holds RunInstances, which can launch an instance with any
+  # user-data at all -- so the action widens nothing this grant did not already permit.
   lifecycle_actions = [
     "ec2:RunInstances",
     "ec2:TerminateInstances",
     "ec2:StartInstances",
     "ec2:StopInstances",
+    "ec2:ModifyInstanceAttribute",
     "ec2:CreateTags",
     "ec2:DeleteTags",
   ]
@@ -428,12 +438,10 @@ data "aws_availability_zones" "available" {
 data "aws_region" "current" {}
 
 locals {
-  # Read ONCE, deliberately. The aws provider deprecated this attribute in v6 in favour of
-  # `region`, but `region` does not exist in v5 and referencing it is a schema error there, not
-  # something try() can rescue -- so a module constrained to >= 5.0 has to use `name`, and the
-  # cost is one deprecation warning per plan instead of three. Switch to `.region` here, and
-  # delete this paragraph, whenever versions.tf raises the aws floor to >= 6.0.
-  region = data.aws_region.current.name
+  # Read ONCE, deliberately: three call sites reading it separately would be three deprecation
+  # surfaces to chase the next time this attribute is renamed. `region` is the v6 spelling; `name`
+  # and `id` are both deprecated there, which is why versions.tf floors the provider at >= 6.0.
+  region = data.aws_region.current.region
 
   # An unlisted region falls back to index 0 so the expressions below stay evaluable; the
   # precondition on the VPC is what actually refuses it, with a message that names the region.

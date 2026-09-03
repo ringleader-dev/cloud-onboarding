@@ -326,6 +326,36 @@ resource "google_service_account_iam_member" "workload_identity_user" {
 # here in a way it is not on AWS or Azure: add a region by adding a subnet (see
 # additional_regions), and one gateway VM can serve all of them.
 
+# The ranges are DERIVED from one /16 rather than defaulted three times over, so moving the
+# network moves every subnet with it and there is no second literal to forget.
+#
+# The /16 has to be DECLARED, because Terraform cannot discover it and the answer differs. This
+# module used to default into 10.60.x, which is the block the AWS module allocates, so a customer
+# onboarding both clouds on the documented happy path held two overlapping networks. GCP's block
+# is 10.80-10.89 now -- but a subnet's ip_cidr_range is force-new, so simply moving the default
+# would DESTROY the subnet every existing workstation sits in. Refusing silence is the only shape
+# that is right for both a new landing pad and an existing one; the precondition below says so in
+# the message, naming both answers.
+#
+# Unlike its AWS and Azure siblings this takes no region index. A GCP VPC is GLOBAL, so one /16
+# serves every region (additional_regions carves the extra subnets out of it) and there is no
+# second network to keep distinct.
+locals {
+  # A placeholder so the expressions below stay evaluable when nothing is declared; the precondition
+  # is what actually refuses that case, with a message naming both branches, and every reader of
+  # these locals carries the same create_network count -- so it is never reached on a successful
+  # apply. It is GCP's OWN block rather than the historical 10.60 deliberately: an unreachable
+  # fallback should still fail in the safe direction, and 10.60 is the range the AWS module
+  # allocates, which is the collision this variable exists to remove.
+  network_cidr = coalesce(var.network_cidr, "10.80.0.0/16")
+
+  # The offsets are the AWS module's, so the same /16 produces the same three subnets on both
+  # clouds: the first /20, the 15th /20 immediately below the gateway range, and the 241st /24.
+  subnet_cidr          = var.subnet_cidr != null ? var.subnet_cidr : cidrsubnet(local.network_cidr, 4, 0)
+  governed_subnet_cidr = var.governed_subnet_cidr != null ? var.governed_subnet_cidr : cidrsubnet(local.network_cidr, 4, 14)
+  gateway_subnet_cidr  = var.gateway_subnet_cidr != null ? var.gateway_subnet_cidr : cidrsubnet(local.network_cidr, 8, 240)
+}
+
 resource "google_compute_network" "workstations" {
   count                   = var.create_network ? 1 : 0
   project                 = var.project_id
@@ -333,6 +363,15 @@ resource "google_compute_network" "workstations" {
   auto_create_subnetworks = false
 
   depends_on = [google_project_service.compute]
+
+  # Skipped entirely when create_network is false: a customer who brings their own subnet carves
+  # no range here and has nothing to declare.
+  lifecycle {
+    precondition {
+      condition     = var.network_cidr != null
+      error_message = "network_cidr is unset, so this landing pad cannot tell a NEW allocation from one that already exists -- and it must not guess, because a subnet's range is force-new and a wrong answer destroys the subnet your workstations are in. Set network_cidr = \"10.60.0.0/16\" to keep the ranges this module created before it derived them (an existing landing pad then plans as a no-op), or network_cidr = \"10.80.0.0/16\" for a new one -- 10.80-10.89 is GCP's own block, clear of the AWS module's 10.60-10.69 and the Azure module's 10.70-10.79."
+    }
+  }
 }
 
 resource "google_compute_subnetwork" "workstations" {
@@ -341,7 +380,7 @@ resource "google_compute_subnetwork" "workstations" {
   name                     = "${var.name_prefix}-workstations"
   region                   = var.region
   network                  = google_compute_network.workstations[0].id
-  ip_cidr_range            = var.subnet_cidr
+  ip_cidr_range            = local.subnet_cidr
   private_ip_google_access = true
 }
 
@@ -361,7 +400,7 @@ resource "google_compute_subnetwork" "gateway" {
   name                     = "${var.name_prefix}-gateway"
   region                   = var.region
   network                  = google_compute_network.workstations[0].id
-  ip_cidr_range            = var.gateway_subnet_cidr
+  ip_cidr_range            = local.gateway_subnet_cidr
   private_ip_google_access = true
 }
 
@@ -384,7 +423,7 @@ resource "google_compute_subnetwork" "governed" {
   name                     = "${var.name_prefix}-governed"
   region                   = var.region
   network                  = google_compute_network.workstations[0].id
-  ip_cidr_range            = var.governed_subnet_cidr
+  ip_cidr_range            = local.governed_subnet_cidr
   private_ip_google_access = true
 }
 
@@ -548,8 +587,8 @@ resource "google_compute_firewall" "internal" {
   direction = "INGRESS"
 
   source_ranges = concat(
-    [var.subnet_cidr],
-    var.create_governed_subnet ? [var.governed_subnet_cidr] : [],
+    [local.subnet_cidr],
+    var.create_governed_subnet ? [local.governed_subnet_cidr] : [],
     values(var.additional_regions),
   )
   target_tags = [var.workstation_network_tag]

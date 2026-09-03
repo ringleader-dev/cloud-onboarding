@@ -282,7 +282,8 @@ Restricting egress by **hostname** (rather than by IP range) needs a resolver th
 per workstation, and no cloud offers one — so Ringleader runs a small DNS / HTTPS proxy VM in
 your project. That VM does not exist yet, but it is worth reserving its address range now:
 
-It is on by default (`10.60.240.0/24`). To skip it:
+It is on by default, taking the 241st `/24` of `network_cidr` — `10.80.240.0/24` on a new
+landing pad. To skip it:
 
 ```hcl
 create_gateway_subnet = false
@@ -312,17 +313,49 @@ an untagged workstation on the same subnet is not steered and keeps its egress. 
 nothing here for a second subnet to fix, and `create_governed_subnet` is **off by default**:
 
 ```hcl
-create_governed_subnet = true
-governed_subnet_cidr   = "10.60.224.0/20"
+create_governed_subnet = true   # its range derives: the 15th /20 of network_cidr
 ```
 ```bash
-GOVERNED_CIDR=10.60.224.0/20 ./network-landing-pad.sh
+GOVERNED_CIDR=10.80.224.0/20 ./network-landing-pad.sh
 ```
 
 Turn it on if you want the governed fleet in a range of your own firewall rules can name, or
 simply to keep one manifest shape across all three clouds. It buys no isolation the tag does not
 already give you. When it is on, `allow_internal_traffic` covers its range too — a workstation
 does not stop being a workstation because a proxy steers it.
+
+## Address ranges: declare the block, do not inherit one
+
+This module carves every subnet out of one `/16`, and **it will not guess which one**:
+
+```hcl
+network_cidr = "10.80.0.0/16"   # a NEW landing pad
+network_cidr = "10.60.0.0/16"   # what this module created BEFORE it derived anything
+```
+
+| | `subnet_cidr` | `governed_subnet_cidr` | `gateway_subnet_cidr` |
+|---|---|---|---|
+| `network_cidr = "10.80.0.0/16"` | `10.80.0.0/20` | `10.80.224.0/20` | `10.80.240.0/24` |
+| `network_cidr = "10.60.0.0/16"` | `10.60.0.0/20` | `10.60.224.0/20` | `10.60.240.0/24` |
+
+The second row is byte for byte what the three variables used to default to, so **if you have
+already applied this module, declare `10.60.0.0/16` and the plan is a no-op** — nothing is
+renumbered and the one line is the whole migration.
+
+For a new landing pad take `10.80.0.0/16`. GCP's block is `10.80`–`10.89`, clear of the AWS
+module's `10.60`–`10.69` and the Azure module's `10.70`–`10.79`; the old defaults sat inside
+AWS's, so a customer who onboarded both clouds on the documented happy path held two networks a
+VPN or an interconnect could never join. One `/16` covers every region — a GCP VPC is global —
+and the rest of the block is yours for a second project.
+
+**Why you are asked rather than defaulted.** A subnet's `ip_cidr_range` is force-new, and
+Terraform cannot tell a first apply from a hundredth. Moving the default silently would destroy
+the subnet every existing workstation sits in; keeping it would leave the overlap in place. The
+AWS and Azure modules refuse silence for the same reason, through their `region_indexes` maps.
+
+Bringing your own IPAM? Set `network_cidr` to your range and the three subnets follow it, or
+override any of them individually. `additional_regions` is always yours to allocate — nothing
+derives it — so keep those ranges inside the same `/16`.
 
 ## More than one region
 
@@ -333,13 +366,14 @@ than AWS or Azure, where a second region means a second network and an inter-reg
 
 ```hcl
 additional_regions = {
-  "europe-west1"    = "10.60.16.0/20"
-  "asia-southeast1" = "10.60.32.0/20"
+  "europe-west1"    = "10.80.16.0/20"
+  "asia-southeast1" = "10.80.32.0/20"
 }
 ```
 
 Ranges must not overlap, and GCP refuses an overlapping subnet — so a mistake fails the apply
-rather than breaking routing later. Each region also gets its own Cloud Router and Cloud NAT,
+rather than breaking routing later. Nothing derives these from `network_cidr`, so keep them
+inside whichever `/16` you gave it and clear of the two egress-control ranges at its top. Each region also gets its own Cloud Router and Cloud NAT,
 because both are regional and a subnet without them comes up unable to reach Ringleader.
 
 **Pin the proxy and the workstations it serves to the same zone.** Traffic between two VMs in

@@ -21,6 +21,14 @@ provider "google" {
 variable "project_id" { type = string }
 variable "ringleader_issuer_url" { type = string }
 variable "org_uid" { type = string }
+# The /16 the landing pad's subnets are carved out of. Forwarded below, so a value set in
+# terraform.tfvars actually takes effect -- a variable this root did not declare would be
+# accepted with a warning and then IGNORED, and the module would refuse the apply.
+variable "network_cidr" {
+  type    = string
+  default = null
+}
+
 variable "create_network" {
   type    = bool
   default = true
@@ -64,6 +72,12 @@ module "ringleader" {
   ringleader_issuer_url = var.ringleader_issuer_url
   org_uid               = var.org_uid
   create_network        = var.create_network
+
+  # The landing pad's range. Required with a landing pad and deliberately undefaulted: a
+  # subnet's range is force-new, so a module that guessed would destroy the subnet an existing
+  # customer's workstations sit in. 10.80.0.0/16 for a new one, 10.60.0.0/16 to keep the ranges
+  # this module created before it derived them.
+  network_cidr = var.network_cidr
 
   ssh_source_ranges           = var.ssh_source_ranges
   secondary_ssh_source_ranges = var.secondary_ssh_source_ranges

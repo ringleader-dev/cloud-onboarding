@@ -41,24 +41,35 @@ and prints the resulting subnet id:
 
 ```bash
 CREATE_NETWORK=true \
+REGION_INDEX=0 \
 SSH_SOURCE_CIDR=203.0.113.0/24 \
   ./deploy.sh
 ```
 
-Env vars for it: `NAME_PREFIX` (`ringleader`), `VNET_CIDR` (`10.70.0.0/16`),
-`SUBNET_CIDR` (`10.70.1.0/24`), `SSH_SOURCE_CIDR` (empty), and
+`REGION_INDEX` is **required** whenever this creates a network, and picks which `/16` the
+landing pad takes: the VNet gets `10.(70 + REGION_INDEX).0.0/16` and every subnet is carved out
+of it. Give your first region `0` — that is `10.70.0.0/16`, the range this template has always
+created, so an existing deployment is unchanged — and the next region `1`. There is no default
+on purpose: an Azure VNet is regional, two VNets on one range can never be peered, and nothing
+here can tell a first region from a second, so guessing would hand the second one the first
+one's range in silence. See [`../README.md`](../README.md#a-second-region-name-it-do-not-renumber-it).
+
+Env vars for it: `NAME_PREFIX` (`ringleader`), `VNET_CIDR` and
+`SUBNET_CIDR` (both empty — overrides, derived from `REGION_INDEX` when unset),
+`SSH_SOURCE_CIDR` (empty), and
 `SECONDARY_SSH_SOURCE_CIDR` (mirrors `SSH_SOURCE_CIDR`; `none` closes it — see
 [`../README.md`](../README.md#a-second-ssh-port--opened-to-the-same-people-as-22)).
 `SSH_SOURCE_CIDR` empty means the NSG is created with **no inbound rule**, which is
 correct only if you reach the VNet privately.
 
-`CREATE_GATEWAY_SUBNET` is on by default (with `GATEWAY_SUBNET_CIDR`, `10.70.240.0/24`): it
+`CREATE_GATEWAY_SUBNET` is on by default (`GATEWAY_SUBNET_CIDR` overrides its range; unset, it
+derives the 241st `/24` of the VNet — `10.70.240.0/24` at index `0`): it
 reserves an empty subnet for the DNS / HTTPS proxy VM that hostname-level egress control will
 use, and prints its id. It shares the NAT gateway, so the proxy needs no public IP. Set it to
 `false` to skip.
 
-`CREATE_GOVERNED_SUBNET` is also on by default (with `GOVERNED_SUBNET_CIDR`,
-`10.70.224.0/20`): it reserves the subnet the workstations that proxy **governs** go in, and
+`CREATE_GOVERNED_SUBNET` is also on by default (`GOVERNED_SUBNET_CIDR` overrides its range;
+unset, it derives the 15th `/20` — `10.70.224.0/20` at index `0`): it reserves the subnet the workstations that proxy **governs** go in, and
 prints its id as `governed subnet`. A proxy steers a whole subnet and serves only the boxes it
 holds a policy for, so mixing governed and ungoverned workstations in one is what Ringleader
 refuses. It carries the workstations NSG (so `rl shell` still reaches a box in it) and

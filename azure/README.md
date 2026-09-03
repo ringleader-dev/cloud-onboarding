@@ -75,10 +75,15 @@ directly).
 export RG=ringleader-workstations                      # existing RG you own
 export ISSUER_URL='https://oidc-app.ringleader.dev'    # Ringleader gives you this
 export ORG_UID='0192f5bf-af83-7178-8d0a-f1c7aea06bde'  # ...and this
+export REGION_INDEX=0                                  # which /16 this region takes
 az login
 cd arm
 ./deploy.sh
 ```
+
+`REGION_INDEX` is required whenever this creates a network — `0` for your first region, `1` for
+the next. It is the ARM half of *[A second region](#a-second-region-name-it-do-not-renumber-it)*
+below, and `0` is the range this template has always created.
 
 ### Terraform quick start
 
@@ -336,21 +341,19 @@ in step:
 Index `0` is what this module has always created, so an existing single-region landing pad
 plans as a **no-op** once you name its location at `0` — nothing is renumbered by adopting
 this, and the one-line addition is the whole migration. Indexes run `0`–`9`
-(`10.70.0.0/16`–`10.79.0.0/16`), which keeps clear of the AWS module's `10.60.0.0/16` block so
-onboarding both clouds does not overlap them either.
+(`10.70.0.0/16`–`10.79.0.0/16`). Each cloud has a block of its own — AWS `10.60`–`10.69`, Azure
+`10.70`–`10.79`, GCP `10.80`–`10.89` — so onboarding all three does not overlap them either.
 
 **Bringing your own IPAM?** Set `vnet_address_space` and the subnets follow it;
 `region_indexes` is then ignored and keeping the regions distinct is yours to do. Overriding an
 individual subnet still works too.
 
-> **The ARM template does not enforce any of this yet — a known gap.** Its `vnetCidr`,
-> `subnetCidr`, `gatewaySubnetCidr` and `governedSubnetCidr` are four independent parameters
-> with the fixed defaults in the table's first row: nothing derives them from each other,
-> nothing ties them to a location, and deploying it a second time in a second region on the
-> defaults succeeds and gives you two VNets that can never be peered. If you will ever run more
-> than one region, **use the Terraform module**, which refuses that. If you must use the ARM
-> template, set all four parameters per region from the table above, on the first apply —
-> getting it wrong is not fixable later.
+**The ARM template enforces the same allocation**, through a `regionIndex` parameter that has
+no default: the deployment is refused with `Missing input parameters: regionIndex` until you
+say which region this is, and the four CIDR parameters become overrides that derive from it
+when unset. The two paths produce byte-identical ranges for the same index, so the table above
+is the authority for both. An existing deployment keeps every range it has by passing
+`regionIndex=0`.
 
 Ringleader's proxy VMs are regional, so each region runs its own; nothing here requires the
 regions to be joined at all until you want one proxy to serve several. Global VNet peering

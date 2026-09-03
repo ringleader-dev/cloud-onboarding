@@ -51,7 +51,7 @@ override_data {
 # The default region for every run below; the runs that care override it.
 override_data {
   target = data.aws_region.current
-  values = { name = "us-east-1" }
+  values = { region = "us-east-1" }
 }
 
 # The whole point of the derivation: an operator who has been running this module since before
@@ -95,7 +95,7 @@ run "a_second_region_takes_the_next_16" {
 
   override_data {
     target = data.aws_region.current
-    values = { name = "eu-west-1" }
+    values = { region = "eu-west-1" }
   }
 
   assert {
@@ -179,7 +179,7 @@ run "an_unlisted_region_is_refused" {
 
   override_data {
     target = data.aws_region.current
-    values = { name = "eu-west-1" }
+    values = { region = "eu-west-1" }
   }
 
   expect_failures = [aws_vpc.workstations]
@@ -198,7 +198,7 @@ run "an_unlisted_region_is_allowed_when_vpc_cidr_is_explicit" {
 
   override_data {
     target = data.aws_region.current
-    values = { name = "eu-west-1" }
+    values = { region = "eu-west-1" }
   }
 
   assert {

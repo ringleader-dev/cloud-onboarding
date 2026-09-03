@@ -3,6 +3,18 @@ project_id            = "my-company-dev-workstations"
 ringleader_issuer_url = "https://oidc-app.ringleader.dev"
 org_uid               = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
 
+# The /16 this landing pad's subnets are carved out of. REQUIRED whenever create_network is on
+# -- there is no default, because a subnet's range is force-new and a module that guessed would
+# destroy the subnet your workstations are in.
+#
+#   10.80.0.0/16  a NEW landing pad. GCP's block is 10.80-10.89, clear of the AWS module's
+#                 10.60-10.69 and the Azure module's 10.70-10.79, so onboarding more than one
+#                 cloud does not leave you with networks that can never be joined.
+#   10.60.0.0/16  what this module created BEFORE it derived anything. Use this if you have
+#                 already applied on the old defaults: it reproduces every range byte for byte
+#                 and the apply is a no-op.
+network_cidr = "10.80.0.0/16"
+
 # EVERYTHING BELOW IS ON BY DEFAULT. Uncomment a line only to turn something off.
 # The root README has the full list: ../../../README.md
 
@@ -39,7 +51,7 @@ org_uid               = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
 # separate, documented opt-in; see gcp/README.md.
 # enable_egress_control = false
 
-# An empty subnet (10.60.240.0/24) reserved for the DNS / HTTPS proxy VM that hostname-level
+# An empty subnet (the 241st /24 of network_cidr) reserved for the DNS / HTTPS proxy VM that hostname-level
 # egress control will use. The VM does not exist yet; the subnet costs nothing and saves
 # renumbering later.
 # create_gateway_subnet = false
@@ -58,5 +70,5 @@ org_uid               = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
 # More regions in the SAME global VPC -- a GCP VPC is global, so this needs no peering and one
 # proxy VM can serve every region. Each also gets its own Cloud Router and Cloud NAT.
 # additional_regions = {
-#   "europe-west1" = "10.60.16.0/20"
+#   "europe-west1" = "10.80.16.0/20"
 # }

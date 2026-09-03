@@ -18,7 +18,7 @@ OIDC provider (or the role).
 | **IAM role** (`ringleader-workstations`) | assumed via `sts:AssumeRoleWithWebIdentity`; trust pins **both** `aud` and `sub` to your org; permissions cover only the EC2 workstation lifecycle + the SSM public-parameter read that resolves an AMI |
 | _optional_ **VPC + public subnet + internet gateway + security group** | a landing pad: egress out (so a workstation can come up), inbound SSH from the CIDRs you name, and — only if you ask — a secondary SSH port |
 
-The permissions policy is exactly these three statements — no wildcard on any action:
+The permissions policy's **base** is exactly these three statements — no wildcard on any action:
 
 - eleven named read-only actions: `ec2:DescribeInstances`, `DescribeInstanceStatus`,
   `DescribeInstanceTypes`, `DescribeImages`, `DescribeSubnets`,
@@ -26,10 +26,23 @@ The permissions policy is exactly these three statements — no wildcard on any 
   `DescribeNetworkInterfaces`, `DescribeTags`, `DescribeAvailabilityZones` — on `*`,
   because EC2 `Describe` actions have no resource-level scoping,
 - `ec2:RunInstances` / `TerminateInstances` / `StartInstances` / `StopInstances` /
-  `CreateTags` / `DeleteTags` — optionally bounded to one region via
-  `aws:RequestedRegion`,
+  `ModifyInstanceAttribute` / `CreateTags` / `DeleteTags` — optionally bounded to one region
+  via `aws:RequestedRegion`. `ModifyInstanceAttribute` is what a machine **resize** issues on
+  the stopped instance; the same API also sets user-data and IAM has no condition key telling
+  the two apart, but the role already holds `RunInstances`, which can launch an instance with
+  any user-data at all, so it widens nothing this grant did not already permit,
 - `ssm:GetParameters` / `GetParameter` on `arn:aws:ssm:*::parameter/aws/service/*` — the
   AWS-owned public AMI parameters.
+
+Two features that are **on by default** add statements beside those three, so a role applied on
+the defaults carries seven (Terraform) or six (CloudFormation), not three. Both are one variable
+away from off, and both are enumerated where they are described rather than here:
+*[egress control](#optional-egress-control)* adds the security-group, subnet and route-table
+writes, two security-group reads and `ec2:ModifyNetworkInterfaceAttribute`, bounded to your VPC
+and region; *workstation identities* (Terraform only) adds one `iam:PassRole`, bounded to roles
+under `workstation_identity_path` and to `ec2.amazonaws.com`. The `actions_granted` output is
+read from the same lists the policy is built from, so it is the authority on what your role
+actually holds.
 
 No `iam:*` unless you opt into per-workstation instance profiles (Terraform
 `enable_workstation_identities`, on by default and scoped to `iam:PassRole` under one
@@ -61,10 +74,15 @@ cd cloudformation
 ISSUER_URL=https://oidc-app.ringleader.dev \
 ORG_UID=<org-id> \
 REGION=us-east-1 \
+REGION_INDEX=0 \
 CREATE_NETWORK=true \
 SSH_SOURCE_CIDR=<your.office.ip/32> \
   ./deploy.sh
 ```
+
+`REGION_INDEX` is required whenever this creates a network — `0` for your first region, `1` for
+the next. It is the CloudFormation half of *[A second region](#a-second-region-name-it-do-not-renumber-it)*
+below, and `0` is the range this template has always created.
 
 `deploy.sh` computes the issuer TLS thumbprint, substitutes the one condition-key
 placeholder CloudFormation cannot parameterize, deploys the stack, and prints the
@@ -329,8 +347,8 @@ in step:
 Index `0` is what this module has always created, so an existing single-region landing pad
 plans as a **no-op** once you name its region at `0` — nothing is renumbered by adopting this,
 and the one-line addition is the whole migration. Indexes run `0`–`9`
-(`10.60.0.0/16`–`10.69.0.0/16`), which keeps clear of the Azure module's `10.70.0.0/16` block
-so onboarding both clouds does not overlap them either.
+(`10.60.0.0/16`–`10.69.0.0/16`). Each cloud has a block of its own — AWS `10.60`–`10.69`, Azure
+`10.70`–`10.79`, GCP `10.80`–`10.89` — so onboarding all three does not overlap them either.
 
 The two egress-control ranges sit at the top of the VPC on purpose: it keeps them together and
 leaves `subnet_cidr` free to grow from a `/20` to a `/17` without colliding with either.
@@ -339,14 +357,11 @@ leaves `subnet_cidr` free to grow from a `/20` to a `/17` without colliding with
 ignored and keeping the regions distinct is yours to do. Overriding an individual subnet still
 works too.
 
-> **The CloudFormation template does not enforce any of this yet — a known gap.** Its
-> `VpcCidr`, `SubnetCidr`, `GatewaySubnetCidr` and `GovernedSubnetCidr` are four independent
-> parameters with the fixed defaults in the table's first row: nothing derives them from each
-> other, nothing ties them to a region, and deploying the stack a second time in a second
-> region on the defaults succeeds and gives you two VPCs that can never be peered. If you will
-> ever run more than one region, **use the Terraform module**, which refuses that. If you must
-> use CloudFormation, set all four parameters per region from the table above, on the first
-> apply — getting it wrong is not fixable later.
+**The CloudFormation template enforces the same allocation**, through a `RegionIndex`
+parameter that has no default: `aws cloudformation deploy` fails naming it until you say which
+region this is, and the four CIDR parameters become overrides that derive from it when unset.
+The two paths produce byte-identical ranges for the same index, so the table above is the
+authority for both. An existing stack keeps every range it has by passing `RegionIndex=0`.
 
 Ringleader's proxy VMs are regional, so each region runs its own; nothing here requires the
 regions to be joined at all until you want one proxy to serve several.

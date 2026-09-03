@@ -70,13 +70,45 @@ Parameters:
       default; set false and supply your own subnet and security group instead. The VPC,
       subnet, gateway and security group are free -- the NAT gateway below is not.
 
+  # An AWS VPC is regional, so a second region is a second VPC and joining them later needs an
+  # inter-region Transit Gateway -- which cannot route overlapping ranges. Two regions deployed on
+  # one range can never be peered and the only remedy is to renumber and re-onboard, so the
+  # allocation has to be right on the FIRST deploy, when the answer is still free.
+  #
+  # Hence this parameter has NO Default. CloudFormation cannot tell a first deploy from a second
+  # one, and a default would hand the second region the first one's range without a word. Refusing
+  # to guess is the whole mechanism: `aws cloudformation deploy` fails naming RegionIndex until you
+  # say which region this is. Index 0 is 10.60.0.0/16, exactly what this template created before it
+  # derived anything, so an existing stack keeps every range it has by passing 0.
+  #
+  # The Terraform module enforces the same allocation through its region_indexes map; the two paths
+  # produce byte-identical ranges for the same index. See aws/README.md for the table.
+  RegionIndex:
+    Type: String
+    AllowedValues: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+    Description: >-
+      Which /16 this region's landing pad takes: the VPC gets 10.(60 + RegionIndex).0.0/16 and
+      every subnet below is carved out of it. It has no default, so CloudFormation requires it on
+      EVERY deploy -- pass 0 when CreateNetwork=false or when VpcCidr overrides the derivation, where
+      it allocates nothing. Give your first region 0 -- that is the range this template has always
+      created,
+      so an existing stack is unchanged -- and the next region 1. Never reuse an index: two regions
+      on one range can never be peered. Past ten regions, or on your own IPAM, set VpcCidr instead.
+
   VpcCidr:
     Type: String
-    Default: "10.60.0.0/16"
+    Default: ""
+    Description: >-
+      Optional override for the VPC range. Empty -- the default -- derives it from RegionIndex,
+      which is what keeps two regions apart. Set it to bring your own range, and then the three
+      subnets below follow it and keeping your regions distinct is yours to do.
 
   SubnetCidr:
     Type: String
-    Default: "10.60.0.0/20"
+    Default: ""
+    Description: >-
+      Optional override for the workstations subnet. Empty derives the first /20 of the VPC range
+      (10.60.0.0/20 at index 0), so there is no second value to keep in step when the VPC moves.
 
   SshSourceCidr:
     Type: String
@@ -144,10 +176,11 @@ Parameters:
 
   GatewaySubnetCidr:
     Type: String
-    Default: "10.60.240.0/24"
+    Default: ""
     Description: >-
-      CIDR for the gateway subnet. Must sit inside VpcCidr; the default sits well clear of
-      SubnetCidr so growing that subnet later does not collide.
+      Optional override for the gateway subnet. Empty derives the 241st /24 of the VPC range
+      (10.60.240.0/24 at index 0), which sits well clear of SubnetCidr so growing that subnet
+      later does not collide. Set it only to override, and then it must sit inside the VPC range.
 
   CreateGovernedSubnet:
     Type: String
@@ -165,14 +198,38 @@ Parameters:
 
   GovernedSubnetCidr:
     Type: String
-    Default: "10.60.224.0/20"
+    Default: ""
     Description: >-
-      CIDR for the governed subnet. Must sit inside VpcCidr; the default sits immediately below
-      GatewaySubnetCidr at the top of the VPC, so the two egress-control ranges stay together
-      and SubnetCidr is free to grow.
+      Optional override for the governed subnet. Empty derives the 15th /20 of the VPC range
+      (10.60.224.0/20 at index 0), immediately below GatewaySubnetCidr at the top of the VPC, so
+      the two egress-control ranges stay together and SubnetCidr is free to grow. Set it only to
+      override, and then it must sit inside the VPC range.
+
+Mappings:
+  # The /16 each index takes. Written out rather than computed, because a reader deciding which
+  # index to give a new region should be able to see the range they are choosing. Indexes stop at
+  # 9 so this block stays clear of the Azure module's 10.70.0.0/16-10.79.0.0/16 and the GCP
+  # module's 10.80.0.0/16-10.89.0.0/16; onboarding all three clouds then overlaps nothing.
+  RegionCidrs:
+    "0": { Vpc: "10.60.0.0/16" }
+    "1": { Vpc: "10.61.0.0/16" }
+    "2": { Vpc: "10.62.0.0/16" }
+    "3": { Vpc: "10.63.0.0/16" }
+    "4": { Vpc: "10.64.0.0/16" }
+    "5": { Vpc: "10.65.0.0/16" }
+    "6": { Vpc: "10.66.0.0/16" }
+    "7": { Vpc: "10.67.0.0/16" }
+    "8": { Vpc: "10.68.0.0/16" }
+    "9": { Vpc: "10.69.0.0/16" }
 
 Conditions:
   HasRegionCondition: !Not [!Equals [!Ref AllowedRegion, ""]]
+  # An empty CIDR parameter means "derive it"; a non-empty one is an override that wins. There is
+  # no `Fn::Coalesce`, so each one needs its own condition.
+  HasVpcCidr: !Not [!Equals [!Ref VpcCidr, ""]]
+  HasSubnetCidr: !Not [!Equals [!Ref SubnetCidr, ""]]
+  HasGatewaySubnetCidr: !Not [!Equals [!Ref GatewaySubnetCidr, ""]]
+  HasGovernedSubnetCidr: !Not [!Equals [!Ref GovernedSubnetCidr, ""]]
   WantNetwork: !Equals [!Ref CreateNetwork, "true"]
   WantSsh: !And
     - !Condition WantNetwork
@@ -245,6 +302,10 @@ Resources:
                   - "ec2:DescribeTags"
                   - "ec2:DescribeAvailabilityZones"
                 Resource: "*"
+              # ModifyInstanceAttribute is what a machine RESIZE issues, on the stopped instance --
+              # without it that cycle ends in UnauthorizedOperation and the workstation rests
+              # stopped. The same API also sets user-data and IAM cannot tell the two apart, but the
+              # role already holds RunInstances, so it widens nothing this grant did not permit.
               - Sid: Ec2Lifecycle
                 Effect: Allow
                 Action:
@@ -252,6 +313,7 @@ Resources:
                   - "ec2:TerminateInstances"
                   - "ec2:StartInstances"
                   - "ec2:StopInstances"
+                  - "ec2:ModifyInstanceAttribute"
                   - "ec2:CreateTags"
                   - "ec2:DeleteTags"
                 Resource: "*"
@@ -371,7 +433,10 @@ Resources:
     Type: AWS::EC2::VPC
     Condition: WantNetwork
     Properties:
-      CidrBlock: !Ref VpcCidr
+      CidrBlock: !If
+        - HasVpcCidr
+        - !Ref VpcCidr
+        - !FindInMap [RegionCidrs, !Ref RegionIndex, Vpc]
       EnableDnsSupport: true
       EnableDnsHostnames: true
       Tags: [{ Key: Name, Value: ringleader-workstations }]
@@ -394,7 +459,20 @@ Resources:
     Condition: WantNetwork
     Properties:
       VpcId: !Ref Vpc
-      CidrBlock: !Ref SubnetCidr
+      # The first /20 of the VPC range, unless overridden. Derived rather than defaulted so
+      # that moving the VPC moves every subnet with it -- there is no second literal to forget.
+      CidrBlock: !If
+        - HasSubnetCidr
+        - !Ref SubnetCidr
+        - !Select
+          - 0
+          - !Cidr
+            - !If
+              - HasVpcCidr
+              - !Ref VpcCidr
+              - !FindInMap [RegionCidrs, !Ref RegionIndex, Vpc]
+            - 16
+            - 12
       MapPublicIpOnLaunch: true
       Tags: [{ Key: Name, Value: ringleader-workstations }]
 
@@ -476,7 +554,19 @@ Resources:
     Condition: WantGatewaySubnet
     Properties:
       VpcId: !Ref Vpc
-      CidrBlock: !Ref GatewaySubnetCidr
+      # The 241st /24 of the VPC range, unless overridden.
+      CidrBlock: !If
+        - HasGatewaySubnetCidr
+        - !Ref GatewaySubnetCidr
+        - !Select
+          - 240
+          - !Cidr
+            - !If
+              - HasVpcCidr
+              - !Ref VpcCidr
+              - !FindInMap [RegionCidrs, !Ref RegionIndex, Vpc]
+            - 256
+            - 8
       AvailabilityZone: !GetAtt Subnet.AvailabilityZone
       MapPublicIpOnLaunch: true
       Tags: [{ Key: Name, Value: ringleader-gateway }]
@@ -529,7 +619,19 @@ Resources:
     Condition: WantGovernedSubnet
     Properties:
       VpcId: !Ref Vpc
-      CidrBlock: !Ref GovernedSubnetCidr
+      # The 15th /20 of the VPC range, unless overridden -- immediately below the gateway /24.
+      CidrBlock: !If
+        - HasGovernedSubnetCidr
+        - !Ref GovernedSubnetCidr
+        - !Select
+          - 14
+          - !Cidr
+            - !If
+              - HasVpcCidr
+              - !Ref VpcCidr
+              - !FindInMap [RegionCidrs, !Ref RegionIndex, Vpc]
+            - 16
+            - 12
       AvailabilityZone: !GetAtt Subnet.AvailabilityZone
       MapPublicIpOnLaunch: false
       Tags: [{ Key: Name, Value: ringleader-governed }]
