@@ -1,11 +1,11 @@
 output "target_app_client_id" {
-  value       = azuread_application.workstations.client_id
-  description = "Hand back to Ringleader: the app client id it authenticates as (the target principal)."
+  value       = local.target_client_id
+  description = "Hand back to Ringleader: the app client id it authenticates as (the target principal). With create_identity = false this echoes the id you passed in, so every region reports the ONE identity Ringleader uses."
 }
 
 output "service_principal_object_id" {
-  value       = azuread_service_principal.workstations.object_id
-  description = "The service principal's object id (used for the role assignment; informational)."
+  value       = local.principal_object_id
+  description = "The service principal's object id, which the role assignment names. Record it: it is what a SECOND region passes as existing_principal_object_id."
 }
 
 output "subscription_id" {
@@ -68,7 +68,7 @@ output "role_extras_granted" {
 output "handoff" {
   description = "Everything to hand back to Ringleader, in one place. Add your tenant id (az account show --query tenantId -o tsv)."
   value = {
-    target_app_client_id = azuread_application.workstations.client_id
+    target_app_client_id = local.target_client_id
     subscription_id      = var.subscription_id
     resource_group_name  = var.resource_group_name
     subnet_id            = var.create_network ? azurerm_subnet.workstations[0].id : null

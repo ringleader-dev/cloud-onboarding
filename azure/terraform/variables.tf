@@ -41,6 +41,52 @@ variable "app_display_name" {
   description = "Display name for the Entra app registration Ringleader authenticates as."
 }
 
+# --- One identity across several regions -------------------------------------
+#
+# An app registration is a tenant-wide object; the custom role is scoped to one resource group. So
+# the FIRST region creates the identity and every region after it reuses that one, deploying only
+# the role and the landing pad into its own group.
+
+variable "create_identity" {
+  type        = bool
+  default     = true
+  description = <<-EOT
+    Create the Entra app registration, service principal and federated credential. True -- the
+    default -- is the first (or only) region. Set it FALSE in every later region and pass
+    existing_client_id and existing_principal_object_id from the first one's outputs: that apply
+    grants the role in ITS OWN resource group to the identity you already handed Ringleader,
+    instead of minting a second one you would have to hand back as well.
+  EOT
+}
+
+variable "existing_client_id" {
+  type        = string
+  default     = null
+  description = <<-EOT
+    The first region's target_app_client_id, when create_identity is false. Ignored otherwise.
+  EOT
+}
+
+variable "existing_principal_object_id" {
+  type        = string
+  default     = null
+  description = <<-EOT
+    The first region's service_principal_object_id, when create_identity is false. This is what the
+    role assignment names, so a wrong value grants the role to the wrong principal -- take it from
+    `terraform output service_principal_object_id` in the region that created the identity, not from
+    the portal's app-registration blade (which shows the APPLICATION object id, a different value).
+    Ignored when create_identity is true.
+  EOT
+
+  validation {
+    # Refuse the half-configured pair at plan time. Reusing an identity needs BOTH ids, and a null
+    # object id would otherwise reach the role deployment and fail deep inside ARM with a message
+    # naming neither variable.
+    condition     = var.create_identity || (var.existing_client_id != null && var.existing_principal_object_id != null)
+    error_message = "create_identity = false needs both existing_client_id and existing_principal_object_id, from the first region's outputs."
+  }
+}
+
 variable "role_name" {
   type        = string
   default     = "Ringleader Workstation Operator"

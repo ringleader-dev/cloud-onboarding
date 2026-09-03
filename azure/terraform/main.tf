@@ -33,24 +33,51 @@ locals {
 }
 
 # The identity Ringleader authenticates as.
+#
+# ONE identity serves every region, and that is why these three resources are switchable. An app
+# registration is a TENANT-wide Microsoft Graph object with no region and no resource group, while
+# the custom role below is scoped to ONE resource group -- so a second region applied with the
+# defaults would mint a SECOND app registration, with its own client id and therefore its own
+# `CloudIdentity` to hand back, while neither identity could act in the other's group. Set
+# `create_identity = false` in every region after the first and pass the first one's ids: that apply
+# then deploys the role and the landing pad into its own group and grants them to the identity you
+# already have. See ../README.md#a-second-region-name-it-do-not-renumber-it.
+#
+# Applying twice into ONE resource group is not the way around it. It collides on the role
+# deployment below, whose name is a fixed literal, and it would still mint the second app -- nothing
+# about an app registration is scoped by group or location.
 resource "azuread_application" "workstations" {
+  count            = var.create_identity ? 1 : 0
   display_name     = var.app_display_name
   sign_in_audience = "AzureADMyOrg"
 }
 
 resource "azuread_service_principal" "workstations" {
-  client_id = azuread_application.workstations.client_id
+  count     = var.create_identity ? 1 : 0
+  client_id = azuread_application.workstations[0].client_id
 }
 
 # The federation trust: Ringleader presents a signed token whose sub is your org, and this
 # credential trusts only that (issuer, subject, audience) triple.
+#
+# It belongs to the APPLICATION, not to any region, so a `create_identity = false` apply must not
+# author a second one -- the credential the first region created is the one that is already trusted.
 resource "azuread_application_federated_identity_credential" "ringleader" {
-  application_id = azuread_application.workstations.id
+  count          = var.create_identity ? 1 : 0
+  application_id = azuread_application.workstations[0].id
   display_name   = "ringleader-oidc"
   description    = "Ringleader OIDC federation for org ${var.org_uid}."
   issuer         = local.issuer
   subject        = local.subject
   audiences      = [local.audience]
+}
+
+locals {
+  # Whichever identity this apply is granting the role to: the one it just created, or the one an
+  # earlier region created and the operator named. Every reference below goes through these two, so
+  # there is no path that reads the created resource directly and breaks in the reusing mode.
+  target_client_id    = var.create_identity ? azuread_application.workstations[0].client_id : var.existing_client_id
+  principal_object_id = var.create_identity ? azuread_service_principal.workstations[0].object_id : var.existing_principal_object_id
 }
 
 # The custom least-privilege role and its assignment, deployed from the shared ARM template
@@ -92,7 +119,7 @@ resource "azurerm_resource_group_template_deployment" "role" {
   template_content = file("${path.module}/../arm/azuredeploy.json")
 
   parameters_content = jsonencode({
-    principalId                 = { value = azuread_service_principal.workstations.object_id }
+    principalId                 = { value = local.principal_object_id }
     roleName                    = { value = var.role_name }
     enableWorkstationIdentities = { value = var.enable_workstation_identities }
     enableEgressControl         = { value = var.enable_egress_control }

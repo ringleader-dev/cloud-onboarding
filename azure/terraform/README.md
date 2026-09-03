@@ -18,6 +18,9 @@ Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standal
 | `ringleader_issuer_url` | — (required) | Ringleader's issuer origin, e.g. `https://oidc-app.ringleader.dev` (no trailing slash). |
 | `org_uid` | — (required) | Your Ringleader organization id (RFC-4122 UUID). |
 | `app_display_name` | `ringleader-workstations` | Entra app display name. |
+| `create_identity` | **`true`** | Create the Entra app registration, service principal and federated credential. The FIRST region does; set it **`false`** in every region after it and pass the two ids below, so all of them grant the role to the ONE identity Ringleader authenticates as. An app registration is tenant-wide while the role is scoped to a resource group, so a second region left on the default mints a second client id you would have to hand back as well — and neither identity could act in the other's group. See [azure/README.md](../README.md#a-second-region-name-it-do-not-renumber-it). |
+| `existing_client_id` | `null` | The first region's `target_app_client_id`, required when `create_identity = false`. |
+| `existing_principal_object_id` | `null` | The first region's `service_principal_object_id` — what the role assignment names. Required when `create_identity = false`; the plan refuses the pair half-set. |
 | `role_name` | `Ringleader Workstation Operator` | Custom role name. |
 | `enable_workstation_identities` | **`true`** | Let Ringleader provision a per-user managed identity and assign roles to it. Adds `Microsoft.ManagedIdentity` CRUD/assign + `Microsoft.Authorization/roleAssignments/write`, which built-in Contributor does not carry either — still scoped to this one resource group. |
 | `create_network` | **`true`** | Create a vnet + subnet + NAT gateway + NSG (egress out; inbound only via `ssh_source_ranges`). On Azure a workstation has no public IP unless you ask, so without this it has no egress. The NAT gateway and its public IP bill per hour. |

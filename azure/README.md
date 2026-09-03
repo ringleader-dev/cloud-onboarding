@@ -355,6 +355,51 @@ when unset. The two paths produce byte-identical ranges for the same index, so t
 is the authority for both. An existing deployment keeps every range it has by passing
 `regionIndex=0`.
 
+### …and reuse the identity, do not mint a second one
+
+The ranges are only half of a second region. The other half is the **identity**, and the default
+is wrong for every region after the first.
+
+An Entra **app registration is tenant-wide** — it has no region and no resource group — while the
+custom role this module deploys is scoped to **one** resource group. So a second apply left on the
+defaults gives you a second app registration, with its own client id and therefore a second
+identity to hand Ringleader, and *neither* of them can act in the other's resource group. Ringleader
+uses one credential per namespace for its gateways, so the second one has nowhere to go.
+
+Set `create_identity = false` in every region after the first and pass the first one's two ids:
+
+```hcl
+create_identity              = false
+existing_client_id           = "…"   # first region: terraform output target_app_client_id
+existing_principal_object_id = "…"   # first region: terraform output service_principal_object_id
+```
+
+That apply creates no app, no service principal and no federated credential. It deploys the custom
+role into **its own** resource group and assigns it to the identity you already have, plus that
+region's landing pad. `terraform destroy` in that region then removes that region's grant and
+leaves the identity — which is what you want, because another region is still using it.
+
+**Applying twice into one resource group is not a way around this.** It collides on the role
+deployment, whose name is the fixed literal `ringleader-onboarding`, and it would mint the second
+app anyway: nothing about an app registration is scoped by group or by location, so the identity
+problem is untouched by where you point the apply.
+
+**Already applied twice and have two identities?** Nothing needs rebuilding — grant the first
+region's principal the second region's role, and hand Ringleader back only the first client id:
+
+```bash
+# ids from the FIRST region's outputs, and the role/RG from the SECOND
+az role assignment create \
+  --assignee-object-id "$(terraform output -raw service_principal_object_id)" \
+  --assignee-principal-type ServicePrincipal \
+  --role "Ringleader Workstation Operator" \
+  --scope "/subscriptions/<subscription-id>/resourceGroups/<second-region-rg>"
+```
+
+Then set `create_identity = false` in that region's tfvars before the next apply, so Terraform
+stops managing the app it created and does not delete the assignment you just made. The second app
+registration is then unused and can be deleted once nothing references it.
+
 Ringleader's proxy VMs are regional, so each region runs its own; nothing here requires the
 regions to be joined at all until you want one proxy to serve several. Global VNet peering
 also charges for cross-region transfer, which is a second reason to keep a proxy local.
