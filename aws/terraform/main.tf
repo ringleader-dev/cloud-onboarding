@@ -218,7 +218,7 @@ data "aws_iam_policy_document" "trust" {
     }
 
     condition {
-      test     = "StringEquals"
+      test     = "StringLike"
       variable = "${local.oidc_condition_prefix}:sub"
       values   = [local.subject]
     }
