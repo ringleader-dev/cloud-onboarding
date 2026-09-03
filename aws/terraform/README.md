@@ -84,8 +84,17 @@ GovCloud (`aws-us-gov`) and China (`aws-cn`). The CloudFormation template uses
 
 ## Providers
 
-`hashicorp/aws >= 5.0` and `hashicorp/tls >= 4.0` (the `tls` provider reads the issuer's
+`hashicorp/aws >= 6.0` and `hashicorp/tls >= 4.0` (the `tls` provider reads the issuer's
 chain to populate the OIDC provider thumbprint automatically).
+
+The **aws floor is 6.0**, and it is one attribute that puts it there. This module has to learn
+the region it is being applied in — that is what binds an entry in `region_indexes` to a region
+rather than to whichever `tfvars` file was reached for — and in v6 the only spelling of that
+which is not deprecated is `data.aws_region.current.region`. `name` and `id` are both deprecated
+there and will be removed; `region` does not exist in v5 at all, and referencing it is a schema
+error rather than something `try()` can rescue. There is no spelling clean on both majors, so
+the floor is what picks one. If your root configuration pins `aws ~> 5.0`, raise it before
+adopting this module.
 
 ## Revoke
 

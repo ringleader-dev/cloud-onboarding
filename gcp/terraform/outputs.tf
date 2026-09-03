@@ -13,6 +13,16 @@ output "project_id" {
   description = "Hand back to Ringleader: the project your workstations run in."
 }
 
+output "network_cidr" {
+  value       = var.create_network ? local.network_cidr : null
+  description = "The /16 every subnet below is carved out of. Read it back and confirm it is the block you meant: GCP's is 10.80-10.89, and a landing pad that predates the derivation keeps 10.60.0.0/16 by declaring it."
+}
+
+output "subnet_cidr" {
+  value       = var.create_network ? local.subnet_cidr : null
+  description = "The workstations subnet's range -- the first /20 of network_cidr unless overridden."
+}
+
 output "subnetwork_self_link" {
   value       = var.create_network ? google_compute_subnetwork.workstations[0].self_link : null
   description = "Hand back to Ringleader (only when create_network = true; otherwise supply your own subnet)."
@@ -29,7 +39,7 @@ output "gateway_subnetwork_self_link" {
 }
 
 output "gateway_subnet_cidr" {
-  value       = var.create_network && var.create_gateway_subnet ? var.gateway_subnet_cidr : null
+  value       = var.create_network && var.create_gateway_subnet ? local.gateway_subnet_cidr : null
   description = "The gateway subnet's range. This is what an egress allowlist names to let workstations reach the proxy, so it is worth recording."
 }
 
@@ -39,7 +49,7 @@ output "governed_subnetwork_self_link" {
 }
 
 output "governed_subnet_cidr" {
-  value       = var.create_network && var.create_governed_subnet ? var.governed_subnet_cidr : null
+  value       = var.create_network && var.create_governed_subnet ? local.governed_subnet_cidr : null
   description = "The governed subnet's range, if you created one."
 }
 

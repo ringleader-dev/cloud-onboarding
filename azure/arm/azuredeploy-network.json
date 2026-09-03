@@ -19,18 +19,36 @@
         "description": "Region for the landing pad. Defaults to the resource group's."
       }
     },
+    "regionIndex": {
+      "type": "int",
+      "allowedValues": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "metadata": {
+        "description": "Which /16 this region's landing pad takes: the VNet gets 10.(70 + regionIndex).0.0/16 and every subnet below is carved out of it. REQUIRED -- there is deliberately no default, because nothing here can tell a first region from a second and a default would hand the second one the first one's range in silence. An Azure VNet is regional, so a second region is a second VNet, and two VNets on one range can never be peered; the only remedy is to renumber and re-onboard. Give your FIRST region 0 -- that is 10.70.0.0/16, the range this template has always created, so an existing deployment is unchanged -- and the next region 1. Never reuse an index. Past ten regions, or on your own IPAM, set vnetCidr instead."
+      }
+    },
     "vnetCidr": {
       "type": "String",
-      "defaultValue": "10.70.0.0/16",
+      "defaultValue": "",
       "metadata": {
-        "description": "Address space for the vnet."
+        "description": "Optional override for the VNet address space. Empty -- the default -- derives it from regionIndex, which is what keeps two regions apart. Set it to bring your own range, and then the three subnets below follow it and keeping your regions distinct is yours to do."
       }
     },
     "subnetCidr": {
       "type": "String",
-      "defaultValue": "10.70.1.0/24",
+      "defaultValue": "",
       "metadata": {
-        "description": "Prefix for the workstations subnet."
+        "description": "Optional override for the workstations subnet. Empty derives the second /24 of the VNet range (10.70.1.0/24 at index 0), so there is no second value to keep in step when the VNet moves."
       }
     },
     "sshSourceCidr": {
@@ -56,9 +74,9 @@
     },
     "gatewaySubnetCidr": {
       "type": "String",
-      "defaultValue": "10.70.240.0/24",
+      "defaultValue": "",
       "metadata": {
-        "description": "Prefix for the gateway subnet. Must sit inside vnetCidr, and the default sits well clear of the workstations subnet so growing that one later does not collide."
+        "description": "Optional override for the gateway subnet. Empty derives the 241st /24 of the VNet range (10.70.240.0/24 at index 0), which sits well clear of the workstations subnet so growing that one later does not collide. Set it only to override, and then it must sit inside the VNet range."
       }
     },
     "createGovernedSubnet": {
@@ -70,13 +88,29 @@
     },
     "governedSubnetCidr": {
       "type": "String",
-      "defaultValue": "10.70.224.0/20",
+      "defaultValue": "",
       "metadata": {
-        "description": "Prefix for the governed subnet. Must sit inside vnetCidr; the default sits immediately below gatewaySubnetCidr at the top of the VNet, so the two egress-control ranges stay together and the workstations prefix is free to grow."
+        "description": "Optional override for the governed subnet. Empty derives the 15th /20 of the VNet range (10.70.224.0/20 at index 0), immediately below the gateway /24 at the top of the VNet, so the two egress-control ranges stay together and the workstations prefix is free to grow. Set it only to override, and then it must sit inside the VNet range."
       }
     }
   },
   "variables": {
+    "regionCidrs": [
+      "10.70.0.0/16",
+      "10.71.0.0/16",
+      "10.72.0.0/16",
+      "10.73.0.0/16",
+      "10.74.0.0/16",
+      "10.75.0.0/16",
+      "10.76.0.0/16",
+      "10.77.0.0/16",
+      "10.78.0.0/16",
+      "10.79.0.0/16"
+    ],
+    "vnetAddressSpace": "[if(empty(parameters('vnetCidr')), variables('regionCidrs')[parameters('regionIndex')], parameters('vnetCidr'))]",
+    "subnetPrefix": "[if(empty(parameters('subnetCidr')), cidrSubnet(variables('vnetAddressSpace'), 24, 1), parameters('subnetCidr'))]",
+    "gatewaySubnetPrefix": "[if(empty(parameters('gatewaySubnetCidr')), cidrSubnet(variables('vnetAddressSpace'), 24, 240), parameters('gatewaySubnetCidr'))]",
+    "governedSubnetPrefix": "[if(empty(parameters('governedSubnetCidr')), cidrSubnet(variables('vnetAddressSpace'), 20, 14), parameters('governedSubnetCidr'))]",
     "vnetName": "[concat(parameters('namePrefix'), '-vnet')]",
     "nsgName": "[concat(parameters('namePrefix'), '-workstations-nsg')]",
     "natName": "[concat(parameters('namePrefix'), '-nat')]",
@@ -119,7 +153,7 @@
       {
         "name": "[variables('subnetName')]",
         "properties": {
-          "addressPrefix": "[parameters('subnetCidr')]",
+          "addressPrefix": "[variables('subnetPrefix')]",
           "networkSecurityGroup": {
             "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
           },
@@ -133,7 +167,7 @@
       {
         "name": "[variables('gatewaySubnetName')]",
         "properties": {
-          "addressPrefix": "[parameters('gatewaySubnetCidr')]",
+          "addressPrefix": "[variables('gatewaySubnetPrefix')]",
           "natGateway": {
             "id": "[resourceId('Microsoft.Network/natGateways', variables('natName'))]"
           }
@@ -144,7 +178,7 @@
       {
         "name": "[variables('governedSubnetName')]",
         "properties": {
-          "addressPrefix": "[parameters('governedSubnetCidr')]",
+          "addressPrefix": "[variables('governedSubnetPrefix')]",
           "defaultOutboundAccess": false,
           "networkSecurityGroup": {
             "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
@@ -207,7 +241,7 @@
       "properties": {
         "addressSpace": {
           "addressPrefixes": [
-            "[parameters('vnetCidr')]"
+            "[variables('vnetAddressSpace')]"
           ]
         },
         "subnets": "[variables('effectiveSubnets')]"

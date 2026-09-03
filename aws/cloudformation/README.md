@@ -10,12 +10,22 @@ deploy` with every org-specific value derived for you.
 ISSUER_URL=https://oidc-app.ringleader.dev \
 ORG_UID=<org-id> \
 REGION=us-east-1 \
+REGION_INDEX=0 \
 CREATE_NETWORK=true \
 SSH_SOURCE_CIDR=<your.ip/32> \
   ./deploy.sh
 ```
 
-Env vars: `ISSUER_URL`, `ORG_UID` (required); `REGION` (default `us-east-1`), `STACK_NAME`
+`REGION_INDEX` is **required** whenever this creates a network, and picks which `/16` the
+landing pad takes: the VPC gets `10.(60 + REGION_INDEX).0.0/16` and every subnet is carved out
+of it. Give your first region `0` — that is `10.60.0.0/16`, the range this template has always
+created, so an existing stack is unchanged — and the next region `1`. There is no default on
+purpose: an AWS VPC is regional, two VPCs on one range can never be peered, and nothing here
+can tell a first region from a second, so guessing would hand the second one the first one's
+range in silence. See [`../README.md`](../README.md#a-second-region-name-it-do-not-renumber-it).
+
+Env vars: `ISSUER_URL`, `ORG_UID` (required); `REGION_INDEX` (required with a network);
+`REGION` (default `us-east-1`), `STACK_NAME`
 (`ringleader-onboarding`), `ROLE_NAME` (`ringleader-workstations`), `CREATE_NETWORK`
 (`true`), `SSH_SOURCE_CIDR` (empty), `SECONDARY_SSH_SOURCE_CIDR` (mirrors `SSH_SOURCE_CIDR`),
 `ALLOWED_REGION` (default `$REGION`), plus the five in *Parameters* below.
@@ -42,13 +52,15 @@ sed -i "s|__OIDC_PROVIDER__|oidc-app.ringleader.dev/org/<org-id>|g" ringleader-o
 ## Parameters (when deploying by hand)
 
 `IssuerUrl` = `<issuer>/org/<org-id>`, `Audience` = `<IssuerUrl>/aws`, `Subject` = `org:<org-id>`,
-`Thumbprint`, `RoleName`, `AllowedRegion`, `CreateNetwork`, `VpcCidr`, `SubnetCidr`,
-`SshSourceCidr`, `SecondarySshSourceCidr`.
+`Thumbprint`, `RoleName`, `AllowedRegion`, `CreateNetwork`, `RegionIndex` (no default —
+required when `CreateNetwork=true`), `VpcCidr` and `SubnetCidr` (both empty — overrides,
+derived from `RegionIndex` when unset), `SshSourceCidr`, `SecondarySshSourceCidr`.
 
 Egress control and the two egress-control subnets add seven more: `EnableEgressControl`
 (`true`), `EgressVpcId` (empty — uses the VPC this stack creates), `CreateNatGateway` (`true`),
-`CreateGatewaySubnet` (`true`), `GatewaySubnetCidr` (`10.60.240.0/24`), `CreateGovernedSubnet`
-(`true`) and `GovernedSubnetCidr` (`10.60.224.0/20`). `deploy.sh` exposes them as
+`CreateGatewaySubnet` (`true`), `GatewaySubnetCidr` (empty — an override; unset it derives the
+241st `/24` of the VPC range), `CreateGovernedSubnet` (`true`) and `GovernedSubnetCidr` (empty —
+likewise the 15th `/20`). `deploy.sh` exposes them as
 `EGRESS_CONTROL`, `EGRESS_VPC_ID`, `CREATE_NAT_GATEWAY`, `CREATE_GATEWAY_SUBNET`,
 `GATEWAY_SUBNET_CIDR`, `CREATE_GOVERNED_SUBNET` and `GOVERNED_SUBNET_CIDR`;
 [`../README.md`](../README.md#optional-egress-control) explains what

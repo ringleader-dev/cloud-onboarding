@@ -223,10 +223,52 @@ variable "region" {
   description = "Region for the optional network landing pad's first subnet, its Cloud Router and its Cloud NAT."
 }
 
+variable "network_cidr" {
+  type        = string
+  default     = null
+  description = <<-EOT
+    The /16 this landing pad's subnets are carved out of. REQUIRED whenever create_network is
+    set, and there is deliberately no default:
+
+      network_cidr = "10.80.0.0/16"   # a NEW landing pad -- GCP's own block
+      network_cidr = "10.60.0.0/16"   # what this module created BEFORE it derived anything
+
+    Pick the second if you have already applied this module on its defaults. It reproduces
+    every range you have byte for byte, and the apply is a no-op.
+
+    Why you are being asked. The three subnet ranges below used to default into 10.60.x, which
+    is the block the AWS module allocates -- so a customer onboarding both clouds on the
+    documented happy path held two networks that overlap, and could never join them with a VPN
+    or an interconnect. Each cloud now has a block of its own: AWS 10.60-10.69, Azure
+    10.70-10.79, GCP 10.80-10.89.
+
+    Moving the default silently was not an option. A subnet's ip_cidr_range is force-new, so a
+    module that quietly renumbered would DESTROY the subnet every existing workstation sits in,
+    and Terraform cannot tell a first apply from a hundredth. Refusing to guess is the only
+    shape that is safe in both directions -- which is what the AWS and Azure modules do with
+    their region_indexes maps, for the same reason.
+
+    One /16 is enough for every region: a GCP VPC is GLOBAL and its subnets are regional, so
+    every region joins this one network (see additional_regions). The rest of the 10.80-10.89
+    block is yours for a second project or a second org.
+  EOT
+
+  validation {
+    condition     = var.network_cidr == null || can(cidrhost(var.network_cidr, 0))
+    error_message = "network_cidr must be a CIDR block, e.g. 10.80.0.0/16."
+  }
+}
+
 variable "subnet_cidr" {
   type        = string
-  default     = "10.60.0.0/20"
-  description = "Primary IP range for the optional workstations subnet."
+  default     = null
+  description = <<-EOT
+    Primary IP range for the optional workstations subnet.
+
+    Unset -- the default -- takes the first /20 of network_cidr, which is 10.80.0.0/20 on a new
+    landing pad and 10.60.0.0/20 for anyone who set network_cidr to the range they already had.
+    It follows network_cidr wherever you move it, so there is no second value to keep in step.
+  EOT
 }
 
 variable "additional_regions" {
@@ -235,13 +277,17 @@ variable "additional_regions" {
   description = <<-EOT
     Extra regions to place workstations in, as region => subnet CIDR, e.g.
 
-      { "europe-west1" = "10.60.16.0/20", "asia-southeast1" = "10.60.32.0/20" }
+      { "europe-west1" = "10.80.16.0/20", "asia-southeast1" = "10.80.32.0/20" }
 
     A GCP VPC is global and its subnets are regional, so these join the same VPC as the
     primary subnet and reach it on internal addresses with no peering -- which is why
     multi-region is cheap here and expensive on AWS and Azure. Ranges must not overlap; GCP
     refuses an overlapping subnet, so a mistake fails the apply rather than breaking routing
     later.
+
+    These are yours to allocate: nothing derives them from network_cidr, so keep them inside
+    whichever /16 you gave it (the example above assumes 10.80.0.0/16) and clear of the gateway
+    and governed ranges at the top of it.
 
     Each region also gets its own Cloud Router and Cloud NAT, because both are regional and a
     subnet without them comes up unable to reach the Ringleader control plane.
@@ -269,10 +315,13 @@ variable "create_gateway_subnet" {
 
 variable "gateway_subnet_cidr" {
   type        = string
-  default     = "10.60.240.0/24"
+  default     = null
   description = <<-EOT
-    IP range for the gateway subnet, when create_gateway_subnet is set. The default sits well
-    clear of the workstations range so growing that subnet later does not collide.
+    IP range for the gateway subnet, when create_gateway_subnet is set.
+
+    Unset -- the default -- takes the 241st /24 of network_cidr (10.80.240.0/24 on a new landing
+    pad), which sits well clear of the workstations range so growing that subnet later does not
+    collide. It follows network_cidr wherever you move it. Set it only to override.
   EOT
 }
 
@@ -299,11 +348,13 @@ variable "create_governed_subnet" {
 
 variable "governed_subnet_cidr" {
   type        = string
-  default     = "10.60.224.0/20"
+  default     = null
   description = <<-EOT
-    IP range for the governed subnet, when create_governed_subnet is set. The default sits
-    immediately below the gateway subnet, which groups the two egress-control ranges together
-    and leaves the workstations range free to grow. Keep it clear of every entry in
-    additional_regions.
+    IP range for the governed subnet, when create_governed_subnet is set.
+
+    Unset -- the default -- takes the 15th /20 of network_cidr (10.80.224.0/20 on a new landing
+    pad), immediately below the gateway subnet, which groups the two egress-control ranges
+    together and leaves the workstations range free to grow. Set it only to override, and keep
+    it clear of every entry in additional_regions.
   EOT
 }
