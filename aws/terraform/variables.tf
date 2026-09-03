@@ -316,10 +316,11 @@ variable "create_gateway_subnet" {
     Reserve a subnet for the DNS / HTTPS proxy VM that Ringleader's hostname-level egress
     control will use. On by default; set false to opt out. Needs create_network.
 
-    The VM itself is not built yet and this creates nothing but an empty subnet and its route
-    table, neither of which AWS bills for. Carving the range now means the security-group
-    rules that permit workstation -> proxy traffic can name one stable range instead of one
-    instance's address, and saves renumbering later.
+    This creates nothing but an empty subnet and its route table, neither of which AWS bills
+    for; Ringleader builds the VM itself once you declare an EgressGateway naming this subnet
+    as spec.subnet. Carving the range now means the security-group rules that permit
+    workstation -> proxy traffic can name one stable range instead of one instance's address,
+    and saves renumbering later.
 
     It is public, routed through the internet gateway, and shares the workstations subnet's
     availability zone. Both are cost decisions: internet ingress is free, so a proxy with its

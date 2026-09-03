@@ -261,6 +261,12 @@ subnet shares the landing pad's NAT gateway, so the proxy gets upstream egress w
 public IP. No NSG is attached: Azure's defaults already allow intra-VNet traffic and deny
 inbound from the internet, which is the right posture for a proxy.
 
+**Hand its id back as `spec.subnet` on the `EgressGateway`.** It is `gateway_subnet_id` in the
+handoff, and Ringleader builds no gateway VM until it has one: a route table attaches per
+subnet and replaces the default route of everything in it, so a proxy sitting in a subnet it
+steers would route its own egress into itself and black-hole every workstation it serves.
+Do not hand `governed_subnet_id` here — that one is the workstations'.
+
 **Pin the proxy and the workstations it serves to the same availability zone.** Azure charges
 cross-zone traffic in **both directions** ($0.01/GB each way), so at 10 TB/month a misplaced
 proxy costs $200 — more than the `Standard_D2as_v5` it runs on. Same-zone traffic is free.

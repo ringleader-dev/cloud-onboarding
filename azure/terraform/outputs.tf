@@ -39,7 +39,7 @@ output "subnet_prefix" {
 
 output "gateway_subnet_id" {
   value       = var.create_network && var.create_gateway_subnet ? azurerm_subnet.gateway[0].id : null
-  description = "Subnet reserved for the future DNS / HTTPS proxy VM (only when create_gateway_subnet = true)."
+  description = "Subnet the egress gateway VM runs in (only when create_gateway_subnet = true). Hand it back as spec.subnet on the EgressGateway -- Ringleader builds no gateway until you do, because a gateway placed in the subnet it steers routes its own egress into itself. NOT governed_subnet_id, which is the workstations'."
 }
 
 output "gateway_subnet_prefix" {
@@ -73,12 +73,21 @@ output "role_extras_granted" {
 }
 
 output "handoff" {
-  description = "Everything to hand back to Ringleader, in one place. Add your tenant id (az account show --query tenantId -o tsv)."
+  description = <<-EOT
+    Everything to hand back to Ringleader, in one place. Add your tenant id
+    (az account show --query tenantId -o tsv).
+
+    THREE subnet ids, and they are not interchangeable: a workstation that carries an egress
+    policy goes in governed_subnet_id, every other one in subnet_id, and gateway_subnet_id
+    goes on the EgressGateway itself as spec.subnet -- the gateway VM cannot sit in a subnet
+    it steers.
+  EOT
   value = {
     target_app_client_id = local.target_client_id
     subscription_id      = var.subscription_id
     resource_group_name  = var.resource_group_name
     subnet_id            = var.create_network ? azurerm_subnet.workstations[0].id : null
     governed_subnet_id   = var.create_network && var.create_governed_subnet ? azurerm_subnet.governed[0].id : null
+    gateway_subnet_id    = var.create_network && var.create_gateway_subnet ? azurerm_subnet.gateway[0].id : null
   }
 }

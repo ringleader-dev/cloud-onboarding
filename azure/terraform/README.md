@@ -39,11 +39,15 @@ Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standal
 
 ## Outputs
 
-`handoff` bundles `target_app_client_id`, `subscription_id`, `resource_group_name`,
-and `subnet_id` (when `create_network`). Add your **tenant id**
-(`az account show --query tenantId -o tsv`) and hand all of it back to Ringleader.
+`handoff` bundles `target_app_client_id`, `subscription_id`, `resource_group_name`, and the
+three subnet ids (`subnet_id`, `governed_subnet_id`, `gateway_subnet_id`) when
+`create_network` is on. Add your **tenant id**
+(`az account show --query tenantId -o tsv`) and hand all of it back to Ringleader. The three
+subnets are not interchangeable — a workstation carrying an egress policy goes in
+`governed_subnet_id`, every other one in `subnet_id`, and `gateway_subnet_id` goes on the
+`EgressGateway` itself as `spec.subnet`.
 
-Also available: `gateway_subnet_id` and `gateway_subnet_prefix` — the latter is what an
+Also available: `gateway_subnet_prefix` — what an
 egress allowlist names to let workstations reach the proxy, so it is worth recording — and
 `role_extras_granted`, which lists the optional action sets folded into the custom role so
 you can check what you granted. `vnet_address_space` and `subnet_prefix` report the ranges this

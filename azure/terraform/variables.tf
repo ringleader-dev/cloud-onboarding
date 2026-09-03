@@ -147,10 +147,11 @@ variable "create_gateway_subnet" {
     Reserve a subnet for the DNS / HTTPS proxy VM that Ringleader's hostname-level egress
     control will use. On by default; set false to opt out. Needs create_network.
 
-    The VM itself is not built yet and this creates nothing but an empty subnet, which Azure
-    does not bill for. It is worth doing early because the NSG rules that permit
-    workstation -> proxy traffic can then name one stable prefix instead of one VM's address,
-    and because carving the range now avoids renumbering later.
+    This creates nothing but an empty subnet, which Azure does not bill for; Ringleader builds
+    the VM itself once you declare an EgressGateway naming this subnet as spec.subnet. It is
+    worth doing early because the NSG rules that permit workstation -> proxy traffic can then
+    name one stable prefix instead of one VM's address, and because carving the range now
+    avoids renumbering later.
 
     It shares the landing pad's NAT gateway, so the proxy will have upstream egress without a
     public IP.
