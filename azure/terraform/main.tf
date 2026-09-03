@@ -298,12 +298,19 @@ resource "azurerm_subnet_nat_gateway_association" "gateway" {
 #     steering lands, and the UDR overrides it the moment it does. A box with its own public IP
 #     still has Azure's own outbound until then; that is Azure's behaviour, not something this
 #     module can take away, and it is a reason to create governed boxes without one.
+#   - default_outbound_access DISABLED, which is the half Azure DOES let the module take away.
+#     Without it a VM here with no public IP would still reach the internet through Azure's
+#     implicit SNAT -- an unpoliced path that survives having withheld the NAT gateway, and the
+#     one thing that would leave this subnet less fail-safe than its AWS twin (where no route
+#     table means no route at all). Azure fixes this flag AT SUBNET CREATION: setting it later
+#     REPLACES the subnet, so it has to be right on the first apply.
 resource "azurerm_subnet" "governed" {
-  count                = var.create_network && var.create_governed_subnet ? 1 : 0
-  name                 = "governed"
-  resource_group_name  = var.resource_group_name
-  virtual_network_name = azurerm_virtual_network.workstations[0].name
-  address_prefixes     = [var.governed_subnet_prefix]
+  count                           = var.create_network && var.create_governed_subnet ? 1 : 0
+  name                            = "governed"
+  resource_group_name             = var.resource_group_name
+  virtual_network_name            = azurerm_virtual_network.workstations[0].name
+  address_prefixes                = [var.governed_subnet_prefix]
+  default_outbound_access_enabled = false
 }
 
 resource "azurerm_subnet_network_security_group_association" "governed" {

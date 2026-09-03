@@ -277,6 +277,12 @@ What it gets and what it deliberately does not:
   its own public IP still has Azure's own outbound until then — that is Azure's behaviour, not
   something this module can remove, and it is a reason to create governed workstations without
   one.
+- **Azure's implicit default outbound access turned off**, which is the half Azure *does* let the
+  module remove. Without it a workstation in here with no public IP would still reach the internet
+  through Azure's own SNAT — an unpoliced path that survives withholding the NAT gateway, and the
+  one thing that would leave this subnet less fail-safe than its AWS twin. **Azure fixes this at
+  subnet creation**: turning it off later replaces the subnet, so it has to be right on the first
+  apply.
 
 ## Plan your address space before the second region
 

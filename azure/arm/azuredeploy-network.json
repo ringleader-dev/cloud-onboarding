@@ -145,6 +145,7 @@
         "name": "[variables('governedSubnetName')]",
         "properties": {
           "addressPrefix": "[parameters('governedSubnetCidr')]",
+          "defaultOutboundAccess": false,
           "networkSecurityGroup": {
             "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
           }
