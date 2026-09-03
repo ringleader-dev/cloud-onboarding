@@ -142,6 +142,10 @@ variable "create_governed_subnet" {
     the subnet by putting its own UDR on it and declines one that already references a route
     table; and a governed box's egress is meant to be the gateway's, not a NAT gateway's.
 
+    Azure's implicit default outbound access is disabled on it for the same reason, and that
+    flag is fixed AT SUBNET CREATION -- setting it later replaces the subnet, so it has to be
+    right on the first apply.
+
     Azure does not bill for a subnet, so leaving this on costs nothing until you use it.
   EOT
 }
