@@ -84,6 +84,24 @@ variable "vnet_address_space" {
   default = null
 }
 
+# ONE identity serves every region. The first region creates it; set create_identity = false in
+# every region after that and pass the first one's two ids, or you get a second app registration
+# with its own client id that cannot act in the first region's resource group.
+variable "create_identity" {
+  type    = bool
+  default = true
+}
+
+variable "existing_client_id" {
+  type    = string
+  default = null
+}
+
+variable "existing_principal_object_id" {
+  type    = string
+  default = null
+}
+
 module "ringleader" {
   source = "../.."
 
@@ -105,6 +123,11 @@ module "ringleader" {
   location           = var.location
   region_indexes     = var.region_indexes
   vnet_address_space = var.vnet_address_space
+
+  # The identity half of a second region: reuse the first one's rather than minting another.
+  create_identity              = var.create_identity
+  existing_client_id           = var.existing_client_id
+  existing_principal_object_id = var.existing_principal_object_id
 }
 
 output "handoff" {

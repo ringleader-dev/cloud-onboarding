@@ -79,3 +79,14 @@ region_indexes = {
 # Bringing your own IPAM instead? Set vnet_address_space and the subnets are carved out of it;
 # region_indexes is then ignored and keeping every region distinct is yours to do.
 # vnet_address_space = "10.70.0.0/16"
+
+# ...AND REUSE THE IDENTITY. The ranges are only half of a second region. An Entra app
+# registration is tenant-wide while the custom role is scoped to ONE resource group, so a second
+# region left on the defaults mints a SECOND app registration -- a second client id to hand back,
+# and neither identity able to act in the other's group. The first region creates the identity;
+# every region after it reuses that one and deploys only the role and the landing pad into its own
+# group. Both ids come from the FIRST region's outputs.
+#
+# create_identity              = false
+# existing_client_id           = "00000000-0000-0000-0000-000000000000"  # terraform output target_app_client_id
+# existing_principal_object_id = "00000000-0000-0000-0000-000000000000"  # terraform output service_principal_object_id
