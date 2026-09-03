@@ -1,0 +1,121 @@
+name: CI
+
+# What CI is for in this repository: everything here is applied by a CUSTOMER, in the
+# customer's own cloud account, and we never see the result. There is no staging run that
+# would catch a broken template, so the checks below are the only proof a change is
+# deployable -- and, in the trust-pins job's case, the only proof it is still safe.
+#
+# Every job is credential-free by design, so it runs identically on a fork's pull request.
+# Nothing here talks to AWS, Azure or GCP: `terraform validate` is a local schema check
+# (`-backend=false`, never `plan`), and CloudFormation is linted rather than sent to the
+# `validate-template` API, which is a real credentialed call and would simply fail here.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Only the newest commit on a ref is worth signal; cancel the run a push superseded.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The security gate. Fast, dependency-free, and the one job whose failure means a shipped
+  # artifact would hand one customer's AWS account to the rest of the fleet -- see the header
+  # of .github/scripts/check_aws_trust_pins.py.
+  trust-pins:
+    name: AWS trust pins
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: The shipped artifacts pin the assertion to one org
+        run: python3 .github/scripts/check_aws_trust_pins.py
+
+      # The guard's own teeth. A guard that has quietly stopped matching the file it reads
+      # passes every build until the day it matters, so its failure modes are tested against
+      # the real artifacts rather than fixtures.
+      - name: The guard rejects every way the pin can be lost
+        run: python3 -m unittest discover -s .github/scripts -t .github/scripts -v
+
+  terraform-fmt:
+    name: terraform fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive -diff .
+
+  # One job per cloud: the module and its standalone example share a provider, so the second
+  # init reuses the first's download out of TF_PLUGIN_CACHE_DIR.
+  terraform-validate:
+    name: terraform validate (${{ matrix.cloud }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cloud: [aws, azure, gcp]
+    env:
+      TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform-plugin-cache
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+
+      - run: mkdir -p "$TF_PLUGIN_CACHE_DIR"
+
+      # `-backend=false` keeps this a schema check: no state, no backend, no credentials. The
+      # standalone example is validated too because it is what a customer actually applies --
+      # the module alone cannot catch a broken variable name in the root configuration.
+      - name: Validate the module and its standalone example
+        run: |
+          set -euo pipefail
+          for dir in "${{ matrix.cloud }}/terraform" "${{ matrix.cloud }}/terraform/examples/standalone"; do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false -input=false -no-color
+            terraform -chdir="$dir" validate -no-color
+            echo "::endgroup::"
+          done
+
+      # The module's own `terraform test` suite, where it has one. Providers are mocked and only
+      # `plan` is ever run, so this needs no credentials and creates nothing. A module whose tests
+      # nothing runs is a module whose tests are already wrong and nobody knows.
+      - name: Run the module's tests
+        run: |
+          set -euo pipefail
+          dir="${{ matrix.cloud }}/terraform"
+          if [ -d "$dir/tests" ]; then
+            terraform -chdir="$dir" test -no-color
+          else
+            echo "no $dir/tests -- nothing to run"
+          fi
+
+  cloudformation:
+    name: cfn-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - run: pip install cfn-lint
+
+      # cfn-lint is a local check of the template against CloudFormation's resource schemas --
+      # unlike `aws cloudformation validate-template`, which is an API call needing credentials
+      # this workflow deliberately does not have. It also proves every `!Ref` resolves, which is
+      # what lets the trust guard trust `!Ref Subject` to name a real parameter.
+      #
+      # The template ships with the __OIDC_PROVIDER__ placeholder deploy.sh substitutes; it sits
+      # in two condition KEYS, which are free-form strings, so the unrendered file lints clean.
+      - run: cfn-lint aws/cloudformation/ringleader-onboarding.yaml

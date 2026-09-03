@@ -273,7 +273,33 @@ README.md              <- you are here
 gcp/     README.md + terraform/ + gcloud/
 azure/   README.md + terraform/ + arm/
 aws/     README.md + terraform/ + cloudformation/
+.github/ CI: the checks below, and the trust-pin guard they run
 ```
+
+## Checks that run on every change
+
+Everything here is applied by you, in your own account, so a broken template is not
+something we find out about — these run on every pull request instead, and none of them
+needs cloud credentials:
+
+- **`terraform fmt -check` and `terraform validate`** on all six configurations: each
+  cloud's module and the `examples/standalone` root a customer actually applies.
+- **`terraform test`** for each module that ships a `tests/` directory. Providers are mocked
+  and only `plan` runs, so it needs no cloud account.
+- **`cfn-lint`** on the AWS CloudFormation template.
+- **The AWS trust-pin guard** (`.github/scripts/check_aws_trust_pins.py`) — the one check
+  that is about security rather than deployability. The Terraform module and the
+  CloudFormation template each pin the assertion's `sub` and `aud` to one organization, and
+  the guard fails the build if either stops. It reads past the obvious edits — a dropped
+  condition, a `StringLike` in place of `StringEquals`, a wildcard — to the ones that leave
+  the condition looking untouched: a `locals` value quietly hardcoded to some other org, a
+  role repointed at a different policy document, a second statement slipped in beside the
+  pinned one, a template parameter given a default. A renamed block, or any shape the guard
+  cannot read, is a loud failure rather than a silent pass. Because every customer's
+  assertion is signed by the same issuer, that `sub` condition is the only thing standing
+  between your account and every other Ringleader tenant, and its weakened form reads exactly
+  like hardening boilerplate. The guard's own failure modes are tested against the real
+  templates, so it cannot rot into passing while scanning nothing.
 
 ## License
 
