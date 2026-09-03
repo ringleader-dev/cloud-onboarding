@@ -39,7 +39,7 @@
 #                table, for instances with no public IP. Bills
 #                hourly plus $0.045/GB                           (default: true)
 #   CREATE_GATEWAY_SUBNET  true|false: reserve a public subnet and
-#                route table for the future DNS / HTTPS proxy VM (default: true)
+#                route table for the egress gateway VM         (default: true)
 #   GATEWAY_SUBNET_CIDR  override its CIDR; empty derives the
 #                241st /24 of the VPC range                      (default: empty)
 #   CREATE_GOVERNED_SUBNET  true|false: reserve the subnet the

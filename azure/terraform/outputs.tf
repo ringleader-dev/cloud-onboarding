@@ -62,6 +62,13 @@ output "role_extras_granted" {
   value = concat(
     var.enable_workstation_identities ? ["Microsoft.ManagedIdentity CRUD + assign, Microsoft.Authorization roleAssignments -- workstation runtime identities"] : [],
     var.enable_egress_control ? ["Microsoft.Network/networkSecurityGroups (+ securityRules) and routeTables (+ routes) read/write/delete and join/action, plus virtualNetworks/subnets/write and delete -- egress control"] : [],
+    # Listed on its own because it is the one egress action outside Microsoft.Network, and the one
+    # a hand-rolled role is most likely to omit: the sweep that collects a leaked egress gateway
+    # reads the resource group's generic `resources` collection. Without it that sweep collects
+    # NOTHING -- including the VM half, which needs no such action -- and a billed gateway VM and
+    # its static public IP are left behind. Built-in Contributor covers it; a narrower role must
+    # name it. See ../README.md, "Optional: egress control".
+    var.enable_egress_control ? ["Microsoft.Resources/subscriptions/resourcegroups/resources/read -- the leaked-gateway sweep's object listing"] : [],
   )
 }
 

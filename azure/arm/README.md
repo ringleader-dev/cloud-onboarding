@@ -64,7 +64,7 @@ correct only if you reach the VNet privately.
 
 `CREATE_GATEWAY_SUBNET` is on by default (`GATEWAY_SUBNET_CIDR` overrides its range; unset, it
 derives the 241st `/24` of the VNet — `10.70.240.0/24` at index `0`): it
-reserves an empty subnet for the DNS / HTTPS proxy VM that hostname-level egress control will
+reserves an empty subnet for the egress gateway VM that hostname-level egress control will
 use, and prints its id. It shares the NAT gateway, so the proxy needs no public IP. Set it to
 `false` to skip.
 

@@ -70,7 +70,7 @@ hourly plus $0.045/GB — and it is independent of `CreateGatewaySubnet`, whose 
 and routed through the internet gateway.
 
 The two subnets are for different things and only the second holds workstations:
-`GatewaySubnet` is where the DNS / HTTPS proxy VM will run, and `GovernedSubnet` is where the
+`GatewaySubnet` is where the egress gateway VM runs, and `GovernedSubnet` is where the
 workstations that proxy **governs** go. The stack gives `GovernedSubnet` no route-table
 association and no public IPs on purpose — Ringleader claims the subnet by associating a table
 of its own, and refuses one that already carries an association. Until a proxy steers it, a

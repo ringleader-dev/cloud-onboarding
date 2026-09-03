@@ -189,7 +189,7 @@ What that grants is a **custom project role** with ten permissions and nothing e
 | | |
 |---|---|
 | `compute.firewalls.create` / `delete` / `get` / `list` / `update` | create and maintain the firewall rules that carry each policy |
-| `compute.routes.create` / `delete` / `get` / `list` | the static route that steers a workstation's traffic at the DNS / HTTPS proxy, when a policy names hostnames rather than address ranges |
+| `compute.routes.create` / `delete` / `get` / `list` | the static route that steers a workstation's traffic at the egress gateway, when a policy names hostnames rather than address ranges |
 | `compute.networks.updatePolicy` | creating that route additionally requires it — the one that is easy to leave out and hard to diagnose |
 
 Deliberately **not** `roles/compute.securityAdmin`, which is the usual answer and reaches
@@ -276,11 +276,13 @@ So it buys a capability nobody has committed to using, at a cost that depends on
 organization uses tags. If you want it, add a second custom role with those permissions and
 bind it to the same service account — nothing else here changes.
 
-## Room for the DNS / HTTPS proxy
+## Room for the egress gateway
 
-Restricting egress by **hostname** (rather than by IP range) needs a resolver that answers
-per workstation, and no cloud offers one — so Ringleader runs a small DNS / HTTPS proxy VM in
-your project. That VM does not exist yet, but it is worth reserving its address range now:
+Restricting egress by **hostname** (rather than by IP range) needs the connection read by
+something that can see the hostname on it, and no cloud offers that per workstation — so
+Ringleader runs a small **egress gateway** VM in your project. It builds and maintains that VM
+itself, once a workstation declares a policy naming hostnames, and it is a **billed** instance.
+Reserving its address range now is what keeps you from renumbering later:
 
 It is on by default, taking the 241st `/24` of `network_cidr` — `10.80.240.0/24` on a new
 landing pad. To skip it:
@@ -393,7 +395,7 @@ inter-zone rates while sitting right next to it — use internal addressing betw
 | **project id** | where your workstations run |
 | **workload identity provider** (`//iam.googleapis.com/projects/…/providers/…`) | the token-exchange audience |
 | **subnet self-link** (only if you created a network) | the subnet Ringleader attaches NICs to |
-| **gateway subnet self-link** (only if you reserved one) | where the DNS / HTTPS proxy VM will run |
+| **gateway subnet self-link** (only if you reserved one) | where the egress gateway VM runs |
 | **governed subnet self-link** (only if you turned it on) | an optional range for the governed fleet. GCP governs by network tag, so this is organizational rather than required |
 
 ## Revoking

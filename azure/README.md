@@ -174,15 +174,26 @@ enable_egress_control = false
 EGRESS_CONTROL=0 ./deploy.sh    # the ARM path
 ```
 
-It adds sixteen actions to the custom role, still scoped to your one resource group:
+It adds seventeen actions to the custom role, still scoped to your one resource group:
 
 | action | why |
 |---|---|
 | `Microsoft.Network/networkSecurityGroups/read` / `write` / `delete` | one NSG per distinct egress policy |
 | `.../networkSecurityGroups/securityRules/read` / `write` / `delete` | keep that NSG's rules in step with the manifest |
 | `Microsoft.Network/networkSecurityGroups/join/action` | attach the NSG to a workstation's NIC — the one people forget |
-| `Microsoft.Network/routeTables/*` (with `routes/*` and `join/action`) | steer a workstation's traffic at the DNS / HTTPS proxy when a policy names hostnames |
-| `Microsoft.Network/virtualNetworks/subnets/write` / `delete` | an Azure route table attaches **per subnet**, so steering is per subnet rather than per workstation — which is what `create_governed_subnet` below exists to give it — and a route table Ringleader creates, it must also be able to detach and collect. Not a subnet per policy: one proxy serves many policies from one subnet, telling them apart by source address |
+| `Microsoft.Network/routeTables/*` (with `routes/*` and `join/action`) | steer a workstation's traffic at the egress gateway when a policy names hostnames |
+| `Microsoft.Network/virtualNetworks/subnets/write` / `delete` | an Azure route table attaches **per subnet**, so steering is per subnet rather than per workstation — which is what `create_governed_subnet` below exists to give it — and a route table Ringleader creates, it must also be able to detach and collect. Not a subnet per policy: one gateway serves many policies from one subnet, telling them apart by source address |
+| `Microsoft.Resources/subscriptions/resourcegroups/resources/read` | the odd one out, and the reason it is called out below |
+
+**The last row is not a networking action, and a least-privilege role that omits it fails in a
+way that costs money rather than erroring.** The sweep that collects a leaked egress gateway
+lists the resource group's generic `resources` collection rather than a typed per-provider one,
+so it needs a `Microsoft.Resources` action where everything else it does is `Microsoft.Compute`
+or `Microsoft.Network`. Built-in **Contributor** covers it, so a deployment using Contributor
+never sees this; a hand-rolled role can hold all sixteen networking actions above and still be
+refused here. And the refusal is not a partial listing — the sweep collects **nothing**,
+including the VM it did not need this action to see, so what is left behind is a running gateway
+VM and its separately billed static public IP.
 
 Ringleader compiles each distinct policy into **one** NSG and attaches it to the NICs of the
 workstations carrying that policy. That matters here: Azure caps an NSG at **1,000 rules** and
@@ -226,11 +237,14 @@ Unlike AWS, there is nothing extra to create or hand back: an Azure NSG expresse
 so the compiled group narrows the workstation on its own. (An AWS security group cannot, which is
 why that module ships a second, egress-less group and asks you to pick one per workstation.)
 
-## Room for the DNS / HTTPS proxy
+## Room for the egress gateway
 
-Restricting egress by **hostname** (rather than by IP range) needs a resolver that answers per
-workstation, and no cloud offers one — so Ringleader runs a small DNS / HTTPS proxy VM in your
-resource group. That VM does not exist yet, but it is worth reserving its address range now:
+Restricting egress by **hostname** (rather than by IP range) needs the connection read by
+something that can see the hostname on it, and no cloud offers that per workstation — so
+Ringleader runs a small **egress gateway** VM in your resource group. It builds and maintains
+that VM itself, once a workstation declares a policy naming hostnames, and it is a **billed**
+instance with a separately billed static public IP. Reserving its address range now is what
+keeps you from renumbering later:
 
 It is on by default, taking the 241st `/24` of the VNet — `10.70.240.0/24` in a first region,
 and following the VNet into whichever `/16` a later one takes. To skip it:

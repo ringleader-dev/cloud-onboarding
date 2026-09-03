@@ -16,7 +16,7 @@
 #                (default: empty -- NO rule is created)
 #   SECONDARY_SSH_TAG
 #                network tag that rule targets        (default: ringleader-secondary-ssh)
-#   GATEWAY_CIDR an empty subnet reserved for the future DNS / HTTPS proxy VM
+#   GATEWAY_CIDR an empty subnet reserved for the egress gateway VM
 #                (default: 10.80.240.0/24; set to "none" to skip it)
 #   GOVERNED_CIDR  a subnet for the workstations a gateway governs
 #                (default: EMPTY -- none is created; see below)
@@ -104,12 +104,13 @@ gcloud compute networks create ringleader-vpc --project "$PROJECT" --subnet-mode
 gcloud compute networks subnets create ringleader-workstations --project "$PROJECT" \
   --network ringleader-vpc --region "$REGION" --range "$CIDR" \
   --enable-private-ip-google-access
-# A home for the future DNS / HTTPS proxy VM -- created empty, and only if you ask.
+# A home for the egress gateway VM -- created empty, and only if you ask.
 #
 # Ringleader's hostname-level egress control points workstations at a proxy that resolves
-# names and terminates HTTPS for the hosts you allow. That VM is not built yet, but a subnet
-# of its own means the firewall rules permitting workstation -> proxy traffic can name one
-# stable range rather than one VM's address, and carving it now avoids renumbering later.
+# names and terminates HTTPS for the hosts you allow. Ringleader builds that VM itself once a
+# policy names hostnames, and it is billed; a subnet of its own means the firewall rules
+# permitting workstation -> gateway traffic can name one stable range rather than one VM's
+# address, and carving it now avoids renumbering later.
 # GCP does not bill for a subnet, and Cloud NAT below covers every range in this region.
 if [[ -n "$GATEWAY_CIDR" ]]; then
   gcloud compute networks subnets create ringleader-gateway --project "$PROJECT" \
@@ -176,7 +177,7 @@ gcloud compute networks subnets describe ringleader-workstations \
 
 if [[ -n "$GATEWAY_CIDR" ]]; then
   echo
-  echo ">> gateway subnet self-link (for the future DNS / HTTPS proxy VM):"
+  echo ">> gateway subnet self-link (for the egress gateway VM):"
   gcloud compute networks subnets describe ringleader-gateway \
     --project "$PROJECT" --region "$REGION" --format='value(selfLink)'
 fi

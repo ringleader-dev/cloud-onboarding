@@ -26,7 +26,7 @@
       "type": "Bool",
       "defaultValue": true,
       "metadata": {
-        "description": "Let Ringleader manage the network security groups that restrict where workstations may connect. On by default. Adds NSG and security-rule read/write/delete plus join/action, which is what lets Ringleader attach a group to a workstation NIC; and route-table read/write/delete plus subnet write and delete, which is how a workstation's traffic is steered to the DNS / HTTPS proxy when a policy names hostnames -- an Azure route table attaches per subnet, so steering is per subnet rather than per workstation, which is what the landing pad's governed subnet exists to give it. Not a subnet per policy: one proxy serves many policies from one subnet, telling them apart by source address. Still scoped to this resource group, and it restricts nothing on its own until you declare an egress policy. Set false to opt out."
+        "description": "Let Ringleader manage the network security groups that restrict where workstations may connect. On by default. Adds NSG and security-rule read/write/delete plus join/action, which is what lets Ringleader attach a group to a workstation NIC; and route-table read/write/delete plus subnet write and delete, which is how a workstation's traffic is steered to the egress gateway when a policy names hostnames -- an Azure route table attaches per subnet, so steering is per subnet rather than per workstation, which is what the landing pad's governed subnet exists to give it. Not a subnet per policy: one gateway serves many policies from one subnet, telling them apart by source address. It also adds one read outside the network namespace, Microsoft.Resources/subscriptions/resourcegroups/resources/read, which the sweep that collects a leaked gateway needs -- see the README, because without it the sweep collects nothing and a billed public IP can be left behind. Still scoped to this resource group, and it restricts nothing on its own until you declare an egress policy. Set false to opt out."
       }
     }
   },
@@ -87,7 +87,8 @@
       "Microsoft.Network/routeTables/routes/write",
       "Microsoft.Network/routeTables/routes/delete",
       "Microsoft.Network/virtualNetworks/subnets/write",
-      "Microsoft.Network/virtualNetworks/subnets/delete"
+      "Microsoft.Network/virtualNetworks/subnets/delete",
+      "Microsoft.Resources/subscriptions/resourcegroups/resources/read"
     ],
     "actionsWithIdentities": "[if(parameters('enableWorkstationIdentities'), union(variables('actions'), variables('identityActions')), variables('actions'))]",
     "effectiveActions": "[if(parameters('enableEgressControl'), union(variables('actionsWithIdentities'), variables('egressActions')), variables('actionsWithIdentities'))]"
