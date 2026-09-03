@@ -42,7 +42,7 @@ output "handoff" { value = module.ringleader_onboarding.handoff }
 | `create_nat_gateway` | **`true`** | a NAT gateway **and a private route table**, for workstations with no public IP. **The one default that costs money** — hourly plus $0.045/GB. The proxy replaces it later |
 | `enable_egress_control` | **`true`** | let Ringleader manage the security groups an egress policy compiles to, **and** the subnets and route tables that steer traffic at the proxy; grants six security-group actions, a rules read, ten route/subnet actions, and `ec2:ModifyNetworkInterfaceAttribute`. Restricts nothing until you declare a policy |
 | `egress_vpc_ids` | `[]` | confine those permissions to these VPCs. Empty uses the VPC this module created; empty **and** no created network means region-only scoping — check the `egress_scope` output |
-| `create_gateway_subnet` | **`true`** | reserve an empty **public** subnet, plus its route table, for the future DNS / HTTPS proxy VM. Public and in the workstations AZ are both cost decisions — see `aws/README.md` |
+| `create_gateway_subnet` | **`true`** | reserve an empty **public** subnet, plus its route table, for the DNS / HTTPS proxy VM. You hand its id back as `spec.subnet` on the `EgressGateway`, and Ringleader builds no gateway until you do. Public and in the workstations AZ are both cost decisions — see `aws/README.md` |
 | `create_governed_subnet` | **`true`** | reserve the subnet the workstations that proxy **governs** go in — the 15th `/20` of the VPC, `10.60.224.0/20` at index 0. Empty, no route table (Ringleader claims it and refuses one already associated) and no public IPs — so a box in it has no egress until a proxy steers it. See `aws/README.md` |
 | `region_indexes` | `{}` | **region => index**, and **required** whenever `create_network` is set and `vpc_cidr` is not. The VPC takes `10.(60 + index).0.0/16` and every subnet is carved out of it, so one number allocates the whole landing pad. The module looks the index up by the region it is *actually applying in*, so the same map in a second region's tfvars gives that region a different range by construction — and an undeclared region, a region the map does not name, two regions on one index, or an index outside `0`–`9` all fail the plan. Index 0 is `10.60.0.0/16`, this module's historical range, so naming your region at 0 changes nothing. See [aws/README.md](../README.md#a-second-region-name-it-do-not-renumber-it) |
 | `vpc_cidr` | `null` (derived) | one region's worth. Unset, it comes from `region_indexes`. Set it to bring your own IPAM — the subnets follow it, `region_indexes` is then ignored, and keeping every region distinct becomes yours to do |
@@ -53,9 +53,9 @@ output "handoff" { value = module.ringleader_onboarding.handoff }
 
 ## Outputs
 
-`target_role_arn`, `account_id`, `subnet_id`, `security_group_id`,
-`inbound_only_security_group_id`, and `handoff` (all of them in one object). Hand `handoff`
-back to Ringleader. Plus `vpc_id`, `gateway_subnet_id`, `gateway_subnet_cidr` and
+`target_role_arn`, `account_id`, `subnet_id`, `governed_subnet_id`, `gateway_subnet_id`,
+`security_group_id`, `inbound_only_security_group_id`, and `handoff` (all of them in one
+object). Hand `handoff` back to Ringleader. Plus `vpc_id`, `gateway_subnet_cidr` and
 `private_route_table_id` when the matching options are on. `vpc_cidr` and `subnet_cidr` report
 the ranges this region actually took — worth recording, since they are what the next region has
 to stay clear of.

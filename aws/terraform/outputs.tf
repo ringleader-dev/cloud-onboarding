@@ -69,7 +69,7 @@ output "vpc_id" {
 
 output "gateway_subnet_id" {
   value       = var.create_network && var.create_gateway_subnet ? aws_subnet.gateway[0].id : null
-  description = "Subnet reserved for the future DNS / HTTPS proxy VM (only when create_gateway_subnet = true). Public and in the workstations AZ -- both cost decisions; see the variable's description."
+  description = "Subnet the egress gateway VM runs in (only when create_gateway_subnet = true). Hand it back as spec.subnet on the EgressGateway -- Ringleader builds no gateway until you do, because a gateway placed in the subnet it steers routes its own egress into itself. NOT governed_subnet_id, which is the workstations'. Public and in the workstations AZ -- both cost decisions; see the variable's description."
 }
 
 output "gateway_subnet_cidr" {
@@ -141,14 +141,17 @@ output "handoff" {
   description = <<-EOT
     Everything to hand back to Ringleader, in one place. TWO security-group ids, and which one
     a workstation gets is the difference between an enforced egress policy and a workstation
-    that will not start -- see the two outputs above. TWO subnet ids for the same reason: a
-    workstation that carries a policy goes in governed_subnet_id, every other one in subnet_id.
+    that will not start -- see the two outputs above. THREE subnet ids, and they are not
+    interchangeable: a workstation that carries a policy goes in governed_subnet_id, every
+    other one in subnet_id, and gateway_subnet_id goes on the EgressGateway itself as
+    spec.subnet -- the gateway VM cannot sit in a subnet it steers.
   EOT
   value = {
     target_role_arn                = aws_iam_role.ringleader.arn
     account_id                     = data.aws_caller_identity.current.account_id
     subnet_id                      = var.create_network ? aws_subnet.workstations[0].id : null
     governed_subnet_id             = var.create_network && var.create_governed_subnet ? aws_subnet.governed[0].id : null
+    gateway_subnet_id              = var.create_network && var.create_gateway_subnet ? aws_subnet.gateway[0].id : null
     security_group_id              = var.create_network ? aws_security_group.workstations[0].id : null
     inbound_only_security_group_id = var.create_network && var.enable_egress_control ? aws_security_group.workstations_inbound_only[0].id : null
   }

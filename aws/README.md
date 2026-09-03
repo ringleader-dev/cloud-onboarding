@@ -110,7 +110,10 @@ pad's range, and the plan fails rather than guessing if they disagree. See
   **two**, one for workstations with an egress policy and one for those without. Which one a
   workstation gets is the difference between an enforced policy and a workstation that will not
   start: see [Which security group a workstation gets](#which-security-group-a-workstation-gets).
-- if you reserved one: **`gateway_subnet_id`**, where the egress gateway VM runs
+- if you reserved them: **`governed_subnet_id`**, where a workstation that carries an egress
+  policy goes, and **`gateway_subnet_id`**, where the egress gateway VM runs — the second goes
+  on the `EgressGateway` itself as `spec.subnet`, and Ringleader builds no gateway until it has
+  one, because a gateway placed in the subnet it steers would route its own egress into itself
 
 ## Reaching your workstations
 
