@@ -157,25 +157,95 @@ variable "create_network" {
   EOT
 }
 
+variable "region_indexes" {
+  type        = map(number)
+  default     = {}
+  description = <<-EOT
+    Which /16 each region's landing pad takes, as region => index. The VPC gets
+    10.(60 + index).0.0/16 and every subnet below is carved out of it.
+
+    REQUIRED whenever create_network is set and you have not set vpc_cidr, even for one region:
+
+      region_indexes = {
+        "us-east-1" = 0
+      }
+
+    Index 0 is 10.60.0.0/16, the range this module has always created, so naming your current
+    region at 0 plans as a no-op. The declaration is what buys the enforcement: there is no
+    signal in a fresh Terraform state that says "this is the second region", so a module that
+    accepted silence would hand a second apply the first one's range without a word. Naming
+    them is the signal.
+
+    Onboarding a SECOND region: add it to the map and use the SAME map in BOTH regions' tfvars.
+
+      region_indexes = {
+        "us-east-1" = 0
+        "eu-west-1" = 1
+      }
+
+    The module looks up the region it is actually applying in, so the two VPCs take
+    10.60.0.0/16 and 10.61.0.0/16 whichever order you apply them in and whichever tfvars file
+    you reach for. Copy a tfvars file to a second region and forget to extend the map and the
+    plan FAILS, naming the region -- rather than silently taking 10.60.0.0/16 twice. Two
+    regions cannot share an index either; the map is refused.
+
+    That matters because an AWS VPC is regional: a second region is a second VPC, joining them
+    later needs an inter-region Transit Gateway, and a Transit Gateway cannot route overlapping
+    CIDRs. Two regions applied on one range can never be peered and the only fix is to renumber
+    and re-onboard.
+
+    What it still cannot catch, because Terraform cannot read another region's state: an
+    operator who REPLACES an entry rather than adding one, moving a region onto an index
+    another region already holds in a state this apply cannot see. Keep one map, shared.
+
+    Indexes are 0-9, i.e. 10.60.0.0/16 through 10.69.0.0/16. The ceiling keeps this module
+    clear of the Azure module's 10.70.0.0/16 block, so onboarding both clouds does not overlap
+    them either. Past ten regions, or on your own IPAM, set vpc_cidr instead -- it overrides
+    all of this, and then the allocation is yours to keep distinct.
+  EOT
+
+  validation {
+    condition     = length(var.region_indexes) == length(distinct(values(var.region_indexes)))
+    error_message = "region_indexes must give every region a DISTINCT index; two regions sharing one index is exactly the overlap this variable exists to prevent."
+  }
+
+  validation {
+    condition     = alltrue([for i in values(var.region_indexes) : floor(i) == i && i >= 0 && i <= 9])
+    error_message = "region_indexes values must be whole numbers 0-9, which allocate 10.60.0.0/16 through 10.69.0.0/16. Set vpc_cidr to bring your own range instead."
+  }
+}
+
 variable "vpc_cidr" {
   type        = string
-  default     = "10.60.0.0/16"
+  default     = null
   description = <<-EOT
     CIDR for the optional VPC. One region's worth.
 
-    Give every region its own range from the first apply. An AWS VPC is regional, so a second
-    region is a second VPC, and joining them later needs an inter-region Transit Gateway,
-    which cannot route overlapping CIDRs. Re-applying this module in another region on the
-    default would produce two VPCs that can never be peered, and the fix at that point is to
-    renumber and re-onboard. A simple plan: 10.60.0.0/16 for the first region, 10.61.0.0/16
-    for the second, and so on.
+    Unset -- the default -- derives it from region_indexes: 10.(60 + index).0.0/16, which is
+    10.60.0.0/16 for a single region and is what this module has always created. Set it to
+    bring your own range, and then you own keeping every region distinct; see region_indexes
+    for why that matters.
   EOT
+
+  validation {
+    condition     = var.vpc_cidr == null || can(cidrhost(var.vpc_cidr, 0))
+    error_message = "vpc_cidr must be a CIDR block, e.g. 10.60.0.0/16."
+  }
 }
 
 variable "subnet_cidr" {
   type        = string
-  default     = "10.60.0.0/20"
-  description = "CIDR for the optional workstations subnet. Must sit inside vpc_cidr."
+  default     = null
+  description = <<-EOT
+    CIDR for the optional workstations subnet. Unset -- the default -- takes the first /20 of
+    vpc_cidr, which is 10.60.0.0/20 on the default VPC range. Set it only to override; it must
+    sit inside vpc_cidr.
+  EOT
+
+  validation {
+    condition     = var.subnet_cidr == null || can(cidrhost(var.subnet_cidr, 0))
+    error_message = "subnet_cidr must be a CIDR block, e.g. 10.60.0.0/20."
+  }
 }
 
 variable "availability_zone" {
@@ -261,16 +331,24 @@ variable "create_gateway_subnet" {
 
 variable "gateway_subnet_cidr" {
   type        = string
-  default     = "10.60.240.0/24"
+  default     = null
   description = <<-EOT
-    CIDR for the gateway subnet, when create_gateway_subnet is set. Must sit inside vpc_cidr,
-    and the default sits well clear of the workstations range so growing that subnet later
-    does not collide. If you changed vpc_cidr for a second region, change this to match.
+    CIDR for the gateway subnet, when create_gateway_subnet is set. Unset -- the default --
+    takes the 241st /24 of vpc_cidr, which is 10.60.240.0/24 on the default VPC range. It
+    follows vpc_cidr wherever you move it, so a second region needs no edit here.
 
-    A /24 is deliberate headroom. One gateway serves many policies from one subnet -- it tells
-    them apart by source address, not by where they sit -- so this range never has to grow per
-    policy; the headroom is for a second gateway, or a second region's proxy.
+    It sits well clear of the workstations range so growing that subnet later does not
+    collide. A /24 is deliberate headroom: one gateway serves many policies from one subnet --
+    it tells them apart by source address, not by where they sit -- so this range never has to
+    grow per policy; the headroom is for a second gateway, or a second region's proxy.
+
+    Set it only to override, and then it must sit inside vpc_cidr.
   EOT
+
+  validation {
+    condition     = var.gateway_subnet_cidr == null || can(cidrhost(var.gateway_subnet_cidr, 0))
+    error_message = "gateway_subnet_cidr must be a CIDR block, e.g. 10.60.240.0/24."
+  }
 }
 
 # --- A subnet for the boxes a gateway GOVERNS (on by default) ----------------
@@ -303,17 +381,26 @@ variable "create_governed_subnet" {
 
 variable "governed_subnet_cidr" {
   type        = string
-  default     = "10.60.224.0/20"
+  default     = null
   description = <<-EOT
-    CIDR for the governed subnet, when create_governed_subnet is set. Must sit inside vpc_cidr.
-    The default sits immediately below the gateway subnet at the top of the VPC, which groups
-    the two egress-control ranges together and leaves the workstations range at the bottom free
-    to grow from a /20 to a /17 without colliding with either. If you changed vpc_cidr for a
-    second region, change this to match.
+    CIDR for the governed subnet, when create_governed_subnet is set. Unset -- the default --
+    takes the 15th /20 of vpc_cidr, which is 10.60.224.0/20 on the default VPC range, and it
+    follows vpc_cidr wherever you move it.
+
+    That sits immediately below the gateway subnet at the top of the VPC, which groups the two
+    egress-control ranges together and leaves the workstations range at the bottom free to grow
+    from a /20 to a /17 without colliding with either.
 
     It is sized like the workstations subnet rather than like the gateway one: this holds a
     FLEET, where the gateway subnet holds a VM.
+
+    Set it only to override, and then it must sit inside vpc_cidr.
   EOT
+
+  validation {
+    condition     = var.governed_subnet_cidr == null || can(cidrhost(var.governed_subnet_cidr, 0))
+    error_message = "governed_subnet_cidr must be a CIDR block, e.g. 10.60.224.0/20."
+  }
 }
 
 variable "tags" {

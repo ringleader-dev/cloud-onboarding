@@ -405,20 +405,80 @@ resource "aws_iam_role_policy" "ringleader" {
 #
 # One region's worth. An AWS VPC is regional, so a second region means a second VPC and,
 # eventually, an inter-region Transit Gateway to join them -- which cannot route overlapping
-# ranges. Give every region a distinct vpc_cidr from the first apply; see the variable's
-# description and aws/README.md for a suggested plan. Renumbering later means re-onboarding.
+# ranges. Two regions applied on one range can never be peered, and the only remedy is to
+# renumber and re-onboard, so the allocation has to be right from the FIRST apply.
+#
+# Hence the ranges are DERIVED rather than documented. region_indexes maps each region to the
+# /16 its landing pad takes, and the module reads the index for the region it is actually
+# applying in -- so two regions given one map cannot take one range whatever order they are
+# applied in. Every subnet then comes out of that /16, so there is no second variable to keep
+# in step and no way to move the VPC and leave a subnet behind.
+#
+# Every default below reproduces the literal this module shipped before the derivation, so an
+# existing single-region landing pad plans as a no-op: see aws/README.md for the table.
 
 data "aws_availability_zones" "available" {
   count = var.create_network ? 1 : 0
   state = "available"
 }
 
+# The region the CALLER configured on its provider. This module declares no provider block, so
+# this is the only way it can learn where it is being applied -- which is what binds an index
+# in region_indexes to a region rather than to whichever tfvars file was reached for.
+data "aws_region" "current" {}
+
+locals {
+  # Read ONCE, deliberately. The aws provider deprecated this attribute in v6 in favour of
+  # `region`, but `region` does not exist in v5 and referencing it is a schema error there, not
+  # something try() can rescue -- so a module constrained to >= 5.0 has to use `name`, and the
+  # cost is one deprecation warning per plan instead of three. Switch to `.region` here, and
+  # delete this paragraph, whenever versions.tf raises the aws floor to >= 6.0.
+  region = data.aws_region.current.name
+
+  # An unlisted region falls back to index 0 so the expressions below stay evaluable; the
+  # precondition on the VPC is what actually refuses it, with a message that names the region.
+  region_index = try(var.region_indexes[local.region], 0)
+
+  region_index_known = contains(keys(var.region_indexes), local.region)
+
+  # 10.(60 + index).0.0/16. Index 0 is 10.60.0.0/16, this module's historical default.
+  vpc_cidr = var.vpc_cidr != null ? var.vpc_cidr : cidrsubnet("10.0.0.0/8", 8, 60 + local.region_index)
+
+  # The three subnets, carved out of whichever /16 the VPC took. The offsets reproduce the
+  # literals these variables used to default to: the first /20, the 15th /20 immediately below
+  # the gateway range, and the 241st /24 at the top.
+  subnet_cidr          = var.subnet_cidr != null ? var.subnet_cidr : cidrsubnet(local.vpc_cidr, 4, 0)
+  governed_subnet_cidr = var.governed_subnet_cidr != null ? var.governed_subnet_cidr : cidrsubnet(local.vpc_cidr, 4, 14)
+  gateway_subnet_cidr  = var.gateway_subnet_cidr != null ? var.gateway_subnet_cidr : cidrsubnet(local.vpc_cidr, 8, 240)
+}
+
 resource "aws_vpc" "workstations" {
   count                = var.create_network ? 1 : 0
-  cidr_block           = var.vpc_cidr
+  cidr_block           = local.vpc_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
   tags                 = merge(var.tags, { Name = "ringleader-workstations" })
+
+  # The allocation has to be DECLARED, because Terraform cannot discover it. There is no signal
+  # in a fresh state that says "this is the second region", so a module that accepted silence
+  # would hand the second apply the first one's range and only find out at the peering months
+  # later, when renumbering means re-onboarding. Refusing silence is what makes the collision
+  # impossible instead of merely discouraged -- and the right moment to insist is the FIRST
+  # apply, which is the only one where the answer is still free.
+  #
+  # Both preconditions are skipped entirely when create_network is false: a customer who brings
+  # their own network never carves a range here and has nothing to declare.
+  lifecycle {
+    precondition {
+      condition     = length(var.region_indexes) > 0 || var.vpc_cidr != null
+      error_message = "region_indexes is empty, so this landing pad cannot know whether ${local.region} is your first region or your second. Name every region you onboard -- region_indexes = { \"${local.region}\" = 0 } keeps this one on 10.60.0.0/16, the range it has always had -- and give the next region index 1. Or set vpc_cidr to allocate the ranges yourself."
+    }
+
+    precondition {
+      condition     = local.region_index_known || var.vpc_cidr != null
+      error_message = "region_indexes does not name ${local.region}, the region this provider is configured for, so this apply would take index 0's range a second time. Add \"${local.region}\" with an index no other region uses, or set vpc_cidr to allocate this region's range yourself."
+    }
+  }
 }
 
 resource "aws_internet_gateway" "workstations" {
@@ -430,7 +490,7 @@ resource "aws_internet_gateway" "workstations" {
 resource "aws_subnet" "workstations" {
   count                   = var.create_network ? 1 : 0
   vpc_id                  = aws_vpc.workstations[0].id
-  cidr_block              = var.subnet_cidr
+  cidr_block              = local.subnet_cidr
   availability_zone       = coalesce(var.availability_zone, data.aws_availability_zones.available[0].names[0])
   map_public_ip_on_launch = true
   tags                    = merge(var.tags, { Name = "ringleader-workstations" })
@@ -609,7 +669,7 @@ resource "aws_route_table" "private" {
 resource "aws_subnet" "gateway" {
   count                   = var.create_network && var.create_gateway_subnet ? 1 : 0
   vpc_id                  = aws_vpc.workstations[0].id
-  cidr_block              = var.gateway_subnet_cidr
+  cidr_block              = local.gateway_subnet_cidr
   availability_zone       = coalesce(var.availability_zone, data.aws_availability_zones.available[0].names[0])
   map_public_ip_on_launch = true
   tags                    = merge(var.tags, { Name = "ringleader-gateway" })
@@ -663,7 +723,7 @@ resource "aws_route_table_association" "gateway" {
 resource "aws_subnet" "governed" {
   count                   = var.create_network && var.create_governed_subnet ? 1 : 0
   vpc_id                  = aws_vpc.workstations[0].id
-  cidr_block              = var.governed_subnet_cidr
+  cidr_block              = local.governed_subnet_cidr
   availability_zone       = coalesce(var.availability_zone, data.aws_availability_zones.available[0].names[0])
   map_public_ip_on_launch = false
   tags                    = merge(var.tags, { Name = "ringleader-governed" })

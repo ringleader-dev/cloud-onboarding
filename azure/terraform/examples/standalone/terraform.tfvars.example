@@ -49,7 +49,33 @@ org_uid               = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
 # governed and ungoverned boxes in one subnet is what Ringleader refuses.
 # create_governed_subnet = false
 
-# PLANNING A SECOND REGION? Set vnet_address_space per region BEFORE the first apply. An Azure
-# VNet is regional, and global VNet peering cannot join overlapping address spaces.
-#   first region  10.70.0.0/16, second 10.71.0.0/16, third 10.72.0.0/16 ...
+# Where the landing pad goes. Defaults to eastus; set it per region.
+# location = "eastus"
+
+# WHICH RANGE THIS REGION TAKES. Required whenever the landing pad is created (above) and you
+# have not set vnet_address_space below -- from ONE region onwards, not just from two. Index 0
+# is 10.70.0.0/16, the range this module has always created, so naming your location at 0
+# changes nothing.
+region_indexes = {
+  "eastus" = 0
+}
+
+# PLANNING A SECOND REGION? Add it here and use the SAME map in every region's tfvars. The
+# module looks up location above, so index 1 takes 10.71.0.0/16 and every subnet follows --
+# there is nothing else to keep in step, and the two applies cannot land on one range whichever
+# order you run them in. Copy this file to a second region and forget to extend the map and the
+# plan FAILS, naming the location.
+#
+# This matters before the first apply, not when you need the second region: an Azure VNet is
+# regional, a second region is a second VNet, and global VNet peering cannot join overlapping
+# address spaces. Two regions on one range can never be peered and the only fix is to renumber
+# and re-onboard.
+#
+# region_indexes = {
+#   "eastus"     = 0
+#   "westeurope" = 1
+# }
+
+# Bringing your own IPAM instead? Set vnet_address_space and the subnets are carved out of it;
+# region_indexes is then ignored and keeping every region distinct is yours to do.
 # vnet_address_space = "10.70.0.0/16"

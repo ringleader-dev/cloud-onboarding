@@ -24,13 +24,15 @@ Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standal
 | `ssh_source_ranges` | `[]` | CIDRs allowed to reach workstations on **TCP 22**. Empty creates **no inbound rule** — workstations come up but nobody can open a shell on them (there is no bastion). Set it unless you reach the VNet privately. |
 | `secondary_ssh_source_ranges` | `null` | CIDRs for the **secondary SSH port** (TCP 2222) that some workstation types run their own SSH daemon on. Unset **mirrors `ssh_source_ranges`**; `[]` closes the port. The rule is subnet-wide (Azure has no per-VM tag), and you do not supply the port number. |
 | `name_prefix` | `ringleader` | Prefix for the landing pad's resource names. Change it only if those names are already taken in the resource group; the default reproduces the names this module has always used. |
-| `location` | `eastus` | Region for the optional network. |
-| `vnet_address_space` | `10.70.0.0/16` | One region's worth. **Give every region a distinct range from the first apply** — a second region is a second VNet, and global VNet peering cannot join overlapping spaces. |
-| `subnet_prefix` | `10.70.1.0/24` | Prefix for the optional workstations subnet. |
+| `location` | `eastus` | Region for the optional network, and the key `region_indexes` is looked up by. |
+| `region_indexes` | `{}` | **location => index**, and **required** whenever `create_network` is set and `vnet_address_space` is not. The VNet takes `10.(70 + index).0.0/16` and every subnet is carved out of it, so one number allocates the whole landing pad. The module looks the index up by `location`, so the same map in a second region's tfvars gives that region a different range by construction — and an undeclared location, a location the map does not name, two locations on one index, or an index outside `0`–`9` all fail the plan. Index 0 is `10.70.0.0/16`, this module's historical range, so naming your location at 0 changes nothing. See [azure/README.md](../README.md#a-second-region-name-it-do-not-renumber-it). |
+| `vnet_address_space` | `null` (derived) | One region's worth. Unset, it comes from `region_indexes`. Set it to bring your own IPAM — the subnets follow it, `region_indexes` is then ignored, and keeping every region distinct becomes yours to do. |
+| `subnet_prefix` | `null` (derived) | The second `/24` of `vnet_address_space` — `10.70.1.0/24` at index 0. Set it only to override. |
 | `enable_egress_control` | **`true`** | Let Ringleader manage the NSGs an egress policy compiles to, **and** the route tables and subnets that steer traffic at the DNS / HTTPS proxy. Adds sixteen actions, still scoped to this resource group. Restricts nothing until you declare a policy. |
 | `create_gateway_subnet` | **`true`** | Reserve an empty subnet for the future DNS / HTTPS proxy VM. Shares the NAT gateway, so no public IP is needed. |
-| `create_governed_subnet` | **`true`** | Reserve the subnet the workstations that proxy **governs** go in, at `10.70.224.0/20`. Carries the workstations NSG so `rl shell` still reaches a box in it; carries neither a route table nor the NAT gateway, and Azure's implicit default outbound access is **off** — a governed box's egress is the proxy's. That flag is fixed at subnet creation. See `azure/README.md`. |
-| `gateway_subnet_prefix` | `10.70.240.0/24` | Its prefix, well clear of `subnet_prefix`. |
+| `create_governed_subnet` | **`true`** | Reserve the subnet the workstations that proxy **governs** go in — the 15th `/20` of the VNet, `10.70.224.0/20` at index 0. Carries the workstations NSG so `rl shell` still reaches a box in it; carries neither a route table nor the NAT gateway, and Azure's implicit default outbound access is **off** — a governed box's egress is the proxy's. That flag is fixed at subnet creation. See `azure/README.md`. |
+| `gateway_subnet_prefix` | `null` (derived) | The 241st `/24` of `vnet_address_space` — `10.70.240.0/24` at index 0, well clear of `subnet_prefix`. Set it only to override. |
+| `governed_subnet_prefix` | `null` (derived) | The 15th `/20` of `vnet_address_space` — `10.70.224.0/20` at index 0. Set it only to override. |
 
 ## Outputs
 
@@ -41,7 +43,9 @@ and `subnet_id` (when `create_network`). Add your **tenant id**
 Also available: `gateway_subnet_id` and `gateway_subnet_prefix` — the latter is what an
 egress allowlist names to let workstations reach the proxy, so it is worth recording — and
 `role_extras_granted`, which lists the optional action sets folded into the custom role so
-you can check what you granted.
+you can check what you granted. `vnet_address_space` and `subnet_prefix` report the ranges this
+region actually took — worth recording, since they are what the next region has to stay clear
+of.
 
 ## Use as a module
 

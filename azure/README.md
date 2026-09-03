@@ -90,6 +90,10 @@ terraform init && terraform apply
 terraform output handoff
 ```
 
+If you change `location` from the default, change the `region_indexes` key beside it too — it
+is what decides the landing pad's range, and the plan fails rather than guessing if the two
+disagree. See [A second region](#a-second-region-name-it-do-not-renumber-it).
+
 ## Reaching your workstations
 
 Ringleader has **no bastion and no SSH tunnel**: `rl shell`, `rl tmux`, port-forwards,
@@ -223,7 +227,8 @@ Restricting egress by **hostname** (rather than by IP range) needs a resolver th
 workstation, and no cloud offers one — so Ringleader runs a small DNS / HTTPS proxy VM in your
 resource group. That VM does not exist yet, but it is worth reserving its address range now:
 
-It is on by default (`10.70.240.0/24`). To skip it:
+It is on by default, taking the 241st `/24` of the VNet — `10.70.240.0/24` in a first region,
+and following the VNet into whichever `/16` a later one takes. To skip it:
 
 ```hcl
 create_gateway_subnet = false
@@ -243,7 +248,8 @@ proxy costs $200 — more than the `Standard_D2as_v5` it runs on. Same-zone traf
 
 ### And a subnet for the workstations that proxy governs
 
-`create_governed_subnet` is also on by default, at `10.70.224.0/20`. It is the subnet you put a
+`create_governed_subnet` is also on by default, taking the 15th `/20` of the VNet —
+`10.70.224.0/20` in a first region. It is the subnet you put a
 workstation in **once it carries an egress policy**, and placing a box there is the whole of what
 makes it proxy-governed.
 
@@ -284,21 +290,80 @@ What it gets and what it deliberately does not:
   subnet creation**: turning it off later replaces the subnet, so it has to be right on the first
   apply.
 
-## Plan your address space before the second region
+## A second region: name it, do not renumber it
 
 An Azure VNet is regional. A second region means a second VNet joined by **global VNet
-peering**, which is non-transitive and cannot join overlapping address spaces. So pick the
-ranges up front, even if you only need one region today:
+peering**, which is non-transitive and cannot join overlapping address spaces. Two regions on
+one range can never be peered, and the fix at that point is to renumber and re-onboard — so
+the allocation has to be right from the **first** apply, not fixed when you need it.
 
-| region | `vnet_address_space` | `subnet_prefix` | `gateway_subnet_prefix` |
-|---|---|---|---|
-| first | `10.70.0.0/16` | `10.70.1.0/24` | `10.70.240.0/24` |
-| second | `10.71.0.0/16` | `10.71.1.0/24` | `10.71.240.0/24` |
-| third | `10.72.0.0/16` | `10.72.1.0/24` | `10.72.240.0/24` |
+The Terraform module therefore derives the ranges rather than asking you to plan them. Name
+your locations in `region_indexes`, and use the **same map in every region**:
+
+```hcl
+region_indexes = {
+  "eastus"     = 0
+  "westeurope" = 1
+}
+```
+
+The module looks up `var.location`, so those two applies take `10.70.0.0/16` and
+`10.71.0.0/16` whichever order you run them in and whichever `tfvars` file you reach for.
+
+**Naming them is required**, from one region onwards, whenever the module creates the landing
+pad. There is no signal in a fresh Terraform state that says "this is the second region", so a
+module that accepted silence would hand your second apply the first one's range without a word
+— the declaration is the signal, and it costs one line:
+
+```hcl
+region_indexes = { "eastus" = 0 }   # index 0 is the range you already have
+```
+
+Three mistakes are then refused at plan time rather than discovered at the peering: a location
+the map does not name, two locations sharing an index, and an index outside `0`–`9`. What no
+module can catch is an operator who *replaces* an entry instead of adding one — Terraform
+cannot read the other region's state. Keep one map, shared.
+
+Every subnet is carved out of whichever `/16` the VNet took, so there is nothing else to keep
+in step:
+
+| index | region | `vnet_address_space` | `subnet_prefix` | `governed_subnet_prefix` | `gateway_subnet_prefix` |
+|---|---|---|---|---|---|
+| `0` | first | `10.70.0.0/16` | `10.70.1.0/24` | `10.70.224.0/20` | `10.70.240.0/24` |
+| `1` | second | `10.71.0.0/16` | `10.71.1.0/24` | `10.71.224.0/20` | `10.71.240.0/24` |
+| `2` | third | `10.72.0.0/16` | `10.72.1.0/24` | `10.72.224.0/20` | `10.72.240.0/24` |
+
+Index `0` is what this module has always created, so an existing single-region landing pad
+plans as a **no-op** once you name its location at `0` — nothing is renumbered by adopting
+this, and the one-line addition is the whole migration. Indexes run `0`–`9`
+(`10.70.0.0/16`–`10.79.0.0/16`), which keeps clear of the AWS module's `10.60.0.0/16` block so
+onboarding both clouds does not overlap them either.
+
+**Bringing your own IPAM?** Set `vnet_address_space` and the subnets follow it;
+`region_indexes` is then ignored and keeping the regions distinct is yours to do. Overriding an
+individual subnet still works too.
+
+> **The ARM template does not enforce any of this yet — a known gap.** Its `vnetCidr`,
+> `subnetCidr`, `gatewaySubnetCidr` and `governedSubnetCidr` are four independent parameters
+> with the fixed defaults in the table's first row: nothing derives them from each other,
+> nothing ties them to a location, and deploying it a second time in a second region on the
+> defaults succeeds and gives you two VNets that can never be peered. If you will ever run more
+> than one region, **use the Terraform module**, which refuses that. If you must use the ARM
+> template, set all four parameters per region from the table above, on the first apply —
+> getting it wrong is not fixable later.
 
 Ringleader's proxy VMs are regional, so each region runs its own; nothing here requires the
 regions to be joined at all until you want one proxy to serve several. Global VNet peering
 also charges for cross-region transfer, which is a second reason to keep a proxy local.
+
+### Checking the allocation without an Azure subscription
+
+The module ships its allocation rules as tests, so a change to them cannot quietly renumber a
+landing pad. They mock both providers and only ever `plan`, so they need no credentials:
+
+```console
+$ cd azure/terraform && terraform init && terraform test
+```
 
 ## What you return to Ringleader
 

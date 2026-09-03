@@ -113,13 +113,21 @@ variable "create_gateway_subnet" {
 
 variable "gateway_subnet_prefix" {
   type        = string
-  default     = "10.70.240.0/24"
+  default     = null
   description = <<-EOT
-    Prefix for the gateway subnet, when create_gateway_subnet is set. Must sit inside
-    vnet_address_space, and the default sits well clear of the workstations subnet so growing
-    that one later does not collide. If you changed vnet_address_space for a second region,
-    change this to match.
+    Prefix for the gateway subnet, when create_gateway_subnet is set. Unset -- the default --
+    takes the 241st /24 of vnet_address_space, which is 10.70.240.0/24 on the default VNet
+    range. It follows vnet_address_space wherever you move it, so a second region needs no
+    edit here, and it sits well clear of the workstations subnet so growing that one later does
+    not collide.
+
+    Set it only to override, and then it must sit inside vnet_address_space.
   EOT
+
+  validation {
+    condition     = var.gateway_subnet_prefix == null || can(cidrhost(var.gateway_subnet_prefix, 0))
+    error_message = "gateway_subnet_prefix must be a CIDR block, e.g. 10.70.240.0/24."
+  }
 }
 
 # --- A subnet for the boxes a gateway GOVERNS (on by default) ----------------
@@ -152,16 +160,25 @@ variable "create_governed_subnet" {
 
 variable "governed_subnet_prefix" {
   type        = string
-  default     = "10.70.224.0/20"
+  default     = null
   description = <<-EOT
-    Prefix for the governed subnet, when create_governed_subnet is set. Must sit inside
-    vnet_address_space. The default sits immediately below the gateway subnet at the top of the
-    VNet, which groups the two egress-control ranges together and leaves the workstations prefix
-    at the bottom free to grow. If you changed vnet_address_space for a second region, change
-    this to match.
+    Prefix for the governed subnet, when create_governed_subnet is set. Unset -- the default --
+    takes the 15th /20 of vnet_address_space, which is 10.70.224.0/20 on the default VNet
+    range, and it follows vnet_address_space wherever you move it.
+
+    That sits immediately below the gateway subnet at the top of the VNet, which groups the two
+    egress-control ranges together and leaves the workstations prefix at the bottom free to
+    grow.
 
     It is sized like a fleet rather than like the gateway subnet, which holds one VM.
+
+    Set it only to override, and then it must sit inside vnet_address_space.
   EOT
+
+  validation {
+    condition     = var.governed_subnet_prefix == null || can(cidrhost(var.governed_subnet_prefix, 0))
+    error_message = "governed_subnet_prefix must be a CIDR block, e.g. 10.70.224.0/20."
+  }
 }
 
 # --- Network landing pad, on by default (egress out; inbound only via ssh_source_ranges) ---
@@ -240,21 +257,94 @@ variable "location" {
   description = "Region for the optional network landing pad."
 }
 
+variable "region_indexes" {
+  type        = map(number)
+  default     = {}
+  description = <<-EOT
+    Which /16 each region's landing pad takes, as location => index. The VNet gets
+    10.(70 + index).0.0/16 and every subnet below is carved out of it.
+
+    REQUIRED whenever create_network is set and you have not set vnet_address_space, even for
+    one region:
+
+      region_indexes = {
+        "eastus" = 0
+      }
+
+    Index 0 is 10.70.0.0/16, the range this module has always created, so naming your current
+    location at 0 plans as a no-op. The declaration is what buys the enforcement: there is no
+    signal in a fresh Terraform state that says "this is the second region", so a module that
+    accepted silence would hand a second apply the first one's range without a word. Naming
+    them is the signal.
+
+    Onboarding a SECOND region: add it to the map and use the SAME map in BOTH regions' tfvars.
+
+      region_indexes = {
+        "eastus"     = 0
+        "westeurope" = 1
+      }
+
+    The module looks up var.location, so the two VNets take 10.70.0.0/16 and 10.71.0.0/16
+    whichever order you apply them in and whichever tfvars file you reach for. Copy a tfvars
+    file to a second region and forget to extend the map and the plan FAILS, naming the
+    location -- rather than silently taking 10.70.0.0/16 twice. Two locations cannot share an
+    index either; the map is refused.
+
+    That matters because an Azure VNet is regional: a second region is a second VNet, joining
+    them later needs global VNet peering, and peering cannot join overlapping address spaces.
+    Two regions applied on one range can never be peered and the only fix is to renumber and
+    re-onboard.
+
+    What it still cannot catch, because Terraform cannot read another region's state: an
+    operator who REPLACES an entry rather than adding one, moving a location onto an index
+    another one already holds in a state this apply cannot see. Keep one map, shared.
+
+    Indexes are 0-9, i.e. 10.70.0.0/16 through 10.79.0.0/16. The floor keeps this module clear
+    of the AWS module's 10.60.0.0/16 block, so onboarding both clouds does not overlap them
+    either. Past ten regions, or on your own IPAM, set vnet_address_space instead -- it
+    overrides all of this, and then the allocation is yours to keep distinct.
+  EOT
+
+  validation {
+    condition     = length(var.region_indexes) == length(distinct(values(var.region_indexes)))
+    error_message = "region_indexes must give every location a DISTINCT index; two regions sharing one index is exactly the overlap this variable exists to prevent."
+  }
+
+  validation {
+    condition     = alltrue([for i in values(var.region_indexes) : floor(i) == i && i >= 0 && i <= 9])
+    error_message = "region_indexes values must be whole numbers 0-9, which allocate 10.70.0.0/16 through 10.79.0.0/16. Set vnet_address_space to bring your own range instead."
+  }
+}
+
 variable "vnet_address_space" {
   type        = string
-  default     = "10.70.0.0/16"
+  default     = null
   description = <<-EOT
     Address space for the optional vnet. One region's worth.
 
-    Give every region its own range from the first apply. An Azure VNet is regional, so a
-    second region is a second VNet, and joining them later needs global VNet peering, which
-    cannot join overlapping address spaces. A simple plan: 10.70.0.0/16 for the first region,
-    10.71.0.0/16 for the second, and so on.
+    Unset -- the default -- derives it from region_indexes: 10.(70 + index).0.0/16, which is
+    10.70.0.0/16 for a single region and is what this module has always created. Set it to
+    bring your own range, and then you own keeping every region distinct; see region_indexes
+    for why that matters.
   EOT
+
+  validation {
+    condition     = var.vnet_address_space == null || can(cidrhost(var.vnet_address_space, 0))
+    error_message = "vnet_address_space must be a CIDR block, e.g. 10.70.0.0/16."
+  }
 }
 
 variable "subnet_prefix" {
   type        = string
-  default     = "10.70.1.0/24"
-  description = "Prefix for the optional workstations subnet. Must sit inside vnet_address_space."
+  default     = null
+  description = <<-EOT
+    Prefix for the optional workstations subnet. Unset -- the default -- takes the second /24
+    of vnet_address_space, which is 10.70.1.0/24 on the default VNet range. Set it only to
+    override; it must sit inside vnet_address_space.
+  EOT
+
+  validation {
+    condition     = var.subnet_prefix == null || can(cidrhost(var.subnet_prefix, 0))
+    error_message = "subnet_prefix must be a CIDR block, e.g. 10.70.1.0/24."
+  }
 }
