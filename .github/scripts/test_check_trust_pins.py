@@ -1252,7 +1252,7 @@ if __name__ == "__main__":
 
 
 # ======================================================================================
-# The closed grammar: every way to bind a pin that is NOT an assignment (RIN-1692)
+# The closed grammar: every way to bind a pin that is NOT an assignment
 # ======================================================================================
 
 

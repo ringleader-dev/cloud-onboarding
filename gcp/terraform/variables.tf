@@ -105,6 +105,22 @@ variable "enable_egress_control" {
   EOT
 }
 
+variable "identity_role_id" {
+  type        = string
+  default     = "ringleaderManagedIdentities"
+  description = <<-EOT
+    Id of the custom role that lets Ringleader create and delete the role-less service
+    accounts it attaches to the machines it runs here. Change it only if that id is already
+    taken in this project -- a custom role id cannot be reused for 7 days after deletion, so
+    a re-apply soon after a destroy may need a different one.
+  EOT
+
+  validation {
+    condition     = can(regex("^[a-zA-Z0-9_.]{3,64}$", var.identity_role_id))
+    error_message = "identity_role_id must be 3-64 characters of [a-zA-Z0-9_.] (GCP custom role ids allow no hyphens)."
+  }
+}
+
 variable "egress_role_id" {
   type        = string
   default     = "ringleaderEgressControl"

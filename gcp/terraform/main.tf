@@ -147,6 +147,46 @@ moved {
   to   = google_project_iam_member.service_account_user
 }
 
+# 2a-bis. The identities RINGLEADER creates for its OWN appliances -- unconditional, and
+# deliberately unable to grant anything.
+#
+# Some machines Ringleader runs in this project are not workstations: the egress gateway is
+# one. They still need an attached service account, because on GCE the metadata server mints
+# the instance identity assertion a machine enrols with ONLY for a VM that has one -- so
+# without this the appliance boots, bills, and can never come up.
+#
+# Ringleader creates and deletes those accounts itself rather than asking you to declare them,
+# which is what keeps this module from needing an edit every time Ringleader gains a machine.
+# The role below is exactly that capability and nothing more: create, read, list, update and
+# delete a service account. It carries NO permission to BIND a role, on the project or on the
+# account, so anything Ringleader creates with it is role-less by construction -- it can prove
+# which machine it is and do nothing else. Granting a role is 2b's projectIamAdmin, which is a
+# separate, optional decision.
+resource "google_project_iam_custom_role" "identity" {
+  project     = var.project_id
+  role_id     = var.identity_role_id
+  title       = "Ringleader Managed Identities"
+  description = "Create and delete the role-less service accounts Ringleader attaches to the machines it runs here."
+
+  permissions = [
+    "iam.serviceAccounts.create",
+    "iam.serviceAccounts.delete",
+    "iam.serviceAccounts.get",
+    "iam.serviceAccounts.list",
+    "iam.serviceAccounts.update",
+  ]
+
+  depends_on = [google_project_service.iam]
+}
+
+resource "google_project_iam_member" "identity" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.identity.id
+  member  = "serviceAccount:${google_service_account.onboarding.email}"
+
+  depends_on = [google_project_service.cloudresourcemanager]
+}
+
 # 2b. Per-workstation runtime identities (on by default; enable_workstation_identities).
 #
 # Every workstation already runs as a service account (see 2). What this adds is letting
@@ -244,6 +284,16 @@ resource "google_project_iam_custom_role" "egress" {
     "compute.routes.get",
     "compute.routes.list",
     "compute.networks.updatePolicy",
+    # A reserved address for the egress gateway, so the address your upstreams see does not
+    # change underneath them. Without one the gateway leaves on an ephemeral address, and
+    # Ringleader replaces that machine when it fails health -- so anything you allowlisted
+    # upstream would break at the worst moment. Reserving one is Ringleader's job because
+    # Ringleader is what creates and replaces the machine. `compute.addresses.use` is already
+    # covered by the base grant.
+    "compute.addresses.create",
+    "compute.addresses.delete",
+    "compute.addresses.get",
+    "compute.addresses.list",
   ]
 
   depends_on = [google_project_service.iam]
@@ -266,10 +316,8 @@ resource "google_project_iam_custom_role" "egress" {
 #     privilege-escalation path in an organization that uses tags in IAM conditions -- whoever
 #     can set a tag can satisfy a condition written against it.
 #
-# So this is left as a deliberate opt-in rather than folded into the default: it buys a
-# capability nobody has committed to using, at a cost that depends on how your organization
-# uses tags. If you want it, add a second custom role with those permissions and bind it to
-# the same service account -- nothing else in this module has to change.
+# So it is not granted here. If you want it, add a second custom role with those permissions
+# and bind it to the same service account -- nothing else in this module has to change.
 
 resource "google_project_iam_member" "egress" {
   count   = var.enable_egress_control ? 1 : 0

@@ -94,7 +94,7 @@ class TheShippedArtifactsPass(unittest.TestCase):
 
 
 class GatewayTagCannotDrift(Rejects):
-    """RIN-1662's headline: the tag Ringleader sets, named in two places in this repo."""
+    """The headline: the tag Ringleader sets, named in two places in this repo."""
 
     def test_renamed_in_the_terraform_only(self):
         self.assertRejected(
