@@ -16,7 +16,8 @@
 #                (default: empty -- NO rule is created)
 #   SECONDARY_SSH_TAG
 #                network tag that rule targets        (default: ringleader-secondary-ssh)
-#   GATEWAY_CIDR an empty subnet reserved for the egress gateway VM
+#   GATEWAY_CIDR an empty range reserved beside the workstations subnet. Nothing is
+#                placed in it on GCP -- see below
 #                (default: 10.80.240.0/24; set to "none" to skip it)
 #   GOVERNED_CIDR  a subnet for the workstations a gateway governs
 #                (default: EMPTY -- none is created; see below)
@@ -81,6 +82,9 @@ if [ "$SECONDARY_SSH_RANGES" = "none" ]; then
   SECONDARY_SSH_RANGES=""
 fi
 SECONDARY_SSH_TAG="${SECONDARY_SSH_TAG:-ringleader-secondary-ssh}"
+# The tag Ringleader puts on the egress gateway VM it builds here. Not a knob: nothing of yours
+# carries it, and it has to match what Ringleader actually tags or the rule below admits nothing.
+GATEWAY_TAG="ringleader-egress-gateway"
 GATEWAY_CIDR="${GATEWAY_CIDR:-10.80.240.0/24}"
 if [ "$GATEWAY_CIDR" = "none" ]; then
   GATEWAY_CIDR=""
@@ -104,19 +108,20 @@ gcloud compute networks create ringleader-vpc --project "$PROJECT" --subnet-mode
 gcloud compute networks subnets create ringleader-workstations --project "$PROJECT" \
   --network ringleader-vpc --region "$REGION" --range "$CIDR" \
   --enable-private-ip-google-access
-# A home for the egress gateway VM -- created empty, and only if you ask.
+# A reserved, empty range -- created only if you ask, and it STAYS empty here.
 #
-# Ringleader's hostname-level egress control points workstations at a proxy that resolves
-# names and terminates HTTPS for the hosts you allow. Ringleader builds that VM itself once a
-# policy names hostnames, and it is billed; a subnet of its own means the firewall rules
-# permitting workstation -> gateway traffic can name one stable range rather than one VM's
-# address, and carving it now avoids renumbering later.
-# GCP does not bill for a subnet, and Cloud NAT below covers every range in this region.
+# Ringleader's hostname-level egress control points workstations at a proxy that resolves names
+# and terminates HTTPS for the hosts you allow, and it builds that VM itself once a policy names
+# hostnames. On GCP it builds it in the WORKSTATIONS subnet: the steering route is scoped by
+# network tag and the proxy carries none, so it sits beside the boxes without steering itself.
+# EgressGateway.spec.subnet is refused on this provider, so do not hand this range back.
+# It is carved anyway so the addressing matches the AWS and Azure paths and a later renumbering
+# does not collide. GCP does not bill for a subnet.
 if [[ -n "$GATEWAY_CIDR" ]]; then
   gcloud compute networks subnets create ringleader-gateway --project "$PROJECT" \
     --network ringleader-vpc --region "$REGION" --range "$GATEWAY_CIDR" \
     --enable-private-ip-google-access
-  echo ">> gateway subnet ringleader-gateway created at ${GATEWAY_CIDR}"
+  echo ">> reserved range ringleader-gateway created at ${GATEWAY_CIDR} (stays empty; the gateway VM runs in the workstations subnet)"
 fi
 if [[ -n "$GOVERNED_CIDR" ]]; then
   gcloud compute networks subnets create ringleader-governed --project "$PROJECT" \
@@ -157,18 +162,39 @@ fi
 # Without it a custom-mode VPC has no firewall rules and two workstations cannot reach each
 # other at all -- a tighter posture, in which a compromised box cannot scan its neighbours.
 # Set ALLOW_INTERNAL=0 for that. It never admits anything from outside the subnet.
+# The workstation ranges, computed once because two rules name them. The governed subnet counts as
+# one when you asked for one: a workstation does not stop being a workstation because a gateway
+# steers it.
+WORKSTATION_RANGES="$CIDR"
+if [[ -n "$GOVERNED_CIDR" ]]; then
+  WORKSTATION_RANGES="${CIDR},${GOVERNED_CIDR}"
+fi
+
 if [[ "$ALLOW_INTERNAL" == "1" ]]; then
-  # The governed subnet counts as a workstation range when you asked for one: a workstation does
-  # not stop being a workstation because a gateway steers it.
-  INTERNAL_RANGES="$CIDR"
-  if [[ -n "$GOVERNED_CIDR" ]]; then
-    INTERNAL_RANGES="${CIDR},${GOVERNED_CIDR}"
-  fi
   gcloud compute firewall-rules create ringleader-allow-internal --project "$PROJECT" \
     --network ringleader-vpc --direction INGRESS --action allow \
-    --rules tcp,udp,icmp --source-ranges "$INTERNAL_RANGES" --target-tags "$SSH_TAG"
-  echo ">> workstations tagged ${SSH_TAG} can reach each other within ${INTERNAL_RANGES}"
+    --rules tcp,udp,icmp --source-ranges "$WORKSTATION_RANGES" --target-tags "$SSH_TAG"
+  echo ">> workstations tagged ${SSH_TAG} can reach each other within ${WORKSTATION_RANGES}"
 fi
+
+# Workstation-to-GATEWAY traffic. Without it, hostname-level egress control is a silent total
+# outage: Ringleader's proxy VM comes up, the steering route exists, every object check passes, and
+# a custom-mode VPC drops every forwarded packet at that VM's own NIC.
+#
+# It needs its own rule rather than allow-internal because the gateway VM does not carry the
+# workstation tag -- it cannot, since Ringleader's steering route is scoped by tag and a gateway
+# wearing a workstation's tag would route its traffic into itself. GATEWAY_TAG is fixed by
+# Ringleader, like SECONDARY_SSH_PORT: a value that drifted from the one it actually tags would be a
+# rule that reads correctly in the console and admits nothing.
+#
+# It follows no switch, including ALLOW_INTERNAL. That one is a posture choice about lateral movement
+# between workstations; this admits them to the one machine that polices their egress, so turning it
+# off would harden nothing and break egress control while leaving it looking enforced. Without
+# hostname-level egress control there is no gateway VM and the rule admits nobody.
+gcloud compute firewall-rules create ringleader-allow-gateway --project "$PROJECT" \
+  --network ringleader-vpc --direction INGRESS --action allow \
+  --rules tcp,udp,icmp --source-ranges "$WORKSTATION_RANGES" --target-tags "$GATEWAY_TAG"
+echo ">> workstations within ${WORKSTATION_RANGES} can reach the egress gateway tagged ${GATEWAY_TAG}"
 
 echo
 echo ">> subnet self-link (hand back to Ringleader as your workstation subnet):"
@@ -177,7 +203,9 @@ gcloud compute networks subnets describe ringleader-workstations \
 
 if [[ -n "$GATEWAY_CIDR" ]]; then
   echo
-  echo ">> gateway subnet self-link (for the egress gateway VM):"
+  echo ">> reserved range self-link -- do NOT hand this back. Nothing is placed in it: the"
+  echo "   gateway VM runs in the workstations subnet, and EgressGateway.spec.subnet is"
+  echo "   refused on GCP. Kept only so the addressing matches the AWS and Azure paths."
   gcloud compute networks subnets describe ringleader-gateway \
     --project "$PROJECT" --region "$REGION" --format='value(selfLink)'
 fi

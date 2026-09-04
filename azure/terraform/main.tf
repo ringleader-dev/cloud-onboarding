@@ -11,8 +11,8 @@
 #     Ringleader authenticates with a signed token instead of a secret.
 #
 # Plus, all on by default and each one a variable you can set to false: a vnet + subnet +
-# NAT gateway + NSG landing pad, a reserved subnet for the DNS / HTTPS proxy VM that
-# hostname-level egress control will use, egress control itself (letting Ringleader manage
+# NAT gateway + NSG landing pad, the subnet the DNS / HTTPS proxy VM for hostname-level
+# egress control runs in, egress control itself (letting Ringleader manage
 # the NSGs that restrict where workstations may connect), and per-workstation managed
 # identities.
 #
@@ -197,17 +197,21 @@ resource "azurerm_subnet" "workstations" {
   address_prefixes     = [local.subnet_prefix]
 }
 
-# A home for the future DNS / HTTPS proxy VM -- created empty, and on by default.
+# Where the DNS / HTTPS proxy VM runs -- created empty, and on by default.
 #
-# Ringleader's egress control can point workstations at a proxy that resolves names and
-# terminates HTTPS for the hosts you allow. That VM is not built yet, but where it will live
-# is worth settling now: giving it a subnet of its own means the NSG rules that permit
-# workstation -> proxy traffic can name one stable prefix instead of one VM's address, and
-# carving the range now avoids renumbering later. Azure does not bill for a subnet.
+# Ringleader's egress control points workstations at a proxy that resolves names and terminates
+# HTTPS for the hosts you allow, and it builds that VM itself once you hand this subnet's id
+# back as EgressGateway.spec.subnet -- and none before that: a UDR attaches per subnet and
+# replaces the default route of everything in it, so a proxy sitting in a subnet it steers would
+# route its own egress into itself. A subnet of its own also means the NSG rules that permit
+# workstation -> proxy traffic can name one stable prefix instead of one VM's address. Azure does
+# not bill for a subnet.
 #
 # No NSG is attached. Azure's defaults already allow intra-VNet traffic and deny inbound from
 # the internet, which is the right posture for a proxy; Ringleader adds what it needs when the
-# VM ships. It shares the NAT gateway below, so the proxy has upstream egress with no public IP.
+# VM ships. The subnet is associated with the NAT gateway below, so anything placed here has egress
+# without an address of its own -- but the gateway VM itself carries a standalone public IP, which
+# bills separately (azgateway's EnsureGatewayNetwork creates one before the NIC, unconditionally).
 resource "azurerm_subnet" "gateway" {
   count                = var.create_network && var.create_gateway_subnet ? 1 : 0
   name                 = "gateway"

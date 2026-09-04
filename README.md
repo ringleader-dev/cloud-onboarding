@@ -159,11 +159,17 @@ on 80, checks the name against that workstation's policy, and re-resolves it its
 trusting the address the box was heading for. Ringleader builds and maintains that VM for you on
 all three clouds once you declare a policy naming hostnames; it is a **billed** instance, roughly
 one to two extra workstations per region, and it is the one object in this whole grant that costs
-money without your creating it by name. Every module reserves an empty subnet for it
-(`create_gateway_subnet`), which costs nothing and saves renumbering later. The AWS and Azure
-modules reserve a **second** one (`create_governed_subnet`) for the workstations that gateway
-governs; GCP does not need one, because a box there is governed by its network tag rather than by
-where it sits.
+money without your creating it by name. Every module reserves a subnet for it
+(`create_gateway_subnet`), which costs nothing — but what happens to that subnet differs by cloud,
+and it is the one handoff detail worth reading twice. **On AWS and Azure the VM goes in it**, and
+you hand its id back as `spec.subnet` on the `EgressGateway`: a route table and a UDR attach per
+subnet and replace the default route of everything in it, so a proxy sitting in a subnet it steers
+would route its own egress into itself — Ringleader therefore builds no gateway VM at all until it
+has that id. **On GCP nothing goes in it and you hand it back nowhere**: the steering route there is
+scoped by network tag and the proxy carries none, so it runs in the workstations' own subnet
+harmlessly and `spec.subnet` is refused. The AWS and Azure modules reserve a **second** subnet
+(`create_governed_subnet`) for the workstations that gateway governs; GCP does not need one, for the
+same reason — a box there is governed by its network tag rather than by where it sits.
 
 Two things follow that are worth knowing before you budget:
 
@@ -224,7 +230,7 @@ is a single variable away from off.
 |---|---|---|---|---|
 | **Landing-pad network** | VPC/VNet + subnet + egress + a security group / NSG | `create_network` | `CREATE_NETWORK` (AWS, Azure), `network-landing-pad.sh` (GCP) | GCP Cloud NAT, Azure NAT gateway + public IP |
 | **NAT gateway** (AWS) | private route table, so an instance with no public IP has egress | `create_nat_gateway` | `CREATE_NAT_GATEWAY` | yes — hourly **and $0.045/GB** |
-| **Gateway subnet** | an empty subnet reserved for the egress gateway VM | `create_gateway_subnet` | `CREATE_GATEWAY_SUBNET`, `GATEWAY_CIDR` (GCP) | the subnet, no — the gateway VM Ringleader puts in it, **yes** |
+| **Gateway subnet** | where the egress gateway VM runs on AWS and Azure — hand its id back as `EgressGateway.spec.subnet`, and no gateway is built until you do. On GCP a reserved range that stays empty: the VM runs in the workstations subnet and `spec.subnet` is refused | `create_gateway_subnet` | `CREATE_GATEWAY_SUBNET`, `GATEWAY_CIDR` (GCP) | the subnet, no. On AWS and Azure the gateway VM Ringleader puts in it, **yes**; on GCP nothing is placed in it, and the VM still bills — it just runs in the workstations subnet |
 | **Governed subnet** | an empty subnet for the workstations that gateway governs. On by default on AWS and Azure, **off on GCP**, which governs by network tag instead | `create_governed_subnet` | `CREATE_GOVERNED_SUBNET`, `GOVERNED_CIDR` (GCP) | no |
 | **Egress control** | Ringleader may create and maintain the firewall objects an egress policy compiles to, the routes that steer traffic at the gateway, and the gateway VM itself | `enable_egress_control` | `EGRESS_CONTROL` | only if you declare a policy naming hostnames, which builds the gateway VM |
 | **Workstation identities** | Ringleader may create per-user identities and bind roles to them | `enable_workstation_identities` | `WORKSTATION_IDENTITIES` (GCP `onboard.sh`, Azure `deploy.sh`) — **not available on the AWS CloudFormation path**, which grants no `iam:PassRole` at all; use the AWS Terraform module if you want it | no |
@@ -301,7 +307,33 @@ README.md              <- you are here
 gcp/     README.md + terraform/ + gcloud/
 azure/   README.md + terraform/ + arm/
 aws/     README.md + terraform/ + cloudformation/
+.github/ CI: the checks below, and the trust-pin guard they run
 ```
+
+## Checks that run on every change
+
+Everything here is applied by you, in your own account, so a broken template is not
+something we find out about — these run on every pull request instead, and none of them
+needs cloud credentials:
+
+- **`terraform fmt -check` and `terraform validate`** on all six configurations: each
+  cloud's module and the `examples/standalone` root a customer actually applies.
+- **`terraform test`** for each module that ships a `tests/` directory. Providers are mocked
+  and only `plan` runs, so it needs no cloud account.
+- **`cfn-lint`** on the AWS CloudFormation template.
+- **The AWS trust-pin guard** (`.github/scripts/check_aws_trust_pins.py`) — the one check
+  that is about security rather than deployability. The Terraform module and the
+  CloudFormation template each pin the assertion's `sub` and `aud` to one organization, and
+  the guard fails the build if either stops. It reads past the obvious edits — a dropped
+  condition, a `StringLike` in place of `StringEquals`, a wildcard — to the ones that leave
+  the condition looking untouched: a `locals` value quietly hardcoded to some other org, a
+  role repointed at a different policy document, a second statement slipped in beside the
+  pinned one, a template parameter given a default. A renamed block, or any shape the guard
+  cannot read, is a loud failure rather than a silent pass. Because every customer's
+  assertion is signed by the same issuer, that `sub` condition is the only thing standing
+  between your account and every other Ringleader tenant, and its weakened form reads exactly
+  like hardening boilerplate. The guard's own failure modes are tested against the real
+  templates, so it cannot rot into passing while scanning nothing.
 
 ## License
 

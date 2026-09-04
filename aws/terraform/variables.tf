@@ -307,14 +307,14 @@ variable "create_nat_gateway" {
   EOT
 }
 
-# --- A subnet for the future DNS / HTTPS proxy VM (on by default) ------------
+# --- The subnet the DNS / HTTPS proxy VM runs in (on by default) -------------
 
 variable "create_gateway_subnet" {
   type        = bool
   default     = true
   description = <<-EOT
-    Reserve a subnet for the DNS / HTTPS proxy VM that Ringleader's hostname-level egress
-    control will use. On by default; set false to opt out. Needs create_network.
+    Reserve the subnet the DNS / HTTPS proxy VM for Ringleader's hostname-level egress control
+    runs in. On by default; set false to opt out. Needs create_network.
 
     This creates nothing but an empty subnet and its route table, neither of which AWS bills
     for; Ringleader builds the VM itself once you declare an EgressGateway naming this subnet

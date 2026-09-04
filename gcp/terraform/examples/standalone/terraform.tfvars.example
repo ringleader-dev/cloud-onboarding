@@ -51,9 +51,11 @@ network_cidr = "10.80.0.0/16"
 # separate, documented opt-in; see gcp/README.md.
 # enable_egress_control = false
 
-# An empty subnet (the 241st /24 of network_cidr) reserved for the DNS / HTTPS proxy VM that hostname-level
-# egress control will use. The VM does not exist yet; the subnet costs nothing and saves
-# renumbering later.
+# An empty range (the 241st /24 of network_cidr) carved beside the workstations subnet. NOTHING is
+# placed in it on GCP -- the steering route is scoped by network tag, so Ringleader runs the DNS /
+# HTTPS proxy VM in the workstations' own subnet, and EgressGateway.spec.subnet is refused here.
+# It costs nothing, keeps the addressing aligned with the AWS and Azure modules, and saves
+# renumbering later. Do not hand it back.
 # create_gateway_subnet = false
 
 # OFF by default here, unlike the AWS and Azure modules. A subnet for the workstations the

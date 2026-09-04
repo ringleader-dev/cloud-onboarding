@@ -223,8 +223,9 @@ pass something that can read the hostname off it. Ringleader runs a small **egre
 in your account for that: it reads the TLS SNI on 443 and the HTTP Host on 80, checks the name
 against that workstation's policy, and re-resolves it itself rather than trusting the address
 the box was heading for. Ringleader builds and maintains that VM itself, once a workstation
-declares a policy naming hostnames, and it is a **billed** instance. Reserving its address range
-now is what keeps you from renumbering later.
+declares a policy naming hostnames, and it is a **billed** instance. This is the subnet it runs
+in — so reserving the range now is both what keeps you from renumbering later and what the
+gateway is placed in.
 
 `create_gateway_subnet` is on by default, taking the 241st `/24` of the VPC — `10.60.240.0/24`
 in a first region, and following the VPC into whichever `/16` a later one takes. To skip it:
@@ -236,8 +237,15 @@ create_gateway_subnet = false
 CREATE_GATEWAY_SUBNET=false ./deploy.sh
 ```
 
-It creates an **empty subnet and its route table**, neither of which AWS bills for. Two
-properties of that subnet are cost decisions rather than conveniences:
+It creates an **empty subnet and its route table**, neither of which AWS bills for.
+
+**Hand its id back as `spec.subnet` on the `EgressGateway`.** It is `gateway_subnet_id` in the
+handoff, and Ringleader builds no gateway VM until it has one: a route table attaches per subnet
+and replaces the default route of everything in it, so a proxy sitting in a subnet it steers would
+route its own egress into itself and black-hole every workstation it serves. Do not hand
+`governed_subnet_id` here — that one is the workstations'.
+
+Two properties of that subnet are cost decisions rather than conveniences:
 
 - **It is public**, routed through the internet gateway. The proxy carries a fleet's whole
   outbound volume, and internet ingress is free on every cloud — so a proxy with its own public

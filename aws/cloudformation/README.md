@@ -70,8 +70,9 @@ hourly plus $0.045/GB — and it is independent of `CreateGatewaySubnet`, whose 
 and routed through the internet gateway.
 
 The two subnets are for different things and only the second holds workstations:
-`GatewaySubnet` is where the egress gateway VM runs, and `GovernedSubnet` is where the
-workstations that proxy **governs** go. The stack gives `GovernedSubnet` no route-table
+`GatewaySubnet` is where the egress gateway VM runs — hand `GatewaySubnetId` back as
+`spec.subnet` on the `EgressGateway`, and Ringleader builds no gateway VM until you do — and
+`GovernedSubnet` is where the workstations that proxy **governs** go. The stack gives `GovernedSubnet` no route-table
 association and no public IPs on purpose — Ringleader claims the subnet by associating a table
 of its own, and refuses one that already carries an association. Until a proxy steers it, a
 workstation in there has no egress at all; see
@@ -103,7 +104,9 @@ THUMBPRINT=$(echo | openssl s_client -servername oidc-app.ringleader.dev \
 `TargetRoleArn`, `OidcProviderArn`, and — with `CreateNetwork=true` — `SubnetId`,
 `SecurityGroupId` and `VpcId`; plus `InboundOnlySecurityGroupId` while egress control is on.
 With the proxy subnet on, also `GatewaySubnetId`; with a NAT gateway, `PrivateRouteTableId`.
-Hand the role ARN, region, and (if created) subnet + security group back to Ringleader.
+Hand the role ARN, region, and (if created) subnet + security group back to Ringleader —
+plus `GatewaySubnetId`, which goes on the `EgressGateway` as `spec.subnet` rather than on a
+workstation, and `GovernedSubnetId` for the workstations that carry an egress policy.
 
 **Two security groups, and the choice is not cosmetic.** `SecurityGroupId` is the landing pad:
 egress out, inbound SSH. `InboundOnlySecurityGroupId` has the same inbound rules and no usable

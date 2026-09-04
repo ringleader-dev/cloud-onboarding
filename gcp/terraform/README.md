@@ -32,14 +32,14 @@ Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standal
 | `secondary_ssh_source_ranges` | `null` | CIDRs for the **secondary SSH port** (TCP 2222) that some workstation types run their own SSH daemon on. Unset **mirrors `ssh_source_ranges`**; `[]` closes the port. You do not supply the port number. |
 | `secondary_ssh_network_tag` | `ringleader-secondary-ssh` | Network tag that rule targets. Put it on the workstations that need the port **alongside** `workstation_network_tag`, never instead of it. |
 | `name_prefix` | `ringleader` | Prefix for the landing pad's resource names. Change it only if those names are already taken in the project; the default reproduces the names this module has always used. |
-| `allow_internal_traffic` | **`true`** | Let workstations reach **each other** (tcp/udp/icmp from the workstation subnet ranges). The one default that widens rather than grants: `false` means a compromised box cannot scan its neighbours. Never admits anything from outside the subnets. |
+| `allow_internal_traffic` | **`true`** | Let workstations reach **each other** (tcp/udp/icmp from the workstation subnet ranges). The one default that widens rather than grants: `false` means a compromised box cannot scan its neighbours. Never admits anything from outside the subnets. It does not reach `<name_prefix>-allow-gateway`, which admits workstations to the egress gateway VM — that rule is what keeps hostname-level egress control working rather than a posture choice, so it follows no switch. |
 | `region` | `us-central1` | Region for the optional network's first subnet, router and NAT. |
 | `network_cidr` | **none — required with a landing pad** | The `/16` every subnet below is carved out of. There is deliberately no default: a subnet's range is force-new, so guessing would destroy the subnet your workstations are in. `10.80.0.0/16` for a new landing pad (GCP's block is `10.80`–`10.89`, clear of AWS's `10.60`–`10.69` and Azure's `10.70`–`10.79`); `10.60.0.0/16` reproduces what this module created before it derived anything, so an existing landing pad plans as a no-op. |
 | `subnet_cidr` | `null` → first `/20` of `network_cidr` | Primary range for the optional subnet. An override; unset it follows `network_cidr`. |
 | `additional_regions` | `{}` | More regions in the **same global VPC**, as `region => subnet CIDR`. Each also gets its own Cloud Router and Cloud NAT, since both are regional. GCP refuses overlapping ranges, so a mistake fails the apply. Nothing derives these from `network_cidr` — keep them inside it. |
 | `enable_egress_control` | **`true`** | Let Ringleader manage the firewall rules an egress policy compiles to, **and** the static route that steers traffic at the DNS / HTTPS proxy. Grants a **custom role** with `compute.firewalls.*`, `compute.routes.*` and `compute.networks.updatePolicy` (ten permissions) — deliberately not `roles/compute.securityAdmin`, which reaches further. Restricts nothing until you declare a policy. GCP-native FQDN filtering is a separate, documented opt-in; see `gcp/README.md`. |
 | `egress_role_id` | `ringleaderEgressControl` | Id of that custom role. GCP reserves a deleted custom-role id for 7 days, so a quick re-apply after a destroy may need a different one. |
-| `create_gateway_subnet` | **`true`** | Reserve an empty subnet for the future DNS / HTTPS proxy VM. Costs nothing; saves renumbering later. |
+| `create_gateway_subnet` | **`true`** | Carve an empty range and leave it empty. Unlike AWS and Azure, **nothing is placed in it**: on GCP the steering route is scoped by network tag and the DNS / HTTPS proxy VM carries none, so Ringleader runs it in the workstations subnet and refuses `EgressGateway.spec.subnet`. Costs nothing; keeps the addressing aligned with the other two clouds. |
 | `create_governed_subnet` | `false` | Reserve a subnet for the workstations that proxy governs. **Off by default, and the one switch that differs from the AWS and Azure modules**: on GCP the steering route is scoped by network tag, so a box is governed by its tag and an untagged neighbour is untouched. See `gcp/README.md`. |
 | `gateway_subnet_cidr` | `null` → 241st `/24` of `network_cidr` | Its range. An override; unset it follows `network_cidr` and sits well clear of `subnet_cidr` so growing that one does not collide. |
 | `governed_subnet_cidr` | `null` → 15th `/20` of `network_cidr` | The governed subnet's range, when `create_governed_subnet` is on. An override; unset it sits immediately below the gateway range. |
@@ -51,8 +51,10 @@ Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standal
 `subnetwork_self_link` (when `create_network`).
 
 Also available: `additional_subnetwork_self_links` (keyed by region),
-`gateway_subnetwork_self_link` and `gateway_subnet_cidr` — the last is what an egress
-allowlist names to let workstations reach the proxy, so it is worth recording.
+`gateway_subnetwork_self_link` and `gateway_subnet_cidr`. Neither of the last two is handed
+back: the gateway VM runs in the workstations subnet here, so the reserved range stays empty
+and an allowlist naming it would name nothing. Record them only so a later renumbering does
+not collide.
 
 Two are for **audit** and go nowhere near Ringleader: `trusted_subject` (the one subject
 this project's provider admits) and `roles_granted` (every role the service account holds,
