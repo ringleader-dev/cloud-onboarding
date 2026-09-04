@@ -113,6 +113,7 @@
     "governedSubnetPrefix": "[if(empty(parameters('governedSubnetCidr')), cidrSubnet(variables('vnetAddressSpace'), 20, 14), parameters('governedSubnetCidr'))]",
     "vnetName": "[concat(parameters('namePrefix'), '-vnet')]",
     "nsgName": "[concat(parameters('namePrefix'), '-workstations-nsg')]",
+    "gatewayNsgName": "[concat(parameters('namePrefix'), '-gateway-nsg')]",
     "natName": "[concat(parameters('namePrefix'), '-nat')]",
     "natPipName": "[concat(parameters('namePrefix'), '-nat-pip')]",
     "subnetName": "workstations",
@@ -168,6 +169,9 @@
         "name": "[variables('gatewaySubnetName')]",
         "properties": {
           "addressPrefix": "[variables('gatewaySubnetPrefix')]",
+          "networkSecurityGroup": {
+            "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('gatewayNsgName'))]"
+          },
           "natGateway": {
             "id": "[resourceId('Microsoft.Network/natGateways', variables('natName'))]"
           }
@@ -230,12 +234,38 @@
       }
     },
     {
+      "comments": "The egress gateway subnet's own security group. Azure's default rules are rules INSIDE a group, so a subnet and a NIC with none are not filtered at all -- and the gateway VM Ringleader builds here carries a standalone PUBLIC IP, which without this would put the proxy's listeners and its sshd on the internet. THE ONE RULE IS NOT OPTIONAL, and the defaults are not a substitute for it: AllowVnetInBound at 65000 is source VirtualNetwork to DESTINATION VirtualNetwork, while a steered packet arrives addressed to the PUBLIC host the workstation was reaching -- a UDR next hop does not rewrite the destination -- so it would miss that rule, fall to DenyAllInBound at 65500, and every governed box would lose the internet while the gateway stayed healthy. Allowing the VNet inbound to ANY destination is what Ringleader also writes on the VM's own NIC (azgateway's gatewayNSGRule); this group is the second layer and the two must agree. Outbound is untouched, so the gateway keeps the internet access it exists to police.",
+      "condition": "[parameters('createGatewaySubnet')]",
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "apiVersion": "2023-11-01",
+      "name": "[variables('gatewayNsgName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "allow-vnet-inbound",
+            "properties": {
+              "protocol": "*",
+              "direction": "Inbound",
+              "access": "Allow",
+              "priority": 4000,
+              "sourceAddressPrefix": "VirtualNetwork",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "*",
+              "destinationPortRange": "*"
+            }
+          }
+        ]
+      }
+    },
+    {
       "type": "Microsoft.Network/virtualNetworks",
       "apiVersion": "2023-11-01",
       "name": "[variables('vnetName')]",
       "location": "[parameters('location')]",
       "dependsOn": [
         "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]",
+        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('gatewayNsgName'))]",
         "[resourceId('Microsoft.Network/natGateways', variables('natName'))]"
       ],
       "properties": {

@@ -12,7 +12,7 @@ it in one idempotent run.
 | File | What it is |
 |---|---|
 | [`azuredeploy.json`](azuredeploy.json) | ARM template: the custom least-privilege role definition + a role assignment, scoped to the resource group. Deploy at **resource-group scope**. Takes the service-principal **object id** as `principalId`. It is the single source of the action list — the [Terraform module](../terraform/) deploys this same file. |
-| [`azuredeploy-network.json`](azuredeploy-network.json) | ARM template: the **optional** landing pad — vnet + `workstations` subnet + NAT gateway + NSG, with inbound rules only for the CIDRs you name. Outputs `subnetId`, `governedSubnetId` and `gatewaySubnetId`. Deploy at resource-group scope, after `azuredeploy.json`. |
+| [`azuredeploy-network.json`](azuredeploy-network.json) | ARM template: the **optional** landing pad — vnet + `workstations` subnet + NAT gateway + an NSG per subnet, with inbound rules only for the CIDRs you name. Outputs `subnetId`, `governedSubnetId` and `gatewaySubnetId`. Deploy at resource-group scope, after `azuredeploy.json`. |
 | [`azuredeploy.parameters.example.json`](azuredeploy.parameters.example.json) | Example parameters file. |
 | [`deploy.sh`](deploy.sh) | End-to-end wrapper: creates the app + SP + OIDC federated credential with `az`, then deploys the template. |
 
@@ -68,8 +68,13 @@ reserves the subnet the egress gateway VM for hostname-level egress control runs
 its id as `gateway subnet`. **Hand that id back as `spec.subnet` on the `EgressGateway`** — not on
 a workstation, and Ringleader builds no gateway VM until it has one, because a proxy placed in a
 subnet it steers would route its own egress into itself. Azure does not bill for the subnet, but
-the VM Ringleader builds in it carries its own standalone public IP, billed separately. Set it to
-`false` to skip.
+the VM Ringleader builds in it carries its own standalone public IP, billed separately — which is
+why the subnet gets an NSG of its own (`<prefix>-gateway-nsg`). Azure's default rules live *inside*
+a group, so a bare subnet would leave the proxy's listeners reachable from the internet rather than
+closed. The group carries **one** rule: allow the VNet inbound to **any** destination. It cannot be
+empty — `AllowVnetInBound` allows the VNet only to a *VNet* destination, and a steered packet still
+carries the public address the workstation was reaching, so an empty group would drop exactly the
+traffic the proxy exists to carry. Set `createGatewaySubnet` to `false` to skip both.
 
 `CREATE_GOVERNED_SUBNET` is also on by default (`GOVERNED_SUBNET_CIDR` overrides its range;
 unset, it derives the 15th `/20` — `10.70.224.0/20` at index `0`): it reserves the subnet the workstations that proxy **governs** go in, and

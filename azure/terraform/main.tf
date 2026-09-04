@@ -112,7 +112,7 @@ locals {
 # the noise by also silencing a real edit to the action list, so bumping the module version
 # would quietly not re-deploy the role.
 resource "azurerm_resource_group_template_deployment" "role" {
-  name                = "ringleader-onboarding"
+  name                = var.deployment_name
   resource_group_name = var.resource_group_name
   deployment_mode     = "Incremental"
 
@@ -207,11 +207,31 @@ resource "azurerm_subnet" "workstations" {
 # workstation -> proxy traffic can name one stable prefix instead of one VM's address. Azure does
 # not bill for a subnet.
 #
-# No NSG is attached. Azure's defaults already allow intra-VNet traffic and deny inbound from
-# the internet, which is the right posture for a proxy; Ringleader adds what it needs when the
-# VM ships. The subnet is associated with the NAT gateway below, so anything placed here has egress
-# without an address of its own -- but the gateway VM itself carries a standalone public IP, which
-# bills separately (azgateway's EnsureGatewayNetwork creates one before the NIC, unconditionally).
+# IT GETS AN NSG OF ITS OWN, and the reason is the one thing about Azure that is easy to state
+# backwards: "Azure allows intra-VNet traffic and denies the internet" describes the DEFAULT RULES
+# INSIDE an NSG, not the platform. A subnet with no NSG and a NIC with no NSG have no rules at all,
+# so nothing is filtered -- and the gateway VM Ringleader builds here carries a STANDALONE PUBLIC IP
+# (azgateway's EnsureGatewayNetwork creates one before the NIC, unconditionally), which would put the
+# proxy's listeners and its sshd on the internet. Ringleader does attach an NSG to that VM's own NIC,
+# so this one is the second layer rather than the only one; a NIC NSG that failed to be created, or
+# was removed, would otherwise leave nothing.
+#
+# IT CARRIES ONE RULE, AND THE DEFAULTS ARE NOT A SUBSTITUTE FOR IT. Azure's AllowVnetInBound at
+# 65000 is `source VirtualNetwork -> DESTINATION VirtualNetwork`, and a steered packet is neither:
+# a UDR next hop does not rewrite the destination, so what arrives here is `src = the governed
+# workstation, dst = the public host it was talking to`. That misses AllowVnetInBound, falls through
+# to DenyAllInBound at 65500, and every governed box loses the internet while the gateway itself
+# stays healthy and the route stays in place -- the silent outage this whole feature exists to
+# remove. So the rule below allows the VNet inbound to ANY destination, which is exactly what
+# Ringleader writes on the gateway VM'''s own NIC (azgateway'''s `gatewayNSGRule`); this group is the
+# second layer, and the two must say the same thing or the outer one decides.
+#
+# Everything else is Azure'''s defaults, which is the point: one allow plus DenyAllInBound is
+# "reachable from inside the network, from nowhere else". Outbound is untouched, so the gateway keeps
+# the internet access it exists to police (AllowInternetOutBound at 65001).
+#
+# The subnet is associated with the NAT gateway below, so anything placed here has egress without an
+# address of its own.
 resource "azurerm_subnet" "gateway" {
   count                = var.create_network && var.create_gateway_subnet ? 1 : 0
   name                 = "gateway"
@@ -220,11 +240,44 @@ resource "azurerm_subnet" "gateway" {
   address_prefixes     = [local.gateway_subnet_prefix]
 }
 
+resource "azurerm_network_security_group" "gateway" {
+  count               = var.create_network && var.create_gateway_subnet ? 1 : 0
+  name                = "${var.name_prefix}-gateway-nsg"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+}
+
+resource "azurerm_network_security_rule" "gateway_vnet_inbound" {
+  count                       = var.create_network && var.create_gateway_subnet ? 1 : 0
+  name                        = "allow-vnet-inbound"
+  resource_group_name         = var.resource_group_name
+  network_security_group_name = azurerm_network_security_group.gateway[0].name
+  priority                    = 4000
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "*"
+  source_address_prefix       = "VirtualNetwork"
+  source_port_range           = "*"
+  # ANY destination, not VirtualNetwork -- see the comment above. A steered packet arrives here
+  # addressed to the public host the workstation was reaching, and narrowing this to the VNet is the
+  # same as denying it.
+  destination_address_prefix = "*"
+  destination_port_range     = "*"
+}
+
+resource "azurerm_subnet_network_security_group_association" "gateway" {
+  count                     = var.create_network && var.create_gateway_subnet ? 1 : 0
+  subnet_id                 = azurerm_subnet.gateway[0].id
+  network_security_group_id = azurerm_network_security_group.gateway[0].id
+}
+
 # Inbound SSH -- the difference between a workstation that comes up and one you can use.
 #
-# Azure's default rules already allow intra-VNet traffic and deny inbound from the internet,
-# so a subnet with no NSG is not "open" -- it is unreachable from outside the VNet.
-# Ringleader's setup traffic is fine with that: a workstation only needs egress to reach the
+# The NSG below is what makes the default rules apply at all. AllowVnetInBound at 65000 and
+# DenyAllInBound at 65500 are rules INSIDE a group -- a subnet and a NIC with none are not
+# filtered, they are unfiltered -- so this module attaches one to every subnet it creates and the
+# ssh rule is added to it rather than to bare metal.
+# Ringleader's setup traffic needs no rule at all: a workstation only needs egress to reach the
 # control plane, which the NAT gateway below provides. But `rl shell`, `rl tmux`, port-forwards
 # and VS Code Web all dial the workstation on TCP 22 directly -- there is no bastion, proxy or
 # SSH tunnel -- so without a rule the workstation comes up healthy, reports Ready, and nobody
@@ -361,9 +414,10 @@ resource "azurerm_subnet_nat_gateway_association" "gateway" {
 # where every workstation in this VNet goes, governed or not; steering that one would take the
 # egress of every box in it that has no policy. Hence a second prefix.
 #
-# It gets the SAME NSG as the workstations subnet, and for the same reason: Azure denies inbound
-# from the internet by default and Ringleader ships no bastion, so without it a governed box
-# comes up healthy and nobody can `rl shell` into it. The NSG narrows inbound only -- Azure's
+# It gets the SAME NSG as the workstations subnet, and for the same reason: an NSG is what makes
+# Azure's default rules apply at all -- DenyAllInBound included -- and Ringleader ships no bastion,
+# so the ssh rule in that same group is the only way to reach a governed box. Without the group
+# there is neither the closure nor the way in. The NSG narrows inbound only -- Azure's
 # AllowInternetOutBound at 65001 is untouched -- so attaching it grants the box no egress.
 #
 # It gets NO NAT gateway and NO route table, and both omissions are deliberate:

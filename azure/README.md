@@ -112,8 +112,11 @@ On Azure a workstation gets **no public IP unless you ask for one**
    default outbound access is being retired, so a private VM with nothing in front of it
    cannot reach the Ringleader control plane. The landing pad (`create_network = true`) gives
    it a NAT gateway, fixing egress without a public IP.
-2. **Egress alone still leaves nobody able to SSH in.** A subnet with no NSG is not
-   "open" — Azure allows intra-VNet traffic and denies the Internet. To use the workstation:
+2. **Egress alone still leaves nobody able to SSH in.** The landing pad attaches an NSG to
+   every subnet it creates, and an NSG with no rules of yours still carries Azure's defaults —
+   `AllowVnetInBound`, then `DenyAllInBound` — so nothing outside the VNet reaches the box.
+   (Those defaults live *inside* a group: a subnet with **no** NSG is not closed, it is
+   unfiltered, which is why the module never leaves one bare.) To use the workstation:
 
 ```hcl
 create_network    = true
@@ -256,12 +259,21 @@ create_gateway_subnet = false
 CREATE_GATEWAY_SUBNET=false ./deploy.sh
 ```
 
-It creates an **empty subnet** and nothing else, and Azure does not bill for a subnet. The
-subnet is associated with the landing pad's NAT gateway, so anything you place here has egress
-without an address of its own — but the gateway VM Ringleader builds carries its **own standalone
-public IP**, which is the separately billed address named above, so it does not rely on the NAT
-gateway. No NSG is attached: Azure's defaults already allow intra-VNet traffic and deny inbound
-from the internet, which is the right posture for a proxy.
+It creates an **empty subnet and its NSG**, and Azure bills for neither. The subnet is
+associated with the landing pad's NAT gateway, so anything you place here has egress without an
+address of its own — and the gateway VM Ringleader builds also carries its **own standalone
+public IP**, the separately billed address named above.
+
+**The NSG matters, and its one rule matters more.** Azure's default security rules are rules
+*inside* a group, so a bare subnet is not "closed by default" — it is unfiltered, and the gateway
+VM's public IP would put the proxy's listeners and its sshd on the internet. The group closes
+that. But it cannot be an *empty* group: `AllowVnetInBound` allows the VNet **to a VNet
+destination**, and a packet steered to the proxy still carries the **public** address the
+workstation was reaching, because a route's next hop does not rewrite the destination. An empty
+group would drop exactly the traffic the proxy exists to carry, while the gateway went on
+reporting healthy. So the group carries one rule — allow the VNet inbound to **any** destination —
+which is the same rule Ringleader writes on that VM's own NIC. Both layers must say it; the outer
+one decides. Outbound is untouched.
 
 **Hand its id back as `spec.subnet` on the `EgressGateway`.** It is `gateway_subnet_id` in the
 handoff, and Ringleader builds no gateway VM until it has one: a route table attaches per
@@ -296,9 +308,10 @@ this one subnet; it tells them apart by **source address**, so you never need a 
 
 What it gets and what it deliberately does not:
 
-- **The same NSG as the workstations subnet.** Azure denies inbound from the internet by default
-  and Ringleader ships no bastion, so without it a governed workstation comes up healthy and
-  nobody can `rl shell` into it. The NSG narrows inbound only — `AllowInternetOutBound` at 65001
+- **The same NSG as the workstations subnet.** An NSG is what makes Azure's defaults apply at
+  all, and its `DenyAllInBound` is what closes the box to the internet; Ringleader ships no
+  bastion, so the SSH rule in that same group is what lets you reach a governed workstation.
+  Without the group there is neither. The NSG narrows inbound only — `AllowInternetOutBound` at 65001
   is untouched — so attaching it grants the box no egress of its own.
 - **No route table.** Ringleader claims the subnet by putting its own UDR on it and declines one
   that already references a route table. It *could* put yours back, unlike AWS where the
