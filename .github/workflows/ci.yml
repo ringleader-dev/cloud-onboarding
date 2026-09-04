@@ -24,11 +24,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The security gate. Fast, dependency-free, and the one job whose failure means a shipped
-  # artifact would hand one customer's AWS account to the rest of the fleet -- see the header
-  # of .github/scripts/check_aws_trust_pins.py.
+  # The job that reads the shipped artifacts for what they MEAN rather than whether they deploy.
+  # Two guards, both dependency-free, both about a property no other job here can see:
+  #
+  #   check_trust_pins.py         -- a failure means a shipped artifact would hand one customer's
+  #                                  cloud account to the rest of the fleet.
+  #   check_published_literals.py -- a failure means a landing pad names something other than what
+  #                                  Ringleader sets, which is a silent, total egress outage that
+  #                                  we cannot repair afterwards: the customer applied it, in their
+  #                                  own account, and we hold no credentials there.
+  #
+  # They share this job because they share a reader (the second imports the first's HCL, YAML and
+  # closed-grammar shell parsers) and because the `unittest discover` step below is BLANKET on
+  # purpose: a guard added later gets its self-tests run without anyone remembering to wire them
+  # up, and a guard whose tests run nowhere is a guard that has already rotted.
   trust-pins:
-    name: AWS trust pins
+    name: Trust and literal pins
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -37,12 +48,15 @@ jobs:
           python-version: "3.12"
 
       - name: The shipped artifacts pin the assertion to one org
-        run: python3 .github/scripts/check_aws_trust_pins.py
+        run: python3 .github/scripts/check_trust_pins.py
 
-      # The guard's own teeth. A guard that has quietly stopped matching the file it reads
+      - name: The landing pads name the literals Ringleader actually sets
+        run: python3 .github/scripts/check_published_literals.py
+
+      # The guards' own teeth. A guard that has quietly stopped matching the file it reads
       # passes every build until the day it matters, so its failure modes are tested against
       # the real artifacts rather than fixtures.
-      - name: The guard rejects every way the pin can be lost
+      - name: The guards reject every way a pin can be lost
         run: python3 -m unittest discover -s .github/scripts -t .github/scripts -v
 
   terraform-fmt:

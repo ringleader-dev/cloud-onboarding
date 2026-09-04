@@ -307,7 +307,7 @@ README.md              <- you are here
 gcp/     README.md + terraform/ + gcloud/
 azure/   README.md + terraform/ + arm/
 aws/     README.md + terraform/ + cloudformation/
-.github/ CI: the checks below, and the trust-pin guard they run
+.github/ CI: the checks below, and the guards they run
 ```
 
 ## Checks that run on every change
@@ -321,19 +321,44 @@ needs cloud credentials:
 - **`terraform test`** for each module that ships a `tests/` directory. Providers are mocked
   and only `plan` runs, so it needs no cloud account.
 - **`cfn-lint`** on the AWS CloudFormation template.
-- **The AWS trust-pin guard** (`.github/scripts/check_aws_trust_pins.py`) — the one check
-  that is about security rather than deployability. The Terraform module and the
-  CloudFormation template each pin the assertion's `sub` and `aud` to one organization, and
-  the guard fails the build if either stops. It reads past the obvious edits — a dropped
-  condition, a `StringLike` in place of `StringEquals`, a wildcard — to the ones that leave
-  the condition looking untouched: a `locals` value quietly hardcoded to some other org, a
-  role repointed at a different policy document, a second statement slipped in beside the
-  pinned one, a template parameter given a default. A renamed block, or any shape the guard
-  cannot read, is a loud failure rather than a silent pass. Because every customer's
-  assertion is signed by the same issuer, that `sub` condition is the only thing standing
-  between your account and every other Ringleader tenant, and its weakened form reads exactly
-  like hardening boilerplate. The guard's own failure modes are tested against the real
-  templates, so it cannot rot into passing while scanning nothing.
+- **The trust-pin guard** (`.github/scripts/check_trust_pins.py`) — the one check that is
+  about security rather than deployability. It covers **all six artifacts**: each cloud's
+  Terraform module and the template or script beside it, since both are supported paths and
+  each writes the pin in its own words. Because every customer's assertion is signed by the
+  same issuer, the subject pin is the only thing standing between your account and every
+  other Ringleader tenant, and its weakened form reads exactly like hardening boilerplate.
+
+  What it reads is per cloud, because the property is spelled differently on each. On **AWS**,
+  the trust policy's `StringEquals` on `sub` and `aud`. On **GCP**, two independent sites that
+  neither alone confines the org: the pool provider's `attribute_condition`, and the
+  `workloadIdentityUser` binding, which must name the single
+  `principal://…/subject/org:<uid>` rather than the industry copy-paste
+  `principalSet://…/<pool>/*`. On **Azure**, the federated credential's `subject`, which the
+  platform matches byte for byte and which can only be lost by being widened, dropped or
+  repointed.
+
+  It reads past the obvious edits to the ones that leave the pin looking untouched: a
+  `locals` value quietly hardcoded to some other org, a role repointed at a different policy
+  document, a second statement slipped in beside the pinned one, a template parameter given a
+  default, a binding pointed at a pool whose provider carries no condition, a credential
+  attached to a second application. A renamed block, or any shape the guard cannot read, is a
+  loud failure rather than a silent pass. Its own failure modes are tested against the real
+  artifacts, so it cannot rot into passing while scanning nothing.
+
+  What it guards is what we **ship**. It cannot see a customer's own later edits in their
+  cloud account, which is a separate problem with a separate answer.
+- **The published-literal guard** (`.github/scripts/check_published_literals.py`) — the other
+  check that is not about deployability. A few strings here are not settings: they are one half
+  of a contract whose other half is compiled into Ringleader and released separately. The
+  network tag on the egress gateway VM and the secondary SSH port `rl shell` dials are both
+  named in several files here, and a landing pad that names something else is a **valid**
+  firewall rule that admits nobody — `terraform validate` passes, `bash -n` passes, the console
+  looks right, Ringleader reports the gateway healthy, and every packet is dropped at the
+  gateway's own NIC. The guard holds every site to the published value, holds the two GCP paths'
+  shared defaults to each other, and checks that the rule which admits a tag is the rule that
+  names it. It matters more than an ordinary constant because you apply a landing pad **once**,
+  in your own account: we hold no credentials there, so a value that has shipped cannot be
+  corrected by us later.
 
 ## License
 
