@@ -167,12 +167,15 @@ Parameters:
     Default: "true"
     AllowedValues: ["true", "false"]
     Description: >-
-      Reserve a subnet for the DNS / HTTPS proxy VM that Ringleader's hostname-level egress
-      control will use. On by default; set false to opt out. The VM is not built yet, so this
-      creates an empty subnet and its route table, neither of which AWS bills for. It is
-      public and in the workstations AZ, both of which are cost decisions: internet ingress is
-      free, while the same bytes through a NAT gateway meter at $0.045/GB, and AWS charges
-      cross-AZ traffic in both directions.
+      Reserve the subnet the DNS / HTTPS proxy VM for Ringleader's hostname-level egress
+      control runs in. On by default; set false to opt out. This creates nothing but an empty
+      subnet and its route table, neither of which AWS bills for; Ringleader builds the VM
+      itself once you declare an EgressGateway naming this subnet as spec.subnet -- and it
+      builds none until you do, because a proxy placed in a subnet it steers would route its
+      own egress into itself. Hand the GatewaySubnetId output back, NOT GovernedSubnetId,
+      which is the workstations'. It is public and in the workstations AZ, both of which are
+      cost decisions: internet ingress is free, while the same bytes through a NAT gateway
+      meter at $0.045/GB, and AWS charges cross-AZ traffic in both directions.
 
   GatewaySubnetCidr:
     Type: String
@@ -535,13 +538,15 @@ Resources:
       DestinationCidrBlock: "0.0.0.0/0"
       NatGatewayId: !Ref NatGateway
 
-  # A home for the future DNS / HTTPS proxy VM -- created empty, and on by default.
+  # Where the DNS / HTTPS proxy VM runs -- created empty, and on by default.
   #
-  # Ringleader's egress control can point workstations at a proxy that reads the hostname off
-  # each connection and allows or refuses it. That VM is not built yet, but where it will live
-  # is worth settling now: a subnet of its own means the security-group rules that permit
-  # workstation -> proxy traffic can name one stable range instead of one instance's address,
-  # and carving the range now avoids renumbering later.
+  # Ringleader's egress control points workstations at a proxy that reads the hostname off each
+  # connection and allows or refuses it, and it builds that VM itself once you declare an
+  # EgressGateway naming this subnet as spec.subnet. It builds none before that: a route table
+  # attaches per subnet and replaces the default route of everything in it, so a proxy sitting
+  # in a subnet it steers would route its own egress into itself and black-hole every
+  # workstation it serves. A subnet of its own also means the security-group rules that permit
+  # workstation -> proxy traffic can name one stable range instead of one instance's address.
   #
   # It is public, and that is the cost decision rather than a convenience. The proxy carries a
   # fleet's whole outbound volume; internet ingress is free, so a proxy with its own public
@@ -760,7 +765,12 @@ Outputs:
     Value: !Ref Vpc
   GatewaySubnetId:
     Condition: WantGatewaySubnet
-    Description: "Private subnet reserved for the future DNS / HTTPS proxy VM."
+    Description: >-
+      Subnet the egress gateway VM runs in. Hand it back as spec.subnet on the EgressGateway --
+      Ringleader builds no gateway until you do, because a gateway placed in the subnet it
+      steers routes its own egress into itself. NOT GovernedSubnetId, which is the
+      workstations'. Public and in the workstations AZ -- both cost decisions; see
+      CreateGatewaySubnet.
     Value: !Ref GatewaySubnet
   GovernedSubnetId:
     Condition: WantGovernedSubnet

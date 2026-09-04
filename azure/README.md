@@ -256,10 +256,12 @@ create_gateway_subnet = false
 CREATE_GATEWAY_SUBNET=false ./deploy.sh
 ```
 
-It creates an **empty subnet** and nothing else. Azure does not bill for a subnet, and the
-subnet shares the landing pad's NAT gateway, so the proxy gets upstream egress without a
-public IP. No NSG is attached: Azure's defaults already allow intra-VNet traffic and deny
-inbound from the internet, which is the right posture for a proxy.
+It creates an **empty subnet** and nothing else, and Azure does not bill for a subnet. The
+subnet is associated with the landing pad's NAT gateway, so anything you place here has egress
+without an address of its own — but the gateway VM Ringleader builds carries its **own standalone
+public IP**, which is the separately billed address named above, so it does not rely on the NAT
+gateway. No NSG is attached: Azure's defaults already allow intra-VNet traffic and deny inbound
+from the internet, which is the right posture for a proxy.
 
 **Hand its id back as `spec.subnet` on the `EgressGateway`.** It is `gateway_subnet_id` in the
 handoff, and Ringleader builds no gateway VM until it has one: a route table attaches per
@@ -442,6 +444,8 @@ $ cd azure/terraform && terraform init && terraform test
 | **subscription id** | `az account show --query id -o tsv` |
 | **resource group** | the one you scoped |
 | **subnet id** (only if you created a network) | `terraform output handoff` |
+| **governed subnet id** (only if you turned it on) | `terraform output handoff` — `providerConfig.azure.subnetId` for the workstations that carry an egress policy |
+| **gateway subnet id** (only if you reserved one) | `terraform output handoff` — goes on the `EgressGateway` as `spec.subnet`, not on a workstation; no gateway VM is built until it has one |
 
 ## Revoking
 

@@ -282,10 +282,40 @@ Restricting egress by **hostname** (rather than by IP range) needs the connectio
 something that can see the hostname on it, and no cloud offers that per workstation — so
 Ringleader runs a small **egress gateway** VM in your project. It builds and maintains that VM
 itself, once a workstation declares a policy naming hostnames, and it is a **billed** instance.
-Reserving its address range now is what keeps you from renumbering later:
 
-It is on by default, taking the 241st `/24` of `network_cidr` — `10.80.240.0/24` on a new
-landing pad. To skip it:
+**On GCP that VM runs in the workstations' own subnet, not in a subnet of its own** — and this is
+the second place the three modules deliberately differ. The route that steers a workstation at the
+proxy is scoped here by *network tag*, and the proxy carries no such tag, so it can sit beside the
+boxes without steering itself. `EgressGateway.spec.subnet` is **refused** on this provider, so
+there is no gateway subnet id to hand back. (On AWS and Azure a route table and a UDR attach per
+subnet instead, so the proxy must be placed outside what it steers and its subnet id *is* handed
+back — if you are comparing the modules, that is the difference.)
+
+**The one firewall rule this needs is created for you.** The proxy VM carries the network tag
+`ringleader-egress-gateway`, and `ringleader-allow-gateway` — created alongside
+`ringleader-allow-internal`, over the same ranges and the same protocols — is what admits your
+workstations to it.
+
+It cannot be folded into `ringleader-allow-internal`, because that rule targets the
+**workstation** tag and the proxy VM does not carry one: Ringleader's steering route is itself
+scoped by tag, and a proxy wearing a workstation's tag would route its own traffic back into
+itself. Without `ringleader-allow-gateway` a custom-mode VPC drops every forwarded packet at
+the proxy's own NIC — the workstation runs, the route exists, Ringleader reports the proxy
+healthy, and nothing reaches the internet.
+
+`ringleader-allow-gateway` follows no switch of its own. `allow_internal_traffic = false` (or
+`ALLOW_INTERNAL=0`) still turns off workstation-to-workstation traffic — a real posture choice — and
+leaves this rule in place, because admitting your workstations to the machine that polices their
+egress hardens nothing when removed and breaks egress control while leaving it looking enforced. If
+you never use hostname-level egress control there is no proxy VM, nothing carries the tag, and the
+rule admits nobody.
+
+### The reserved range
+
+The module still reserves an empty range beside the workstations subnet, on by default, taking the
+241st `/24` of `network_cidr` — `10.80.240.0/24` on a new landing pad. **Nothing is placed in it.**
+It exists so the three clouds address alike and a later renumbering does not collide with a range
+already spoken for. To skip it:
 
 ```hcl
 create_gateway_subnet = false
@@ -294,10 +324,8 @@ create_gateway_subnet = false
 GATEWAY_CIDR=none ./network-landing-pad.sh
 ```
 
-It creates an **empty subnet** and nothing else. GCP does not bill for a subnet, and Cloud
-NAT already covers every range in the region, so the proxy will have upstream egress with no
-further setup. Doing it now means the firewall rules that let workstations reach the proxy
-can name one stable range instead of one VM's address — and saves renumbering later.
+Either way, GCP does not bill for a subnet, and Cloud NAT already covers every range in the region,
+so the proxy has upstream egress with no further setup.
 
 ### GCP needs no subnet for the workstations that proxy governs
 
@@ -395,7 +423,7 @@ inter-zone rates while sitting right next to it — use internal addressing betw
 | **project id** | where your workstations run |
 | **workload identity provider** (`//iam.googleapis.com/projects/…/providers/…`) | the token-exchange audience |
 | **subnet self-link** (only if you created a network) | the subnet Ringleader attaches NICs to |
-| **gateway subnet self-link** (only if you reserved one) | where the egress gateway VM runs |
+| **gateway subnet self-link** (only if you reserved one) | nothing — do not hand this back. On GCP the gateway VM runs in the *workstations'* subnet, and `EgressGateway.spec.subnet` is refused here |
 | **governed subnet self-link** (only if you turned it on) | an optional range for the governed fleet. GCP governs by network tag, so this is organizational rather than required |
 
 ## Revoking

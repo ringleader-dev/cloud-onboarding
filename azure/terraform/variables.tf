@@ -138,14 +138,14 @@ variable "enable_egress_control" {
   EOT
 }
 
-# --- A subnet for the future DNS / HTTPS proxy VM (on by default) ------------
+# --- The subnet the DNS / HTTPS proxy VM runs in (on by default) -------------
 
 variable "create_gateway_subnet" {
   type        = bool
   default     = true
   description = <<-EOT
-    Reserve a subnet for the DNS / HTTPS proxy VM that Ringleader's hostname-level egress
-    control will use. On by default; set false to opt out. Needs create_network.
+    Reserve the subnet the DNS / HTTPS proxy VM for Ringleader's hostname-level egress control
+    runs in. On by default; set false to opt out. Needs create_network.
 
     This creates nothing but an empty subnet, which Azure does not bill for; Ringleader builds
     the VM itself once you declare an EgressGateway naming this subnet as spec.subnet. It is
@@ -153,8 +153,9 @@ variable "create_gateway_subnet" {
     name one stable prefix instead of one VM's address, and because carving the range now
     avoids renumbering later.
 
-    It shares the landing pad's NAT gateway, so the proxy will have upstream egress without a
-    public IP.
+    The subnet is associated with the landing pad's NAT gateway, so anything placed here has
+    egress without an address of its own -- but the gateway VM Ringleader builds carries its own
+    standalone public IP, which bills separately.
   EOT
 }
 

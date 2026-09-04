@@ -11,7 +11,7 @@
 # Plus, all on by default and each one a variable you can set to false:
 #   - a VPC + subnet + Cloud NAT landing pad (egress out; inbound SSH only from the
 #     CIDRs you name),
-#   - a reserved subnet for the DNS / HTTPS proxy VM egress control will use,
+#   - a reserved, empty range beside the workstations subnet (the proxy VM runs in theirs),
 #   - egress control, which lets Ringleader manage the firewall rules that restrict
 #     where your workstations can connect, and
 #   - per-workstation runtime identities.
@@ -384,16 +384,19 @@ resource "google_compute_subnetwork" "workstations" {
   private_ip_google_access = true
 }
 
-# A home for the future DNS / HTTPS proxy VM -- created empty, and on by default.
+# A reserved, empty range beside the workstations subnet -- and it STAYS empty here.
 #
-# Ringleader's egress control can point workstations at a proxy that resolves names and
-# terminates HTTPS for the hosts you allow. That VM is not built yet, but where it will
-# live is worth settling now: giving it a subnet of its own means the firewall rules that
-# permit workstation -> proxy traffic can name one stable range instead of one VM's address.
+# Ringleader's egress control points workstations at a proxy that resolves names and terminates
+# HTTPS for the hosts you allow, and it builds that VM itself once a policy names hostnames. On
+# GCP it builds it in the WORKSTATIONS subnet: the route that steers a box at the proxy is scoped
+# by network tag, the proxy carries no such tag, so it sits beside the boxes without steering
+# itself. EgressGateway.spec.subnet is refused on this provider, so this range is not handed back
+# and nothing is placed in it -- unlike the AWS and Azure modules, where the VM really does go in
+# the subnet of the same name.
 #
-# It costs nothing to leave in place -- GCP does not bill for a subnet -- and Cloud NAT
-# below already covers every range in this region, so the proxy gets upstream egress with
-# no extra work.
+# It is still on by default because GCP does not bill for a subnet and the three modules then
+# address alike, which is what stops a later renumbering colliding. Cloud NAT below covers every
+# range in this region either way.
 resource "google_compute_subnetwork" "gateway" {
   count                    = var.create_network && var.create_gateway_subnet ? 1 : 0
   project                  = var.project_id
@@ -534,6 +537,20 @@ locals {
   # Unset mirrors ssh_source_ranges: if you opened 22 to your engineers you almost certainly
   # want 2222 open to the same people. An explicit [] closes the port.
   secondary_ssh_ranges = var.secondary_ssh_source_ranges == null ? var.ssh_source_ranges : var.secondary_ssh_source_ranges
+
+  # The network tag Ringleader puts on the egress gateway VM it builds in your project. Fixed by
+  # Ringleader for the same reason secondary_ssh_port is: you never set it, nothing of yours carries
+  # it, and a value that drifted from the one Ringleader actually tags would be a rule that exists,
+  # reads correctly in the console, and admits nothing.
+  gateway_network_tag = "ringleader-egress-gateway"
+
+  # The workstation ranges, in one place because two rules now name them. The governed subnet counts
+  # as a workstation range when you create one, and so does every extra region's.
+  workstation_ranges = concat(
+    [local.subnet_cidr],
+    var.create_governed_subnet ? [local.governed_subnet_cidr] : [],
+    values(var.additional_regions),
+  )
 }
 
 # A second SSH port, opened to the same ranges as 22 unless you say otherwise.
@@ -586,12 +603,50 @@ resource "google_compute_firewall" "internal" {
   network   = google_compute_network.workstations[0].name
   direction = "INGRESS"
 
-  source_ranges = concat(
-    [local.subnet_cidr],
-    var.create_governed_subnet ? [local.governed_subnet_cidr] : [],
-    values(var.additional_regions),
-  )
-  target_tags = [var.workstation_network_tag]
+  source_ranges = local.workstation_ranges
+  target_tags   = [var.workstation_network_tag]
+
+  allow { protocol = "tcp" }
+  allow { protocol = "udp" }
+  allow { protocol = "icmp" }
+}
+
+# Workstation-to-GATEWAY traffic -- the one rule without which hostname-level egress control is a
+# silent, total outage for every workstation a gateway governs.
+#
+# When a policy names HOSTNAMES rather than address ranges, Ringleader builds a small proxy VM in
+# this project and writes a static route that sends a governed workstation's traffic to it. The
+# packets arrive at that VM still carrying their ORIGINAL destination -- that is what a next-hop
+# route means -- and a custom-mode VPC's implied rule denies every one of them at the VM's own NIC.
+# The workstation goes on running, the route goes on existing, and Ringleader goes on reporting the
+# gateway healthy, because every object it checks is exactly as it wrote it. Nothing reaches the
+# internet.
+#
+# Why the rule cannot reuse allow-internal above: that one is scoped to the WORKSTATION tag, and the
+# gateway VM does not carry it. It cannot -- Ringleader's own steering route is scoped by tag, and a
+# gateway wearing a workstation's tag would route its traffic into itself. And a destination range
+# cannot stand in for the target either, because the traffic to admit is not addressed to the gateway.
+# So this rule names the one tag Ringleader does put on that VM.
+#
+# It admits the same ranges and the same protocols as allow-internal, from workstations to the
+# gateway only. It is INGRESS, like every rule in this module (see "What can defeat a policy here").
+#
+# It has NO switch, and deliberately not allow_internal_traffic's. That variable is a real posture
+# choice -- workstation-to-workstation traffic widens what a compromised box can reach. This does not
+# widen anything in that sense: the one machine it admits your workstations to is the appliance whose
+# whole job is policing their egress. Turning it off would harden nothing and would break egress
+# control while leaving it looking enforced, which is the failure this rule exists to remove. If you
+# do not use hostname-level egress control there is no gateway VM, nothing carries the tag, and the
+# rule admits nobody -- so it costs you nothing either.
+resource "google_compute_firewall" "gateway" {
+  count     = var.create_network ? 1 : 0
+  project   = var.project_id
+  name      = "${var.name_prefix}-allow-gateway"
+  network   = google_compute_network.workstations[0].name
+  direction = "INGRESS"
+
+  source_ranges = local.workstation_ranges
+  target_tags   = [local.gateway_network_tag]
 
   allow { protocol = "tcp" }
   allow { protocol = "udp" }

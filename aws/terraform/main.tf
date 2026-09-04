@@ -9,8 +9,8 @@
 #   - optionally, a VPC + public subnet + internet gateway + security group landing pad.
 #
 # All on by default, and each one a variable you can set to false: the landing pad, a NAT
-# gateway and private route table, a private subnet for the DNS / HTTPS proxy VM that
-# hostname-level egress control will use, egress control itself (letting Ringleader manage
+# gateway and private route table, the public subnet the DNS / HTTPS proxy VM for
+# hostname-level egress control runs in, egress control itself (letting Ringleader manage
 # the security groups that restrict where workstations may connect), and instance profiles
 # for workstations that run as an IAM role.
 #
@@ -659,13 +659,15 @@ resource "aws_route_table" "private" {
   tags = merge(var.tags, { Name = "ringleader-private" })
 }
 
-# A home for the future DNS / HTTPS proxy VM -- created empty, and on by default.
+# Where the DNS / HTTPS proxy VM runs -- created empty, and on by default.
 #
-# Ringleader's egress control can point workstations at a proxy that reads the hostname off
-# each connection and allows or refuses it. That VM is not built yet, but where it will live
-# is worth settling now: giving it a subnet of its own means the security-group rules that
-# permit workstation -> proxy traffic can name one stable range instead of one instance's
-# address, and carving the range now avoids renumbering later. AWS does not bill for a subnet.
+# Ringleader's egress control points workstations at a proxy that reads the hostname off each
+# connection and allows or refuses it, and it builds that VM itself once you hand this subnet's
+# id back as EgressGateway.spec.subnet -- and none before that: a route table attaches per subnet
+# and replaces the default route of everything in it, so a proxy sitting in a subnet it steers
+# would route its own egress into itself. A subnet of its own also means the security-group rules
+# that permit workstation -> proxy traffic can name one stable range instead of one instance's
+# address. AWS does not bill for a subnet.
 #
 # It is PUBLIC, routed through the internet gateway, and that is the cost decision rather
 # than a convenience. The proxy carries a fleet's whole outbound volume; internet ingress is

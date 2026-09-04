@@ -9,3 +9,7 @@ crash.*.log
 # Real variable values (keep only the *.example files)
 terraform.tfvars
 *.auto.tfvars
+
+# Python bytecode from the CI guard scripts
+__pycache__/
+*.pyc

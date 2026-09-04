@@ -167,6 +167,45 @@ run "every_consumer_reads_the_derived_range" {
   }
 }
 
+# The gateway rule reads the same derivation, and reads it on a path the run above cannot see.
+# It is the second consumer of local.workstation_ranges and the only firewall rule here that
+# follows no switch: allow_internal_traffic is a posture choice about lateral movement, while this
+# admits workstations to the appliance policing their egress, so turning that off must leave this
+# rule standing. Asserted with the switch OFF for exactly that reason -- and on the workstation
+# range alone, since a governed subnet is what the run above already covers.
+run "the_gateway_rule_survives_allow_internal_traffic_being_off" {
+  command = plan
+
+  variables {
+    allow_internal_traffic = false
+  }
+
+  assert {
+    condition     = length(google_compute_firewall.gateway) == 1
+    error_message = "allow_internal_traffic = false took the gateway rule with it -- egress control would look enforced and admit nothing"
+  }
+
+  assert {
+    condition = alltrue([
+      for r in google_compute_firewall.gateway[0].source_ranges : r != null
+    ])
+    error_message = "the gateway firewall's source_ranges carry a null -- it reads var.*_cidr rather than local.*_cidr"
+  }
+
+  assert {
+    condition     = contains(google_compute_firewall.gateway[0].source_ranges, "10.80.0.0/20")
+    error_message = "the gateway firewall does not admit the derived workstations range: ${join(",", google_compute_firewall.gateway[0].source_ranges)}"
+  }
+
+  # The tag is the whole mechanism: it targets the one Ringleader puts on the proxy VM, not the
+  # workstation tag the rule above uses. A drifted value reads correctly in the console and admits
+  # nothing.
+  assert {
+    condition     = google_compute_firewall.gateway[0].target_tags == toset(["ringleader-egress-gateway"])
+    error_message = "the gateway firewall no longer targets the tag Ringleader puts on the proxy VM: ${join(",", google_compute_firewall.gateway[0].target_tags)}"
+  }
+}
+
 # A range that is not a CIDR is refused by the variable rather than reaching the API.
 run "a_malformed_network_cidr_is_refused" {
   command = plan

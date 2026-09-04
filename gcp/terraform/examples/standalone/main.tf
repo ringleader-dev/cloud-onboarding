@@ -48,8 +48,10 @@ variable "secondary_ssh_source_ranges" {
   default = null
 }
 
-# Egress control, and a home for the proxy VM it will eventually use. Both on by default;
-# set either false in terraform.tfvars to opt out.
+# Egress control, and an empty range reserved beside the workstations subnet. Both on by default;
+# set either false in terraform.tfvars to opt out. NOTHING is placed in that range on GCP: the
+# steering route here is scoped by network tag, so Ringleader runs the proxy VM in the
+# workstations' own subnet and refuses EgressGateway.spec.subnet on this provider.
 variable "enable_egress_control" {
   type    = bool
   default = true

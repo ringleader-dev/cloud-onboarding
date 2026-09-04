@@ -37,10 +37,12 @@ ssh_source_ranges = []
 # cheaper at 10 TB.
 # create_nat_gateway = false
 
-# An empty PUBLIC subnet (10.60.240.0/24) plus its route table, reserved for the DNS / HTTPS
-# proxy VM that hostname-level egress control will use. The VM does not exist yet; the subnet
-# costs nothing and saves renumbering later. Public and in the workstations AZ are both cost
-# decisions: internet ingress is free, and AWS charges cross-AZ traffic both ways.
+# The PUBLIC subnet (10.60.240.0/24) plus its route table that the DNS / HTTPS proxy VM for
+# hostname-level egress control runs in. Hand gateway_subnet_id back as EgressGateway.spec.subnet
+# -- Ringleader builds no gateway VM until you do, because a proxy placed in a subnet it steers
+# routes its own egress into itself. AWS bills for neither the subnet nor its route table. Public
+# and in the workstations AZ are both cost decisions: internet ingress is free, and AWS charges
+# cross-AZ traffic both ways.
 # create_gateway_subnet = false
 
 # The subnet the workstations that proxy GOVERNS go in (10.60.224.0/20). Empty, with no route

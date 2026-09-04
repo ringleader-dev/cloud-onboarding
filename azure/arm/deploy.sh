@@ -194,9 +194,14 @@ if [ "$CREATE_NETWORK" = "true" ]; then
                  gatewaySubnetCidr="$GATEWAY_SUBNET_CIDR" \
                  createGovernedSubnet="$CREATE_GOVERNED_SUBNET" \
                  governedSubnetCidr="$GOVERNED_SUBNET_CIDR" \
-    --query '[properties.outputs.subnetId.value, properties.outputs.governedSubnetId.value]' -o tsv)"
+    --query '[properties.outputs.subnetId.value, properties.outputs.governedSubnetId.value, properties.outputs.gatewaySubnetId.value]' -o tsv)"
   SUBNET_ID="$(echo "$NETWORK_OUTPUTS" | sed -n 1p)"
   GOVERNED_SUBNET_ID="$(echo "$NETWORK_OUTPUTS" | sed -n 2p)"
+  # The gateway subnet is printed for the same reason the other two are: it is a value the
+  # operator has to hand back, and this script is the only place the ARM path shows them. Left
+  # out, an operator on this path never learns the id -- and Ringleader builds no gateway VM at
+  # all until an EgressGateway names it.
+  GATEWAY_SUBNET_ID="$(echo "$NETWORK_OUTPUTS" | sed -n 3p)"
 fi
 
 cat <<EOF
@@ -214,5 +219,11 @@ fi
 # steers a whole subnet, so mixing governed and ungoverned boxes in one is what the arm refuses.
 if [ -n "${GOVERNED_SUBNET_ID:-}" ]; then
   echo "  governed subnet  : ${GOVERNED_SUBNET_ID}   (use for workstations with an egress policy)"
+fi
+# The gateway subnet is where the proxy VM ITSELF goes, so it is handed back on the EgressGateway
+# rather than on a workstation -- and no gateway VM is built until it is. A proxy placed in a
+# subnet it steers would route its own egress into itself.
+if [ -n "${GATEWAY_SUBNET_ID:-}" ]; then
+  echo "  gateway subnet   : ${GATEWAY_SUBNET_ID}   (EgressGateway spec.subnet -- NOT a workstation)"
 fi
 echo "==============================================================="

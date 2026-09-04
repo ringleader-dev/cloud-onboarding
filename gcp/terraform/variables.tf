@@ -294,22 +294,24 @@ variable "additional_regions" {
   EOT
 }
 
-# --- A subnet for the future DNS / HTTPS proxy VM (on by default) ------------
+# --- A reserved range beside the DNS / HTTPS proxy's own (on by default) -----
 
 variable "create_gateway_subnet" {
   type        = bool
   default     = true
   description = <<-EOT
-    Reserve a subnet for the DNS / HTTPS proxy VM that Ringleader's hostname-level egress
-    control will use. On by default; set false to opt out. Needs create_network.
+    Carve an empty range beside the workstations one. On by default; set false to opt out.
+    Needs create_network.
 
-    The VM itself is not built yet and this creates nothing but an empty subnet, which GCP
-    does not bill for -- which is why it is on by default. Carving the range now means the
-    firewall rules that permit workstation -> proxy traffic can name one stable range instead
-    of one VM's address, and saves renumbering later.
+    NOTHING IS PLACED IN IT, and that is the difference from the AWS and Azure modules. On GCP
+    the route that steers a workstation at the proxy is scoped by NETWORK TAG, and the proxy VM
+    carries no such tag -- so it sits in the workstations subnet harmlessly, Ringleader builds
+    it there, and EgressGateway.spec.subnet is refused on this provider. Do not hand this
+    range back.
 
-    Cloud NAT already covers every range in this region, so the proxy will have upstream
-    egress with no further setup.
+    It is on by default because GCP does not bill for a subnet and the three modules then
+    address alike, which is what keeps a later renumbering from colliding. Set it false if you
+    would rather not carry an unused range.
   EOT
 }
 

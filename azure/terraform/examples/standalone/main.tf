@@ -48,8 +48,9 @@ variable "secondary_ssh_source_ranges" {
   default = null
 }
 
-# Egress control, and a home for the proxy VM it will eventually use. Both on by default;
-# set either false in terraform.tfvars to opt out.
+# Egress control, and the subnet the proxy VM runs in. Both on by default; set either false in
+# terraform.tfvars to opt out. Hand `gateway_subnet_id` from the handoff back as
+# EgressGateway.spec.subnet -- no gateway VM is built until you do.
 variable "enable_egress_control" {
   type    = bool
   default = true
