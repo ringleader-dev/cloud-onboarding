@@ -197,10 +197,23 @@ further than this needs — it also carries Cloud Armor security policies, SSL p
 certificates. Changing which policy a workstation is on is a network-tag change, which
 `roles/compute.instanceAdmin.v1` already permits, so no extra grant is needed for that.
 
-Ringleader compiles each distinct policy into **one** firewall rule targeted by network tag,
-so a fleet of a hundred workstations sharing a policy costs one rule rather than a hundred.
+Ringleader compiles each distinct policy into **one set of firewall rules** targeted by network
+tag, so a fleet of a hundred workstations sharing a policy costs one set rather than a hundred.
 The rules are **static** — written when a policy changes, never per connection and never per
 DNS answer.
+
+**A set is three rules or so, not one**, and that is GCE rather than a choice: a rule is
+`allowed` **or** `denied` and never both, so a default-deny policy needs at least one of each —
+one allow rule per group of destinations sharing a port set, plus an IPv4 deny and an IPv6 deny.
+An AWS security group carries no deny at all and an Azure NSG carries both in one object, so the
+same policy costs fewer objects there.
+
+That is worth knowing because of the quota it lands in: GCP caps **firewall rules per network**
+(500 by default, raisable) and **routes per project** (300 by default, raisable), and egress
+control spends from both — the rules above, and one steering route per policy that names
+hostnames. Neither is near for a handful of policies; both are worth a quota increase before a
+fleet with dozens of distinct ones. `gcloud compute project-info describe` reports your limits
+and current usage under `FIREWALLS` and `ROUTES`.
 
 GCP is the easiest of the three clouds to steer, and worth knowing why: a custom static route
 can be scoped by **network tag**, so per-policy steering needs no extra subnet. On AWS and
@@ -290,6 +303,22 @@ boxes without steering itself. `EgressGateway.spec.subnet` is **refused** on thi
 there is no gateway subnet id to hand back. (On AWS and Azure a route table and a UDR attach per
 subnet instead, so the proxy must be placed outside what it steers and its subnet id *is* handed
 back — if you are comparing the modules, that is the difference.)
+
+**Two organization policies can stop it being created at all**, and both are worth checking
+before you declare a policy that names hostnames — either one makes the create fail and
+hostname-level egress control simply never starts:
+
+* `constraints/compute.vmCanIpForward` — the gateway VM **must** forward packets it is not the
+  destination of. That is what a next-hop route means, and GCE drops such packets silently
+  without it, so the arm sets `--can-ip-forward` unconditionally.
+* `constraints/compute.vmExternalIpAccess` — the arm also gives it an external address
+  unconditionally, because it cannot assume a deployment has Cloud NAT. This landing pad's Cloud
+  NAT covers every range in the region, so the VM would have egress without one; the requirement
+  is the arm's, not the network's.
+
+If either is enforced on this project, allow it an exception first. Inbound is closed regardless:
+a custom-mode VPC denies every ingress it has no rule for, and the only rule naming this VM is
+the one below.
 
 **The one firewall rule this needs is created for you.** The proxy VM carries the network tag
 `ringleader-egress-gateway`, and `ringleader-allow-gateway` — created alongside

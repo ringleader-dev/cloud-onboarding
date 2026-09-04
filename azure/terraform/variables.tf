@@ -87,6 +87,23 @@ variable "existing_principal_object_id" {
   }
 }
 
+variable "deployment_name" {
+  type        = string
+  default     = "ringleader-onboarding"
+  description = <<-EOT
+    Name of the ARM deployment that carries the custom role. The default is right for a
+    customer, who applies this module ONCE per resource group.
+
+    Change it only when a single resource group holds TWO landing pads — one Ringleader origin
+    per invocation, say a staging control plane and a test one sharing an account. An ARM
+    deployment is a named resource in the resource group, so two invocations on the default
+    would each overwrite the other's on every apply: both Terraform states would claim it, and
+    each plan would show the other's roleName as drift, forever. Distinct names give each
+    invocation its own deployment record; the role definitions they carry are already distinct
+    because role_name is.
+  EOT
+}
+
 variable "role_name" {
   type        = string
   default     = "Ringleader Workstation Operator"
