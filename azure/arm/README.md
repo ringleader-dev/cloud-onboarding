@@ -68,8 +68,9 @@ reserves the subnet the egress gateway VM for hostname-level egress control runs
 its id as `gateway subnet`. **Hand that id back as `spec.subnet` on the `EgressGateway`** — not on
 a workstation, and Ringleader builds no gateway VM until it has one, because a proxy placed in a
 subnet it steers would route its own egress into itself. Azure does not bill for the subnet, but
-the VM Ringleader builds in it carries its own standalone public IP, billed separately — which is
-why the subnet gets an NSG of its own (`<prefix>-gateway-nsg`). Azure's default rules live *inside*
+the subnet is associated with the NAT gateway, which is what the VM Ringleader builds in it uses to
+reach the internet — it takes no public address of its own unless `EgressGateway.spec.publicAddress`
+asks for one. The subnet also gets an NSG (`<prefix>-gateway-nsg`). Azure's default rules live *inside*
 a group, so a bare subnet would leave the proxy's listeners reachable from the internet rather than
 closed. The group carries **one** rule: allow the VNet inbound to **any** destination. It cannot be
 empty — `AllowVnetInBound` allows the VNet only to a *VNet* destination, and a steered packet still
