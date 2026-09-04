@@ -69,7 +69,7 @@
       "type": "Bool",
       "defaultValue": true,
       "metadata": {
-        "description": "Reserve an empty subnet for the egress gateway VM that Ringleader's hostname-level egress control uses. On by default. Ringleader builds that VM here once you declare a policy naming hostnames, and it is billed; carving the range now means the NSG rules that permit workstation -> gateway traffic can name one stable prefix, and avoids renumbering later. Hand its id back as spec.subnet on the EgressGateway -- no gateway VM is built until you do. Azure does not bill for the subnet, so leaving it on costs nothing until a policy builds the VM; the VM itself then carries a standalone public IP, billed separately."
+        "description": "Reserve an empty subnet for the egress gateway VM that Ringleader's hostname-level egress control uses. On by default. Ringleader builds that VM here once you declare a policy naming hostnames, and it is billed; carving the range now means the NSG rules that permit workstation -> gateway traffic can name one stable prefix, and avoids renumbering later. Hand its id back as spec.subnet on the EgressGateway -- no gateway VM is built until you do. Azure bills for neither the subnet nor its network security group, so leaving it on costs nothing until a policy builds the VM. The subnet is associated with the NAT gateway, and that is what the VM's egress rests on: it takes no public address of its own unless EgressGateway.spec.publicAddress asks for one."
       }
     },
     "gatewaySubnetCidr": {

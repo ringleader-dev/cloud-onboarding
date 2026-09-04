@@ -170,9 +170,9 @@ variable "create_gateway_subnet" {
     name one stable prefix instead of one VM's address, and because carving the range now
     avoids renumbering later.
 
-    The subnet is associated with the landing pad's NAT gateway, so anything placed here has
-    egress without an address of its own -- but the gateway VM Ringleader builds carries its own
-    standalone public IP, which bills separately.
+    The subnet is associated with the landing pad's NAT gateway, and that is what the gateway
+    VM's egress rests on: it takes no public address of its own unless Ringleader is asked for
+    one (EgressGateway.spec.publicAddress).
   EOT
 }
 

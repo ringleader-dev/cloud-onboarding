@@ -32,16 +32,21 @@ creates / manages / deletes workstation VMs in YOUR project
   account to a VM it creates — see the next section). No `owner`, `editor`, project-IAM,
   billing, or storage access.
 
-## Every workstation runs as a service account
+## Every VM Ringleader creates runs as a service account
 
-A GCE workstation proves who it is to Ringleader with a **Google-signed instance identity
+A GCE VM proves who it is to Ringleader with a **Google-signed instance identity
 assertion**, and the metadata server mints one only for a VM that **has an attached
-service account**. So Ringleader attaches one to every workstation it creates: the
-service account the workstation declares, or — when it declares none — this project's
+service account**. So Ringleader attaches one to everything it creates here: the
+service account a workstation declares, or — when it declares none — this project's
 **default compute service account**. Attaching one requires `iam.serviceAccounts.actAs`
 on it, which is why `roles/iam.serviceAccountUser` is in the base grant above and not
 optional: without it the very first create fails with a `403` and no workstation in this
 project can boot.
+
+**The egress gateway is one of those VMs**, and it takes the default compute service
+account — it declares none of its own, and it enrols the same way a workstation does. So
+the second consequence below applies to it too, and the one grant it needs is the `actAs`
+already in the base grant.
 
 Two consequences worth acting on, both reasons to give Ringleader a **project of its own**:
 
@@ -304,21 +309,26 @@ there is no gateway subnet id to hand back. (On AWS and Azure a route table and 
 subnet instead, so the proxy must be placed outside what it steers and its subnet id *is* handed
 back — if you are comparing the modules, that is the difference.)
 
-**Two organization policies can stop it being created at all**, and both are worth checking
-before you declare a policy that names hostnames — either one makes the create fail and
-hostname-level egress control simply never starts:
+**One organization policy can stop it being created at all.**
+`constraints/compute.vmCanIpForward` — the gateway VM **must** forward packets it is not the
+destination of. That is what a next-hop route means, and GCE drops such packets silently without
+it, so the VM is always created with `--can-ip-forward`. If that constraint is enforced on this
+project, allow it an exception before you declare a policy that names hostnames; otherwise the
+create fails and hostname-level egress control simply never starts.
 
-* `constraints/compute.vmCanIpForward` — the gateway VM **must** forward packets it is not the
-  destination of. That is what a next-hop route means, and GCE drops such packets silently
-  without it, so the arm sets `--can-ip-forward` unconditionally.
-* `constraints/compute.vmExternalIpAccess` — the arm also gives it an external address
-  unconditionally, because it cannot assume a deployment has Cloud NAT. This landing pad's Cloud
-  NAT covers every range in the region, so the VM would have egress without one; the requirement
-  is the arm's, not the network's.
+**It takes no external address by default, and this landing pad is why that works.** The Cloud
+NAT below is created with `ALL_SUBNETWORKS_ALL_IP_RANGES`, so it covers the workstations subnet
+the gateway VM runs in and the VM reaches the internet without an address of its own. Nothing
+dials it from outside: a custom-mode VPC denies every ingress it has no rule for, and the only
+rule naming this VM is the one below.
 
-If either is enforced on this project, allow it an exception first. Inbound is closed regardless:
-a custom-mode VPC denies every ingress it has no rule for, and the only rule naming this VM is
-the one below.
+**But NAT is metered, and for a busy gateway an address is cheaper.** Cloud NAT processes at
+`$0.045/GiB`, while an external address costs about `$3.65/month` — so the address pays for
+itself at roughly **80 GiB/month** through one gateway, and less once Cloud NAT's own per-VM
+hourly charge is counted. Above that, ask Ringleader to set `spec.publicAddress: true` on the
+`EgressGateway`; the default is off because an address is **refused** where
+`constraints/compute.vmExternalIpAccess` is enforced, and a gateway that cannot be created is
+worse than one whose egress is metered.
 
 **The one firewall rule this needs is created for you.** The proxy VM carries the network tag
 `ringleader-egress-gateway`, and `ringleader-allow-gateway` — created alongside

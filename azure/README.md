@@ -196,7 +196,7 @@ or `Microsoft.Network`. Built-in **Contributor** covers it, so a deployment usin
 never sees this; a hand-rolled role can hold all sixteen networking actions above and still be
 refused here. And the refusal is not a partial listing — the sweep collects **nothing**,
 including the VM it did not need this action to see, so what is left behind is a running gateway
-VM and its separately billed static public IP.
+VM — and, if one was declared for it, a billed public IP.
 
 Ringleader compiles each distinct policy into **one** NSG and attaches it to the NICs of the
 workstations carrying that policy. That matters here: Azure caps an NSG at **1,000 rules** and
@@ -246,8 +246,7 @@ Restricting egress by **hostname** (rather than by IP range) needs the connectio
 something that can see the hostname on it, and no cloud offers that per workstation — so
 Ringleader runs a small **egress gateway** VM in your resource group. It builds and maintains
 that VM itself, once a workstation declares a policy naming hostnames, and it is a **billed**
-instance with a separately billed static public IP. Reserving its address range now is what
-keeps you from renumbering later:
+instance. Reserving its address range now is what keeps you from renumbering later:
 
 It is on by default, taking the 241st `/24` of the VNet — `10.70.240.0/24` in a first region,
 and following the VNet into whichever `/16` a later one takes. To skip it:
@@ -259,15 +258,24 @@ create_gateway_subnet = false
 CREATE_GATEWAY_SUBNET=false ./deploy.sh
 ```
 
-It creates an **empty subnet and its NSG**, and Azure bills for neither. The subnet is
-associated with the landing pad's NAT gateway, so anything you place here has egress without an
-address of its own — and the gateway VM Ringleader builds also carries its **own standalone
-public IP**, the separately billed address named above.
+It creates an **empty subnet and its NSG**, and Azure bills for neither. **The subnet is
+associated with the landing pad's NAT gateway, and that is what the gateway VM's egress rests
+on**: it takes no public address of its own unless Ringleader is asked for one
+(`EgressGateway.spec.publicAddress`), so without that association it would boot and reach
+nothing.
+
+**Asking for one does not move its traffic off the NAT gateway.** Azure's NAT gateway takes
+precedence over an instance-level public IP for outbound — measured, not inferred: a VM in this
+subnet holding its own static address still egressed from the NAT gateway's. So a public address
+here buys inbound reachability, which the gateway does not need, and changes neither the NAT
+gateway's per-GB processing charge nor the source address your upstreams see. (On GCP it is the
+other way round: an external address there bypasses Cloud NAT, which is why that cloud's README
+prices the two against each other.)
 
 **The NSG matters, and its one rule matters more.** Azure's default security rules are rules
-*inside* a group, so a bare subnet is not "closed by default" — it is unfiltered, and the gateway
-VM's public IP would put the proxy's listeners and its sshd on the internet. The group closes
-that. But it cannot be an *empty* group: `AllowVnetInBound` allows the VNet **to a VNet
+*inside* a group, so a bare subnet is not "closed by default" — it is unfiltered. That matters
+whenever the gateway does carry a public address, and it costs nothing when it does not. But the
+group cannot be an *empty* one: `AllowVnetInBound` allows the VNet **to a VNet
 destination**, and a packet steered to the proxy still carries the **public** address the
 workstation was reaching, because a route's next hop does not rewrite the destination. An empty
 group would drop exactly the traffic the proxy exists to carry, while the gateway went on
