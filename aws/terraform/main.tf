@@ -371,6 +371,40 @@ data "aws_iam_policy_document" "permissions" {
     }
   }
 
+  # A reserved address for the egress gateway, so the address your upstreams see does not change
+  # underneath them. Without one the gateway leaves on the subnet's auto-assigned address, and
+  # Ringleader replaces that machine when it fails health -- so anything you allowlisted upstream
+  # would break at the worst moment. Reserving one is Ringleader's job because Ringleader is what
+  # creates and replaces the machine.
+  #
+  # Bounded by REGION and not by VPC: an Elastic IP is an account-level resource and is not
+  # associated with a VPC at allocation time, so an ec2:Vpc condition on AllocateAddress can never
+  # match -- the same reason the reads above carry none.
+  dynamic "statement" {
+    for_each = var.enable_egress_control ? [1] : []
+    content {
+      sid    = "EgressGatewayAddress"
+      effect = "Allow"
+      actions = [
+        "ec2:AllocateAddress",
+        "ec2:ReleaseAddress",
+        "ec2:AssociateAddress",
+        "ec2:DisassociateAddress",
+        "ec2:DescribeAddresses",
+      ]
+      resources = ["*"]
+
+      dynamic "condition" {
+        for_each = local.region_condition ? [1] : []
+        content {
+          test     = "StringEquals"
+          variable = "aws:RequestedRegion"
+          values   = var.allowed_regions
+        }
+      }
+    }
+  }
+
   # The other half of egress control: moving a workstation's NIC onto the security group its
   # policy compiled to. This is what makes a policy change take effect on a running
   # workstation rather than only on the next one created.
@@ -625,11 +659,6 @@ resource "aws_security_group" "workstations_inbound_only" {
 # On by default, and the one default here that costs money -- it bills per hour plus $0.045
 # per GB processed, whether or not anything uses it. Set it false if every workstation gets a
 # public IP (the default), which the internet gateway already serves for free.
-#
-# Worth knowing for later: once the DNS / HTTPS proxy ships, a fleet of private workstations
-# can reach the internet through it instead, and the proxy meters nothing. At 10 TB/month
-# that is a saving of roughly $420 against managed NAT -- so for a fleet already behind NAT,
-# egress control arrives cheaper than the status quo rather than as new spend.
 resource "aws_eip" "nat" {
   count  = var.create_network && var.create_nat_gateway ? 1 : 0
   domain = "vpc"

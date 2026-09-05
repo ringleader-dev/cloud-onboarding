@@ -86,7 +86,7 @@ side of an injected line hid exactly that line while the rest of the file parsed
 (`_escape_span`, applied wherever a scanner opens a string). All four are now refusals. When changing any of it, remember that
 making a real statement invisible is worth exactly as much to an attacker as a hidden binder. A denylist of spellings never terminated,
 because bash always has one more; an allowlist does, because widening it is a deliberate edit to
-`SH_COMMANDS` with a test beside it. See `classify_shell_statement`. (RIN-1692)
+`SH_COMMANDS` with a test beside it. See `classify_shell_statement`.
 
 Run it:   python3 .github/scripts/check_trust_pins.py
 Test it:  python3 -m unittest discover -s .github/scripts -t .github/scripts -v
@@ -933,7 +933,7 @@ GCLOUD_PROVIDER_WRITE_RE = re.compile(r"workload-identity-pools[ \t]+providers[ 
 # pull request just wrote. Running it turns a guard against a hostile contributor into arbitrary
 # code execution BY that contributor, on the runner, and every external command (`gcloud`, `az`)
 # would have to be stubbed convincingly enough that the prologue still reached the pins -- which
-# needs the script parsed anyway. The grammar keeps the guard static. (RIN-1692)
+# needs the script parsed anyway. The grammar keeps the guard static.
 
 # The names the grammar PROTECTS: a statement that binds one of these by any means other than a
 # plain assignment is refused. It is a PARAMETER rather than a fixed set, because the same reader
@@ -999,7 +999,7 @@ def _heredoc_delims(line: str) -> list[str]:
     this file just as effectively as a hidden binder would.
 
     `<<<` is a HERESTRING and opens nothing. A `<<` inside quotes is text, not a redirection.
-    (RIN-1692)
+
     """
     out: list[str] = []
     i, quote, subst = 0, "", []
@@ -1097,7 +1097,7 @@ def _quote_closes(text: str, i: int, quote: str) -> bool:
     cannot tell those apart, and reading `\\\\"` as "still open" makes the splitter swallow every
     following line into one statement -- so `echo "note\\\\"` on one line hides an ordinary
     `SUBJECT="org:VICTIM"` on the next from every check in this file. Inside SINGLE quotes bash
-    escapes nothing at all, so the first `'` always closes. (RIN-1692)
+    escapes nothing at all, so the first `'` always closes.
     """
     if quote == "'":
         return True
@@ -1113,7 +1113,7 @@ def _quote_closes(text: str, i: int, quote: str) -> bool:
 # ordinary word character, so a scanner that counted one as "unclosed" would keep swallowing lines
 # after `echo ok [` -- and an ordinary `SUBJECT="org:VICTIM"` on the next line then becomes part of
 # an `echo`, invisible to every check in this file while bash runs it. Making a real statement
-# invisible is worth exactly as much to an attacker as a hidden binder. (RIN-1692)
+# invisible is worth exactly as much to an attacker as a hidden binder.
 SH_SUBSTITUTIONS = (("$((", "))"), ("$(", ")"), ("${", "}"), ("$[", "]"))
 
 
@@ -1158,7 +1158,7 @@ def _escape_span(text: str, i: int, quote: str) -> int:
 
     Inside SINGLE quotes bash escapes nothing, so a backslash there is an ordinary character.
     Everywhere else -- top level, inside a double quote, inside a backtick -- `\\x` is a literal x.
-    (RIN-1692)
+
     """
     if text[i] != "\\" or quote == "'":
         return 0
@@ -1294,7 +1294,7 @@ def _peel_assignments(s: str, path: str, stmt: str) -> tuple[list[tuple[str, str
         # depth with nothing to lower it, so `JUNK={ SUBJECT="org:VICTIM"` swallowed the second
         # assignment into JUNK's value -- while bash reads it as two assignments and rebinds the
         # pin for real. At top level a bare bracket is an ordinary character and does NOT nest;
-        # inside a substitution it does, which is what makes `$(( ))` balance. (RIN-1692)
+        # inside a substitution it does, which is what makes `$(( ))` balance.
         i, quote, stack = m.end(), "", []
         while i < len(s):
             ch = s[i]

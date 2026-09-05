@@ -159,8 +159,7 @@ Parameters:
       public IP still has egress. On by default, and the one default here that costs money --
       it bills per hour plus $0.045 per GB processed, whether or not anything uses it. Set
       false if every workstation gets a public IP, which the internet gateway already serves
-      for free. Once the DNS / HTTPS proxy ships, private workstations can egress through it
-      instead and it meters nothing.
+      for free.
 
   CreateGatewaySubnet:
     Type: String
@@ -398,6 +397,32 @@ Resources:
                   Action:
                     - "ec2:DescribeSecurityGroupRules"
                     - "ec2:DescribeRouteTables"
+                  Resource: "*"
+                  Condition: !If
+                    - HasRegionCondition
+                    - StringEquals:
+                        "aws:RequestedRegion": !Ref AllowedRegion
+                    - !Ref AWS::NoValue
+                - !Ref AWS::NoValue
+
+              # A reserved address for the egress gateway, so the address your upstreams see
+              # does not change underneath them. Without one the gateway leaves on the subnet's
+              # auto-assigned address, and Ringleader replaces that machine when it fails
+              # health -- so anything you allowlisted upstream would break at the worst moment.
+              #
+              # Bounded by REGION and not by VPC: an Elastic IP is an account-level resource
+              # and is not associated with a VPC at allocation time, so an ec2:Vpc condition on
+              # AllocateAddress can never match -- the same reason the reads above carry none.
+              - !If
+                - WantEgressControl
+                - Sid: EgressGatewayAddress
+                  Effect: Allow
+                  Action:
+                    - "ec2:AllocateAddress"
+                    - "ec2:ReleaseAddress"
+                    - "ec2:AssociateAddress"
+                    - "ec2:DisassociateAddress"
+                    - "ec2:DescribeAddresses"
                   Resource: "*"
                   Condition: !If
                     - HasRegionCondition

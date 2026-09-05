@@ -228,11 +228,8 @@ policy.
 ### What can defeat a policy here, and the priority band that is yours
 
 Nothing in this module changes when a workstation declares a policy, and there is no second
-subnet, tag or id to hand back. That is a property of the cloud rather than of the module: a GCE
-firewall rule can carry an explicit `denied` clause, so the rule set Ringleader compiles narrows
-the workstation on its own. (An AWS security group cannot express a deny at all, which is why
-that module ships a **second** security group and asks you to choose between them. GCP and Azure
-need no equivalent.)
+subnet, tag or id to hand back: a GCE firewall rule can carry an explicit `denied` clause, so the
+rule set Ringleader compiles narrows the workstation on its own.
 
 What *can* defeat a policy is an egress rule of your own, because GCE evaluates firewall rules by
 priority and **the lowest number wins**:
@@ -273,27 +270,6 @@ box *initiates* too, so workstation-to-workstation traffic stops unless the poli
 subnet range. If your workflows split work across boxes, list `subnet_cidr` (and any
 `additional_regions` range) among that policy's allowed destinations.
 
-### The one thing left as a future opt-in
-
-Google can filter by hostname natively, through **FQDN objects in a firewall *policy* rule**.
-It is the only native option on any of the three clouds priced in the same order as running a
-small VM, and it may be the right answer for some customers.
-
-It is **not** granted, deliberately, and that is the single exception to this module's
-otherwise-everything-on defaults. Taking it needs two further grants:
-
-- **firewall policy management** — `compute.firewallPolicies.create` / `update` / `use` plus
-  `compute.networks.setFirewallPolicy`. Policy rules are a different object from the VPC
-  firewall rules above, and FQDN objects exist only in them.
-- **resource-manager tag administration**, because a policy rule targets a **secure tag**
-  rather than the network tags Ringleader already sets. This is the sharp one: tag
-  administration is a documented privilege-escalation path in an organization that uses tags
-  in IAM conditions, since whoever can set a tag can satisfy a condition written against it.
-
-So it buys a capability nobody has committed to using, at a cost that depends on how your
-organization uses tags. If you want it, add a second custom role with those permissions and
-bind it to the same service account — nothing else here changes.
-
 ## Room for the egress gateway
 
 Restricting egress by **hostname** (rather than by IP range) needs the connection read by
@@ -301,13 +277,10 @@ something that can see the hostname on it, and no cloud offers that per workstat
 Ringleader runs a small **egress gateway** VM in your project. It builds and maintains that VM
 itself, once a workstation declares a policy naming hostnames, and it is a **billed** instance.
 
-**On GCP that VM runs in the workstations' own subnet, not in a subnet of its own** — and this is
-the second place the three modules deliberately differ. The route that steers a workstation at the
-proxy is scoped here by *network tag*, and the proxy carries no such tag, so it can sit beside the
-boxes without steering itself. `EgressGateway.spec.subnet` is **refused** on this provider, so
-there is no gateway subnet id to hand back. (On AWS and Azure a route table and a UDR attach per
-subnet instead, so the proxy must be placed outside what it steers and its subnet id *is* handed
-back — if you are comparing the modules, that is the difference.)
+**On GCP that VM runs in the workstations' own subnet, not in a subnet of its own.** Steering here
+is scoped by network tag and the proxy carries no such tag, so it sits beside the boxes without
+steering itself. `EgressGateway.spec.subnet` is **refused** on this provider, so there is no
+gateway subnet id to hand back.
 
 **One organization policy can stop it being created at all.**
 `constraints/compute.vmCanIpForward` — the gateway VM **must** forward packets it is not the
@@ -335,12 +308,9 @@ worse than one whose egress is metered.
 `ringleader-allow-internal`, over the same ranges and the same protocols — is what admits your
 workstations to it.
 
-It cannot be folded into `ringleader-allow-internal`, because that rule targets the
-**workstation** tag and the proxy VM does not carry one: Ringleader's steering route is itself
-scoped by tag, and a proxy wearing a workstation's tag would route its own traffic back into
-itself. Without `ringleader-allow-gateway` a custom-mode VPC drops every forwarded packet at
-the proxy's own NIC — the workstation runs, the route exists, Ringleader reports the proxy
-healthy, and nothing reaches the internet.
+It is a rule of its own rather than part of `ringleader-allow-internal`, which targets the
+workstation tag the proxy does not carry. Without it a custom-mode VPC drops every forwarded
+packet at the proxy's NIC and nothing behind the gateway reaches the internet.
 
 `ringleader-allow-gateway` follows no switch of its own. `allow_internal_traffic = false` (or
 `ALLOW_INTERNAL=0`) still turns off workstation-to-workstation traffic — a real posture choice — and
@@ -368,18 +338,11 @@ so the proxy has upstream egress with no further setup.
 
 ### GCP needs no subnet for the workstations that proxy governs
 
-This is the one place the three onboarding modules deliberately differ, and it is worth knowing
-before you compare them.
-
-On AWS and Azure a route table attaches to a *subnet*, so the proxy steers every box in the one it
-is given — and since it serves only the boxes it holds a policy for, an ungoverned workstation
-sharing that subnet would lose its egress. Both of those modules therefore carve a second subnet
-(`create_governed_subnet`, on by default) for the governed fleet.
-
-On GCP the steering route is a custom static route scoped by **network tag** — the same tag
-`providerConfig.gcp.networkTags` already sets. A workstation is governed by carrying that tag, and
-an untagged workstation on the same subnet is not steered and keeps its egress. So there is
-nothing here for a second subnet to fix, and `create_governed_subnet` is **off by default**:
+A workstation is governed here by carrying a **network tag** — the same tag
+`providerConfig.gcp.networkTags` already sets — and an untagged workstation beside it is
+untouched. So the governed fleet needs no range of its own, and `create_governed_subnet` is
+**off by default** (it is on by default on AWS and Azure, where the steering attaches to a
+subnet instead):
 
 ```hcl
 create_governed_subnet = true   # its range derives: the 15th /20 of network_cidr

@@ -246,20 +246,10 @@ Two of these deserve a deliberate decision rather than a default:
   reach each other at all and a compromised box cannot scan its neighbours. On, they can —
   matching what Azure's default NSG rules already allow.
 
-One capability is deliberately left **off**, and it is the only one: **GCP's own FQDN
-filtering**. It lives in firewall *policy* rules targeted by *secure tags*, so taking it would
-need firewall-policy management plus resource-manager **tag administration** — and tag
-administration is a privilege-escalation path in an organization that uses tags in IAM
-conditions. It buys a capability nobody has committed to using, at a cost that depends on how
-your organization uses tags, so it stays an explicit opt-in rather than a default.
-[`gcp/README.md`](gcp/README.md#the-one-thing-left-as-a-future-opt-in) has what it would take.
-
 **The AWS NAT gateway is worth a second look**, because it is the only default that meters
-traffic: $0.045/hour plus **$0.045/GB processed**. Once the proxy ships, private workstations
-can egress through it instead and the proxy meters nothing — roughly **$420/month cheaper at 10
-TB**. So for a fleet already behind managed NAT, egress control arrives cheaper than the status
-quo; for a fleet whose workstations have public addresses, it is new spend. Work out which you
-are before you budget for it.
+traffic: $0.045/hour plus **$0.045/GB processed**, whether or not anything uses it. Turn it off
+if every workstation gets a public IP — the default — which the internet gateway already serves
+for free.
 
 Inbound SSH is the one thing that is **not** on by default and cannot be: `ssh_source_ranges`
 is empty until you name the CIDRs your engineers connect from. There is no safe default for

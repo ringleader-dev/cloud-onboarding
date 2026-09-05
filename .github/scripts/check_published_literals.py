@@ -23,9 +23,8 @@ Two classes of literal, judged differently:
     landing pad must admit exactly it. There is a second guard at the other end, in the
     ringleader repository, pinning the same string (`TestTheGatewayTagIsThePublishedLiteral`);
     together they mean a rename fails a test in whichever repo does the renaming, with the other
-    end named in the message. Neither side may READ the other's file -- `onboarding/AGENTS.md`
-    forbids a guard that reaches across, because agreeing by construction would prove nothing
-    about the landing pads customers have ALREADY applied.
+    end named in the message. Neither side may READ the other's file: agreeing by construction
+    would prove nothing about the landing pads customers have ALREADY applied.
   * **Cross-path default** -- a tag the CUSTOMER puts on their own workstations, so the value is
     theirs to choose and Ringleader never sets it. What must not differ is the DEFAULT the two
     supported GCP paths ship, because a customer who follows the Terraform README and a customer

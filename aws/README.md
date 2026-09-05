@@ -294,24 +294,15 @@ It shares the workstations subnet's availability zone, for the reason the proxy'
 AWS charges cross-AZ traffic in both directions, and every packet a governed box sends crosses to
 the proxy.
 
-### The NAT gateway, and why the proxy eventually replaces it
+### The NAT gateway
 
-`create_nat_gateway` is also on by default and is **the one thing here that costs money**:
+`create_nat_gateway` is on by default and is **the one thing here that costs money**:
 $0.045/hour plus **$0.045/GB processed**, whether or not anything uses it. It exists so a
 workstation with `assignPublicIp: false` still has egress. Turn it off if all your workstations
 get public IPs, which is the default and which the internet gateway already serves for free.
 
-Worth knowing for later: once the proxy ships, a fleet of private workstations can reach the
-internet through it instead, and the proxy meters nothing. At 10 TB/month that is a saving of
-roughly **$420 against managed NAT** — so for a fleet already behind NAT, egress control
-arrives *cheaper* than the status quo rather than as new spend. For a fleet whose workstations
-have public addresses today, the proxy is new spend; which of the two you are is worth working
-out before you budget for it.
-
-**One thing this also fixed.** `create_nat_gateway` previously created a NAT gateway that
-nothing routed to, so a workstation with `assignPublicIp: false` had no egress at all. There is
-now a private route table pointing at it — `private_route_table_id` — and you can associate any
-subnet that should reach the internet without a public IP with it.
+`private_route_table_id` is the route table that points at it. Associate any subnet that should
+reach the internet without a public IP with that table.
 
 ## A second region: name it, do not renumber it
 
