@@ -69,7 +69,19 @@ output "role_extras_granted" {
     # left behind, with its public IP if one was declared. Built-in Contributor covers it; a narrower role must
     # name it. See ../README.md, "Optional: egress control".
     var.enable_egress_control ? ["Microsoft.Resources/subscriptions/resourcegroups/resources/read -- the leaked-gateway sweep's object listing"] : [],
+    var.enable_artifact_storage ? ["Microsoft.Storage/storageAccounts (+ blobServices, + containers) read, and the four blobs DATA actions read/write/delete/add -- artifact storage. NOT listKeys and NOT listAccountSas: an account key is a long-lived static credential and nothing here issues one."] : [],
+    var.enable_artifact_storage && var.artifact_storage_account_name == "" ? ["Microsoft.Storage storageAccounts write/delete and blobServices (+ containers) write/delete -- artifact storage, MANAGED width only"] : [],
   )
+}
+
+output "artifact_storage_grant" {
+  value       = var.enable_artifact_storage ? (var.artifact_storage_account_name == "" ? "managed" : "named") : null
+  description = "Hand back to Ringleader: which width you took, as the Storage object's spec.grant. Null when enable_artifact_storage = false, which is also the answer to \"do not declare a Storage at all\"."
+}
+
+output "artifact_storage_account_name" {
+  value       = var.enable_artifact_storage && var.artifact_storage_account_name != "" ? var.artifact_storage_account_name : null
+  description = "Hand back to Ringleader with the container it should write to, on the NAMED width. Null on the managed width, where Ringleader creates the account itself -- ask it what it created rather than guessing."
 }
 
 output "handoff" {
@@ -89,5 +101,8 @@ output "handoff" {
     subnet_id            = var.create_network ? azurerm_subnet.workstations[0].id : null
     governed_subnet_id   = var.create_network && var.create_governed_subnet ? azurerm_subnet.governed[0].id : null
     gateway_subnet_id    = var.create_network && var.create_gateway_subnet ? azurerm_subnet.gateway[0].id : null
+
+    artifact_storage_grant        = var.enable_artifact_storage ? (var.artifact_storage_account_name == "" ? "managed" : "named") : null
+    artifact_storage_account_name = var.enable_artifact_storage && var.artifact_storage_account_name != "" ? var.artifact_storage_account_name : null
   }
 }

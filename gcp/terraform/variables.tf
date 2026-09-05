@@ -121,6 +121,78 @@ variable "identity_role_id" {
   }
 }
 
+# --- Artifact storage in a bucket of yours (on by default) -------------------
+
+variable "enable_artifact_storage" {
+  type        = bool
+  default     = true
+  description = <<-EOT
+    Let Ringleader hold artifact payloads -- sealed agent-session transcripts, workflow file
+    outputs, files a workstation publishes -- in a Cloud Storage bucket in THIS project rather
+    than in Ringleader's own. On by default; set false to opt out.
+
+    With it off, those bytes go to a bucket Ringleader owns, which is where they go today. That
+    is not a failure and nothing degrades; what you cannot then answer is "which of our data is
+    in whose account, under whose key", so take this if that question is ever going to be asked
+    of you.
+
+    Two widths, and artifact_storage_bucket picks between them:
+
+      - MANAGED (leave artifact_storage_bucket unset). Ringleader creates and converges its own
+        buckets here, so their names, lifecycle rules and layout can change without asking you to
+        re-apply anything. The grant is confined to buckets whose name starts with "ringleader-",
+        by an IAM condition on the binding -- it reaches nothing else in this project, including
+        buckets you already have.
+      - NAMED (set artifact_storage_bucket). You create one bucket, keep its lifecycle and its
+        encryption key yours, and Ringleader gets object access to that one bucket and nothing
+        else. It cannot create, reshape or delete a bucket at all.
+
+    Neither width grants any permission to SET an IAM policy, so Ringleader cannot widen its own
+    access to this project's storage, and neither grants storage.hmacKeys.* -- an HMAC key is a
+    long-lived static credential and this onboarding is keyless throughout.
+
+    Granting it does nothing on its own: until a Ringleader namespace declares a Storage object
+    naming a bucket, no payload is written here.
+  EOT
+}
+
+variable "artifact_storage_bucket" {
+  type        = string
+  default     = ""
+  description = <<-EOT
+    The one bucket Ringleader may write artifact payloads to, when you would rather own it than
+    let Ringleader create one. Empty -- the default -- takes the managed width instead; see
+    enable_artifact_storage.
+
+    Set it to a bucket that already exists in this project. The grant is then bound to that
+    bucket alone, and carries no bucket create, update or delete: its location, its lifecycle
+    rules and its default encryption key stay yours to set, which is the point of this width.
+    Hand the same name back to Ringleader as the Storage object's spec.bucket.
+
+    Ringleader reads the bucket's default-encryption configuration and its location and reports
+    both back on that object, so "are these transcripts under our own key, in our own region"
+    is answerable without asking us. Reading is all it does with them -- it never sets an
+    encryption key and never adds an envelope of its own.
+  EOT
+}
+
+variable "artifact_storage_role_id" {
+  type        = string
+  default     = "ringleaderArtifactStorage"
+  description = <<-EOT
+    Id of the custom role created when enable_artifact_storage is set. Change it only if that
+    id is already taken in this project -- a custom role id cannot be reused for 7 days after
+    deletion, so a re-apply soon after a destroy may need a different one. The managed width
+    derives a second id from this one by appending "Provision"; see main.tf for why it cannot
+    be one role.
+  EOT
+
+  validation {
+    condition     = can(regex("^[a-zA-Z0-9_.]{3,55}$", var.artifact_storage_role_id))
+    error_message = "artifact_storage_role_id must be 3-55 characters of [a-zA-Z0-9_.] (GCP custom role ids allow no hyphens; the limit is 55 rather than 64 to leave room for the derived Provision id)."
+  }
+}
+
 variable "egress_role_id" {
   type        = string
   default     = "ringleaderEgressControl"

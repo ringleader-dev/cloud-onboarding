@@ -338,6 +338,54 @@ What it gets and what it deliberately does not:
   subnet creation**: turning it off later replaces the subnet, so it has to be right on the first
   apply.
 
+## Optional: artifact storage in a storage account of yours
+
+Ringleader holds **artifact payloads** — the sealed transcript of an agent session above all,
+plus workflow file outputs and files a workstation publishes. By default those bytes go to a
+bucket Ringleader owns. `enable_artifact_storage` (`ARTIFACT_STORAGE` on the ARM path), **on by
+default**, lets them go to a storage account in this resource group instead.
+
+**The Azure Blob backend ships after the GCS one**, so on this cloud the grant deliberately
+arrives before the feature. That is the point: it costs an unused subscription nothing, and it is
+what stops Azure support from becoming a second apply for every customer later.
+
+### Entra ID, never an account key
+
+This is the only switch here that adds **`dataActions`** to the custom role — the four blob
+actions `read`, `write`, `delete` and `add`. Access is therefore by Entra ID and a short-lived
+token, exactly like every other action Ringleader takes in your subscription.
+
+`Microsoft.Storage/storageAccounts/listKeys/action` and `listAccountSas/action` are **not**
+granted, and that is a decision rather than an omission. An account key is a long-lived static
+credential with full data-plane access; handing one over would undo the keyless property this
+whole onboarding is built on. If you are comparing this role against a hand-written one, that is
+the line to check.
+
+### The two widths, and what "named" does and does not narrow
+
+**Managed** — leave `artifact_storage_account_name` unset. Ringleader creates and converges the
+storage account and its containers, so their names, layout and lifecycle rules can change without
+you re-applying anything.
+
+**Named** — set it to an account you created. Every account and container **write** and
+**delete** is dropped: Ringleader may put blobs in containers you made and may neither create,
+reshape nor delete an account or a container. Its location, its lifecycle rules and its
+customer-managed key stay yours.
+
+Read the bound carefully, because Azure differs from the other two clouds here. The custom role
+is scoped to **this resource group**, as every other action in it is, and Azure offers no
+name-prefix condition on these control-plane actions. So naming an account narrows what
+Ringleader may **do** — not which account it may reach. If you need the reach narrowed too, put
+the storage account in a resource group of its own. This module's boundary is one resource group
+and it does not pretend otherwise.
+
+### What you hand back
+
+`artifact_storage_grant` (`managed` or `named`) becomes the `Storage` object's `spec.grant`. On
+the named width, hand back `artifact_storage_account_name` **and** the container Ringleader should
+write to; on the managed width Ringleader creates both itself, so ask it what it created rather
+than guessing.
+
 ## A second region: name it, do not renumber it
 
 An Azure VNet is regional. A second region means a second VNet joined by **global VNet
@@ -467,6 +515,8 @@ $ cd azure/terraform && terraform init && terraform test
 | **subnet id** (only if you created a network) | `terraform output handoff` |
 | **governed subnet id** (only if you turned it on) | `terraform output handoff` — `providerConfig.azure.subnetId` for the workstations that carry an egress policy |
 | **gateway subnet id** (only if you reserved one) | `terraform output handoff` — goes on the `EgressGateway` as `spec.subnet`, not on a workstation; no gateway VM is built until it has one |
+| **`artifact_storage_grant`** (`managed` or `named`) | `terraform output handoff` — the `Storage` object's `spec.grant`, if you want payloads in a storage account of yours |
+| **`artifact_storage_account_name`** (named width only) | `terraform output handoff`, with the container Ringleader should write to. On the managed width Ringleader creates both itself |
 
 ## Revoking
 

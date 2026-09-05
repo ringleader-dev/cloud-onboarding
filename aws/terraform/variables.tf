@@ -128,6 +128,53 @@ It grants two sets, both bounded to the VPCs in egress_vpc_ids and to allowed_re
   EOT
 }
 
+variable "enable_artifact_storage" {
+  type        = bool
+  default     = true
+  description = <<-EOT
+    Let Ringleader hold artifact payloads -- sealed agent-session transcripts, workflow file
+    outputs, files a workstation publishes -- in an S3 bucket in THIS account rather than in
+    Ringleader's own. On by default; set false to opt out.
+
+    With it off, those bytes go to a bucket Ringleader owns, which is where they go today.
+    Nothing degrades and nothing fails; what you cannot then answer is "which of our data is in
+    whose account, under whose key".
+
+    Two widths, and artifact_storage_bucket picks between them:
+
+      - MANAGED (leave artifact_storage_bucket unset). Ringleader creates and converges its own
+        buckets here, so their names, lifecycle rules and layout can change without asking you to
+        re-apply. Confined by ARN pattern to buckets named ringleader-*, so it reaches no bucket
+        you already have.
+      - NAMED (set artifact_storage_bucket). You create one bucket, keep its lifecycle and its
+        SSE-KMS key yours, and Ringleader gets object access to that one bucket -- with no
+        ability to create, reshape or delete a bucket at all.
+
+    Neither width grants s3:PutBucketPolicy or any ACL write, so Ringleader cannot widen its own
+    access to this account's storage.
+
+    Granting it does nothing on its own: until a Ringleader namespace declares a Storage object
+    naming a bucket, no payload is written here. The S3 backend itself ships after the GCS one,
+    so on this cloud the grant deliberately arrives before the feature -- that is what stops S3
+    support from costing every customer a second apply.
+  EOT
+}
+
+variable "artifact_storage_bucket" {
+  type        = string
+  default     = ""
+  description = <<-EOT
+    The one S3 bucket Ringleader may write artifact payloads to, when you would rather own it
+    than let Ringleader create one. Empty -- the default -- takes the managed width instead; see
+    enable_artifact_storage.
+
+    Set it to a bucket that already exists in this account. The grant is then bound to that
+    bucket's ARN alone and carries no CreateBucket, DeleteBucket or lifecycle write: its region,
+    its lifecycle rules and its default encryption stay yours to set, which is the point of this
+    width. Hand the same name back to Ringleader as the Storage object's spec.bucket.
+  EOT
+}
+
 variable "egress_vpc_ids" {
   type        = list(string)
   default     = []

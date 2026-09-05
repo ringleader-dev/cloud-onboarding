@@ -123,6 +123,8 @@ resource "azurerm_resource_group_template_deployment" "role" {
     roleName                    = { value = var.role_name }
     enableWorkstationIdentities = { value = var.enable_workstation_identities }
     enableEgressControl         = { value = var.enable_egress_control }
+    enableArtifactStorage       = { value = var.enable_artifact_storage }
+    artifactStorageAccountName  = { value = var.artifact_storage_account_name }
   })
 }
 

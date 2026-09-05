@@ -356,6 +356,97 @@ simply to keep one manifest shape across all three clouds. It buys no isolation 
 already give you. When it is on, `allow_internal_traffic` covers its range too — a workstation
 does not stop being a workstation because a proxy steers it.
 
+## Optional: artifact storage in a bucket of yours
+
+Ringleader holds **artifact payloads** — the sealed transcript of an agent session above all,
+plus workflow file outputs and files a workstation publishes. By default those bytes go to a
+bucket Ringleader owns. `enable_artifact_storage` (`ARTIFACT_STORAGE` on the script path), **on
+by default**, lets them go to a bucket in this project instead.
+
+Nothing is written here until a Ringleader namespace declares a `Storage` object naming a
+bucket. Until then this is authority and nothing else, exactly like egress control.
+
+### The two widths, and how you pick
+
+**Managed** — leave `artifact_storage_bucket` unset. Ringleader creates and converges its own
+buckets, so their names, layout and lifecycle rules can change without you re-applying anything.
+The grant is a custom role bound with an **IAM condition**:
+
+```
+resource.name.startsWith("projects/_/buckets/ringleader-")
+```
+
+An object's resource name is `projects/_/buckets/<bucket>/objects/<object>`, so one prefix test
+covers the bucket and everything in it, and a request against anything else — including a bucket
+you already have — fails the test and is refused. A project boundary alone would not be enough
+here: unlike compute, where the worst case is a machine we created, an unbounded storage grant
+can **read** what is already in the project.
+
+Bucket *creation* cannot carry that condition, because `storage.buckets.create` authorizes
+against the **project** — the bucket does not exist yet. So it sits alone in a second role,
+`ringleaderArtifactStorageProvision`, holding that one permission: it can create a bucket and can
+do nothing to any bucket, new or existing.
+
+**Named** — set `artifact_storage_bucket` to a bucket you created. The grant is bound on that
+bucket rather than on the project, and drops `storage.buckets.update` and `storage.buckets.delete`
+entirely: Ringleader can read and write objects in it and cannot create, reshape or delete a
+bucket at all. Its location, its lifecycle rules and its **default encryption key** stay yours.
+
+That last one is the point. Set the bucket's default encryption to a key in your own Cloud KMS
+and every payload lands under it; the write is byte-identical and there is nothing on Ringleader's
+side to configure. Ringleader **reads** the bucket's default-encryption configuration and its
+location and reports both back on the `Storage` object, so "are these transcripts under our own
+key, in our own region" is a question you can answer without asking us. Reading is all it does
+with them: it never sets a key and never adds an envelope of its own.
+
+`storage.buckets.get` is granted in **both** widths for exactly that reason. Without it the
+destination still works and the status can only say `unknown`, which is the answer this feature
+exists to stop having to give.
+
+### Switching between the widths later
+
+**Terraform handles both directions.** The bindings are conditional on which width you chose, so a
+`terraform apply` after changing `artifact_storage_bucket` destroys the ones the other width made.
+Read the plan, as always.
+
+**The script narrows in one direction only, and you finish the other by hand.** Re-running
+`onboard.sh` with `ARTIFACT_STORAGE_BUCKET` set removes the project-level bindings a previous
+managed run made, so narrowing really narrows — and it stops rather than reporting success if it
+cannot. Going the other way it cannot help you: with `ARTIFACT_STORAGE_BUCKET` now empty the script
+no longer knows which bucket to unbind, so the grant on the bucket you named **stays** until you
+remove it:
+
+```bash
+gcloud storage buckets remove-iam-policy-binding gs://<the bucket you had> \
+  --member "serviceAccount:<the SA you onboarded with>" \
+  --role "projects/<project>/roles/<your artifact_storage_role_id>"
+```
+
+Both placeholders are whatever you onboarded with, not necessarily the defaults: the account is
+`sa_account_id` / `SA` (`ringleader-workstations@<project>.iam.gserviceaccount.com` unless you
+changed it) and the role is `artifact_storage_role_id` / `ARTIFACT_STORAGE_ROLE`
+(`ringleaderArtifactStorage` unless you changed it). `terraform output roles_granted` and
+`verify.sh` both print what you actually have.
+
+`verify.sh` cannot see that one either — a bucket-scoped binding is not in the project's IAM
+policy — so it is worth doing at the time rather than discovering later.
+
+### What is deliberately withheld
+
+- `storage.buckets.setIamPolicy` and `storage.objects.setIamPolicy` — nothing in this onboarding
+  may **grant** authority. It is the same rule that keeps the service accounts Ringleader creates
+  for its own appliances role-less by construction.
+- `storage.hmacKeys.*` — an HMAC key is a long-lived static credential, and this onboarding is
+  keyless throughout.
+- `storage.buckets.list` — Ringleader addresses buckets it already knows the name of. Listing
+  them would enumerate every bucket name in the project for no feature.
+
+### What you hand back
+
+`artifact_storage_grant` (`managed` or `named`) becomes the `Storage` object's `spec.grant`. On
+the named width `artifact_storage_bucket` becomes its `spec.bucket`; on the managed width
+Ringleader names the bucket itself, so ask it what it created rather than guessing.
+
 ## Address ranges: declare the block, do not inherit one
 
 This module carves every subnet out of one `/16`, and **it will not guess which one**:
@@ -427,6 +518,8 @@ inter-zone rates while sitting right next to it — use internal addressing betw
 | **subnet self-link** (only if you created a network) | the subnet Ringleader attaches NICs to |
 | **gateway subnet self-link** (only if you reserved one) | nothing — do not hand this back. On GCP the gateway VM runs in the *workstations'* subnet, and `EgressGateway.spec.subnet` is refused here |
 | **governed subnet self-link** (only if you turned it on) | an optional range for the governed fleet. GCP governs by network tag, so this is organizational rather than required |
+| **`artifact_storage_grant`** (`managed` or `named`) | the `Storage` object's `spec.grant`, if you want payloads in a bucket of yours |
+| **`artifact_storage_bucket`** (named width only) | that object's `spec.bucket`. On the managed width Ringleader names the bucket itself |
 
 ## Revoking
 

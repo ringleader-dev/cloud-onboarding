@@ -157,6 +157,59 @@ variable "enable_egress_control" {
 
 # --- The subnet the DNS / HTTPS proxy VM runs in (on by default) -------------
 
+# --- Artifact storage in a storage account of yours (on by default) ----------
+
+variable "enable_artifact_storage" {
+  type        = bool
+  default     = true
+  description = <<-EOT
+    Let Ringleader hold artifact payloads -- sealed agent-session transcripts, workflow file
+    outputs, files a workstation publishes -- in a storage account in THIS resource group rather
+    than in Ringleader's own cloud. On by default; set false to opt out.
+
+    With it off, those bytes go to a bucket Ringleader owns, which is where they go today.
+    Nothing degrades and nothing fails; what you cannot then answer is "which of our data is in
+    whose account, under whose key".
+
+    It adds the Microsoft.Storage read actions plus the four blob DATA actions -- read, write,
+    delete and add -- so access is by Entra ID and a short-lived token. It deliberately does NOT
+    add listKeys or listAccountSas: an account key is a long-lived static credential, and this
+    onboarding is keyless throughout.
+
+    Two widths, and artifact_storage_account_name picks between them:
+
+      - MANAGED (leave it unset). Ringleader also creates and converges the storage account and
+        its containers, so their names, lifecycle rules and layout can change without asking you
+        to re-apply.
+      - NAMED (set it). Every account and container write and delete is dropped: Ringleader may
+        put blobs in containers you made and may neither create, reshape nor delete an account or
+        a container.
+
+    Granting it does nothing on its own: until a Ringleader namespace declares a Storage object
+    naming a destination, no payload is written here. The Azure Blob backend itself ships after
+    the GCS one, so on this cloud the grant deliberately arrives before the feature -- that is
+    what stops Azure support from costing every customer a second apply.
+  EOT
+}
+
+variable "artifact_storage_account_name" {
+  type        = string
+  default     = ""
+  description = <<-EOT
+    The storage account Ringleader may write artifact payloads to, when you would rather own it
+    than let Ringleader create one. Empty -- the default -- takes the managed width instead; see
+    enable_artifact_storage.
+
+    Read what this DOES and does not narrow. The custom role is scoped to this resource group,
+    as every other action in it is, so naming an account narrows what Ringleader may DO -- no
+    account or container writes at all -- and not which account it may reach. If you need the
+    reach narrowed too, put the account in a resource group of its own; this module's boundary
+    is one resource group and it does not pretend otherwise.
+
+    Hand the name back to Ringleader alongside the container it should write to.
+  EOT
+}
+
 variable "create_gateway_subnet" {
   type        = bool
   default     = true

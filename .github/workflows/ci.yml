@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   # The job that reads the shipped artifacts for what they MEAN rather than whether they deploy.
-  # Two guards, both dependency-free, both about a property no other job here can see:
+  # Three guards, all dependency-free, each about a property no other job here can see:
   #
   #   check_trust_pins.py         -- a failure means a shipped artifact would hand one customer's
   #                                  cloud account to the rest of the fleet.
@@ -33,13 +33,16 @@ jobs:
   #                                  Ringleader sets, which is a silent, total egress outage that
   #                                  we cannot repair afterwards: the customer applied it, in their
   #                                  own account, and we hold no credentials there.
+  #   check_route_parity.py       -- a failure means one cloud's two supported paths grant
+  #                                  different things, so the customer who took the other route is
+  #                                  missing a grant and will find out when a feature 403s.
   #
   # They share this job because they share a reader (the second imports the first's HCL, YAML and
   # closed-grammar shell parsers) and because the `unittest discover` step below is BLANKET on
   # purpose: a guard added later gets its self-tests run without anyone remembering to wire them
   # up, and a guard whose tests run nowhere is a guard that has already rotted.
   trust-pins:
-    name: Trust and literal pins
+    name: Trust, literal and route-parity pins
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -52,6 +55,9 @@ jobs:
 
       - name: The landing pads name the literals Ringleader actually sets
         run: python3 .github/scripts/check_published_literals.py
+
+      - name: Each cloud's two supported paths grant the same thing
+        run: python3 .github/scripts/check_route_parity.py
 
       # The guards' own teeth. A guard that has quietly stopped matching the file it reads
       # passes every build until the day it matters, so its failure modes are tested against

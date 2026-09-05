@@ -50,6 +50,15 @@
 #                from REGION_INDEX                               (default: empty)
 #   SUBNET_CIDR  override the workstations subnet; empty derives
 #                the first /20 of the VPC range                  (default: empty)
+#   WORKSTATION_IDENTITIES  true|false: let a workstation run as an
+#                IAM role of yours (iam:PassRole, bounded to the
+#                path below)                                     (default: true)
+#   WORKSTATION_IDENTITY_PATH  the IAM path those roles live under (default: /ringleader/)
+#   ARTIFACT_STORAGE  true|false: let Ringleader hold artifact
+#                payloads in an S3 bucket in THIS account         (default: true)
+#   ARTIFACT_STORAGE_BUCKET  a bucket YOU created, to take the
+#                narrower "named" width instead of letting
+#                Ringleader create its own                        (default: empty, managed)
 #
 # The defaults grant what Ringleader needs for the features available today, so enabling one
 # later does not mean a second onboarding pass. CREATE_NAT_GATEWAY is the only one that costs
@@ -88,6 +97,10 @@ if [ "$CREATE_NETWORK" = "true" ] && [ -z "$VPC_CIDR" ] && [ -z "$REGION_INDEX" 
   exit 1
 fi
 EGRESS_CONTROL="${EGRESS_CONTROL:-true}"
+WORKSTATION_IDENTITIES="${WORKSTATION_IDENTITIES:-true}"
+WORKSTATION_IDENTITY_PATH="${WORKSTATION_IDENTITY_PATH:-/ringleader/}"
+ARTIFACT_STORAGE="${ARTIFACT_STORAGE:-true}"
+ARTIFACT_STORAGE_BUCKET="${ARTIFACT_STORAGE_BUCKET:-}"
 EGRESS_VPC_ID="${EGRESS_VPC_ID:-}"
 CREATE_NAT_GATEWAY="${CREATE_NAT_GATEWAY:-true}"
 CREATE_GATEWAY_SUBNET="${CREATE_GATEWAY_SUBNET:-true}"
@@ -175,6 +188,10 @@ aws cloudformation deploy \
     SshSourceCidr="$SSH_SOURCE_CIDR" \
     SecondarySshSourceCidr="$SECONDARY_SSH_SOURCE_CIDR" \
     EnableEgressControl="$EGRESS_CONTROL" \
+    EnableWorkstationIdentities="$WORKSTATION_IDENTITIES" \
+    WorkstationIdentityPath="$WORKSTATION_IDENTITY_PATH" \
+    EnableArtifactStorage="$ARTIFACT_STORAGE" \
+    ArtifactStorageBucket="$ARTIFACT_STORAGE_BUCKET" \
     EgressVpcId="$EGRESS_VPC_ID" \
     CreateNatGateway="$CREATE_NAT_GATEWAY" \
     CreateGatewaySubnet="$CREATE_GATEWAY_SUBNET" \

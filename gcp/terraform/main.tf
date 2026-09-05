@@ -79,6 +79,16 @@ resource "google_project_service" "iamcredentials" {
   disable_on_destroy = false
 }
 
+# The sixth, enabled only when artifact storage is taken (see 2d). It is separate from the five
+# above because it is the one API a project that never takes that switch has no use for, and
+# because enabling a storage API in a project is a thing some platform teams audit.
+resource "google_project_service" "storage" {
+  count              = var.enable_artifact_storage ? 1 : 0
+  project            = var.project_id
+  service            = "storage.googleapis.com"
+  disable_on_destroy = false
+}
+
 # 1. A dedicated, least-privilege identity Ringleader acts as.
 resource "google_service_account" "onboarding" {
   project      = var.project_id
@@ -326,6 +336,150 @@ resource "google_project_iam_member" "egress" {
   member  = "serviceAccount:${google_service_account.onboarding.email}"
 
   depends_on = [google_project_service.cloudresourcemanager]
+}
+
+# 2d. Artifact storage (on by default; enable_artifact_storage).
+#
+# Lets Ringleader put artifact PAYLOADS -- sealed agent-session transcripts, workflow file
+# outputs, files a workstation publishes -- in a bucket in this project instead of in a bucket
+# Ringleader owns. It is the answer to "which of our data sits in whose account, under whose
+# key", and it is the one grant here that is about data rather than about machines.
+#
+# It grants no bucket and creates no bucket. Which bucket a given Ringleader namespace writes to
+# is declared on a Storage object over there, and until one exists nothing is written here at
+# all -- so this switch is authority ahead of use, exactly like egress control.
+#
+# TWO WIDTHS, picked by artifact_storage_bucket rather than by a second switch:
+#
+#   MANAGED (artifact_storage_bucket unset). Ringleader creates and converges its own buckets, so
+#   their names, layout and lifecycle rules are ours to change without a customer re-applying
+#   anything -- which is the whole reason a grant is a better thing to ask for than a resource.
+#   Confined by an IAM CONDITION to buckets named `ringleader-*`, so it reaches nothing else in
+#   this project. A project boundary alone would not be enough here: unlike compute, where the
+#   worst case is a machine we created, an unbounded storage grant can READ whatever is already
+#   in the project.
+#
+#   NAMED (artifact_storage_bucket set). Object access to that one bucket, bound on the bucket
+#   rather than on the project, with no permission to create, reshape or delete a bucket. The
+#   bucket's location, lifecycle and default encryption key stay the customer's, which is what
+#   makes CMEK a decision Ringleader never touches: set the bucket's default key and every write
+#   lands under it, byte-identical to a write into any other bucket.
+#
+# WHY TWO ROLES rather than one. `storage.buckets.create` is authorized against the PROJECT, not
+# against the bucket being created -- the bucket does not exist yet -- so an IAM condition on
+# `resource.name` can never match it and a conditioned binding carrying it would simply refuse
+# every create. It therefore sits alone in a second, unconditioned role holding that one
+# permission, which can create a bucket and do nothing to any bucket, existing or new. Everything
+# with teeth stays behind the condition.
+#
+# WHAT IS DELIBERATELY WITHHELD, in both widths:
+#
+#   - storage.buckets.setIamPolicy / storage.objects.setIamPolicy -- nothing here may GRANT
+#     authority, which is the same rule that keeps the service accounts Ringleader creates in 2a
+#     role-less by construction.
+#   - storage.hmacKeys.* -- an HMAC key is a long-lived static credential, and this onboarding
+#     issues none anywhere.
+#   - storage.buckets.list -- Ringleader addresses buckets it already knows the name of. Listing
+#     them would enumerate the names of every bucket in the project for no feature.
+locals {
+  # The prefix every bucket Ringleader creates under the MANAGED width is named with, and the
+  # bound the IAM condition below is written against. Ringleader compiles the same string
+  # (`storagekind.ManagedBucketPrefix`); a landing pad that admits a different one grants an
+  # authority that matches no bucket, and every bucket create fails with a 403 that looks like a
+  # Ringleader bug. Not a variable, on purpose: it is not the operator's to choose.
+  managed_bucket_prefix = "ringleader-"
+
+  # Reading a bucket's own configuration is in BOTH widths, and it is the one easy to leave out:
+  # it is what reports the bucket's default encryption key and its location back onto the Storage
+  # object. Without it the destination still works and the status can only say "unknown", which
+  # is the answer this feature exists to stop having to give.
+  artifact_storage_permissions = [
+    "storage.buckets.get",
+    "storage.objects.create",
+    "storage.objects.delete",
+    "storage.objects.get",
+    "storage.objects.list",
+    "storage.objects.update",
+  ]
+
+  # Reshaping a bucket is the managed width's alone. On a named bucket these would let Ringleader
+  # change or delete something the customer owns, which is the opposite of what that width is for.
+  artifact_storage_manage_permissions = [
+    "storage.buckets.delete",
+    "storage.buckets.update",
+  ]
+
+  artifact_storage_managed = var.enable_artifact_storage && var.artifact_storage_bucket == ""
+  artifact_storage_named   = var.enable_artifact_storage && var.artifact_storage_bucket != ""
+}
+
+resource "google_project_iam_custom_role" "artifact_storage" {
+  count       = var.enable_artifact_storage ? 1 : 0
+  project     = var.project_id
+  role_id     = var.artifact_storage_role_id
+  title       = "Ringleader Artifact Storage"
+  description = "Read and write the artifact payloads Ringleader holds in this project's Cloud Storage."
+
+  permissions = concat(
+    local.artifact_storage_permissions,
+    local.artifact_storage_managed ? local.artifact_storage_manage_permissions : [],
+  )
+
+  depends_on = [google_project_service.iam]
+}
+
+# MANAGED: project-scoped, and confined to `ringleader-*` by the condition. An object's resource
+# name is `projects/_/buckets/<bucket>/objects/<object>`, so one prefix test covers the bucket
+# and everything in it, and a request against any other resource -- including the project itself
+# -- fails the test and is refused.
+resource "google_project_iam_member" "artifact_storage" {
+  count   = local.artifact_storage_managed ? 1 : 0
+  project = var.project_id
+  role    = google_project_iam_custom_role.artifact_storage[0].id
+  member  = "serviceAccount:${google_service_account.onboarding.email}"
+
+  condition {
+    title       = "Ringleader-managed artifact buckets only"
+    description = "Only buckets whose name starts with ${local.managed_bucket_prefix}, and the objects in them."
+    expression  = "resource.name.startsWith(\"projects/_/buckets/${local.managed_bucket_prefix}\")"
+  }
+
+  depends_on = [google_project_service.cloudresourcemanager]
+}
+
+# MANAGED, the second role: create a bucket, and nothing else. Unconditioned because it has to be
+# (see above). On its own it permits no read of any object and no change to any bucket that
+# exists -- the condition above is what governs everything that follows a create.
+resource "google_project_iam_custom_role" "artifact_storage_provision" {
+  count       = local.artifact_storage_managed ? 1 : 0
+  project     = var.project_id
+  role_id     = "${var.artifact_storage_role_id}Provision"
+  title       = "Ringleader Artifact Storage Provisioning"
+  description = "Create the Cloud Storage buckets Ringleader holds artifact payloads in. Carries no access to any bucket."
+
+  permissions = ["storage.buckets.create"]
+
+  depends_on = [google_project_service.iam]
+}
+
+resource "google_project_iam_member" "artifact_storage_provision" {
+  count   = local.artifact_storage_managed ? 1 : 0
+  project = var.project_id
+  role    = google_project_iam_custom_role.artifact_storage_provision[0].id
+  member  = "serviceAccount:${google_service_account.onboarding.email}"
+
+  depends_on = [google_project_service.cloudresourcemanager]
+}
+
+# NAMED: bound on the one bucket. Nothing project-scoped is granted, so a second bucket in this
+# project -- yours or ours -- is unreachable without another apply.
+resource "google_storage_bucket_iam_member" "artifact_storage" {
+  count  = local.artifact_storage_named ? 1 : 0
+  bucket = var.artifact_storage_bucket
+  role   = google_project_iam_custom_role.artifact_storage[0].id
+  member = "serviceAccount:${google_service_account.onboarding.email}"
+
+  depends_on = [google_project_service.storage]
 }
 
 # 3. The federation trust: a pool + OIDC provider that trusts Ringleader's issuer

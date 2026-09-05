@@ -56,6 +56,17 @@ sed -i "s|__OIDC_PROVIDER__|oidc-app.ringleader.dev/org/<org-id>|g" ringleader-o
 required when `CreateNetwork=true`), `VpcCidr` and `SubnetCidr` (both empty — overrides,
 derived from `RegionIndex` when unset), `SshSourceCidr`, `SecondarySshSourceCidr`.
 
+Two more grant capabilities on the role rather than on the network. `EnableWorkstationIdentities`
+(`true`) grants `iam:PassRole` on roles under `WorkstationIdentityPath` (`/ringleader/`), to
+`ec2.amazonaws.com` only, so a workstation can run as an IAM role of yours.
+`EnableArtifactStorage` (`true`) lets Ringleader hold artifact payloads in an S3 bucket in this
+account rather than in its own; `ArtifactStorageBucket` (empty) takes the managed width, where
+Ringleader creates and converges its own buckets bounded by ARN to names beginning
+`ringleader-`, and naming a bucket you made narrows the grant to that one ARN with no
+`CreateBucket`, `DeleteBucket` or lifecycle write. `deploy.sh` exposes all four as
+`WORKSTATION_IDENTITIES`, `WORKSTATION_IDENTITY_PATH`, `ARTIFACT_STORAGE` and
+`ARTIFACT_STORAGE_BUCKET`.
+
 Egress control and the two egress-control subnets add seven more: `EnableEgressControl`
 (`true`), `EgressVpcId` (empty — uses the VPC this stack creates), `CreateNatGateway` (`true`),
 `CreateGatewaySubnet` (`true`), `GatewaySubnetCidr` (empty — an override; unset it derives the
