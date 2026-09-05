@@ -36,6 +36,11 @@ run "every_capability_is_on_by_default" {
   }
 
   assert {
+    condition     = var.enable_artifact_storage
+    error_message = "enable_artifact_storage defaults to false: a namespace that declared a Storage object naming a destination here would be refused, and the customer's transcripts would keep landing in Ringleader's own bucket after they had been told otherwise."
+  }
+
+  assert {
     condition     = var.create_network
     error_message = "create_network defaults to false: a customer following the happy path would get no landing pad and no subnet to hand back."
   }
@@ -62,6 +67,11 @@ run "every_capability_is_on_by_default" {
 # guess locks them out of boxes that come up healthy and unreachable.
 run "inbound_ssh_is_the_one_thing_left_to_the_operator" {
   command = plan
+
+  assert {
+    condition     = var.artifact_storage_account_name == ""
+    error_message = "artifact_storage_account_name has a non-empty default, which silently takes the NAMED width. The default width has to be the managed one: it is the only one that works without the customer having created anything, and a default naming a destination would be a default naming one nobody has."
+  }
 
   assert {
     condition     = length(var.ssh_source_ranges) == 0

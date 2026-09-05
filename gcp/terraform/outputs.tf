@@ -76,9 +76,26 @@ output "roles_granted" {
       "roles/resourcemanager.projectIamAdmin -- workstation runtime identities",
     ] : [],
     var.enable_egress_control ? [
-      "custom ${var.egress_role_id} -- compute.firewalls.*, compute.routes.* and compute.networks.updatePolicy (10 permissions), for egress control",
+      "custom ${var.egress_role_id} -- compute.firewalls.*, compute.routes.*, compute.networks.updatePolicy and compute.addresses.* (14 permissions), for egress control",
+    ] : [],
+    local.artifact_storage_managed ? [
+      "custom ${var.artifact_storage_role_id} -- storage.buckets.get/update/delete and storage.objects.* (8 permissions), CONDITIONED to buckets named ${local.managed_bucket_prefix}*, for artifact storage",
+      "custom ${var.artifact_storage_role_id}Provision -- storage.buckets.create and nothing else, for artifact storage",
+    ] : [],
+    local.artifact_storage_named ? [
+      "custom ${var.artifact_storage_role_id} -- storage.buckets.get and storage.objects.* (6 permissions), on the bucket ${var.artifact_storage_bucket} ONLY, for artifact storage",
     ] : [],
   )
+}
+
+output "artifact_storage_grant" {
+  value       = var.enable_artifact_storage ? (local.artifact_storage_managed ? "managed" : "named") : null
+  description = "Hand back to Ringleader: which width you took, as the Storage object's spec.grant. Null when enable_artifact_storage = false, which is also the answer to \"do not declare a Storage at all\"."
+}
+
+output "artifact_storage_bucket" {
+  value       = local.artifact_storage_named ? var.artifact_storage_bucket : null
+  description = "Hand back to Ringleader as the Storage object's spec.bucket, on the NAMED width. Null on the managed width, where Ringleader creates the bucket and names it ringleader-... itself -- ask it what it created rather than guessing."
 }
 
 output "handoff" {
@@ -89,5 +106,7 @@ output "handoff" {
     project_id                    = var.project_id
     subnetwork_self_link          = var.create_network ? google_compute_subnetwork.workstations[0].self_link : null
     governed_subnetwork_self_link = var.create_network && var.create_governed_subnet ? google_compute_subnetwork.governed[0].self_link : null
+    artifact_storage_grant        = var.enable_artifact_storage ? (local.artifact_storage_managed ? "managed" : "named") : null
+    artifact_storage_bucket       = local.artifact_storage_named ? var.artifact_storage_bucket : null
   }
 }

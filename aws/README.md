@@ -34,19 +34,21 @@ The permissions policy's **base** is exactly these three statements — no wildc
 - `ssm:GetParameters` / `GetParameter` on `arn:aws:ssm:*::parameter/aws/service/*` — the
   AWS-owned public AMI parameters.
 
-Two features that are **on by default** add statements beside those three, so a role applied on
-the defaults carries seven (Terraform) or six (CloudFormation), not three. Both are one variable
-away from off, and both are enumerated where they are described rather than here:
+Three features that are **on by default** add statements beside those three, so a role applied on
+the defaults carries eleven, not three, and both supported paths carry the same eleven. All are one
+variable away from off, and each is enumerated where it is described rather than here:
 *[egress control](#optional-egress-control)* adds the security-group, subnet and route-table
-writes, two security-group reads and `ec2:ModifyNetworkInterfaceAttribute`, bounded to your VPC
-and region; *workstation identities* (Terraform only) adds one `iam:PassRole`, bounded to roles
-under `workstation_identity_path` and to `ec2.amazonaws.com`. The `actions_granted` output is
-read from the same lists the policy is built from, so it is the authority on what your role
-actually holds.
+writes, two security-group reads, the Elastic-IP actions and
+`ec2:ModifyNetworkInterfaceAttribute`, bounded to your VPC and region; *workstation identities*
+adds one `iam:PassRole`, bounded to roles under `workstation_identity_path` and to
+`ec2.amazonaws.com`; *[artifact storage](#optional-artifact-storage-in-a-bucket-of-yours)* adds
+the S3 bucket and object actions, bounded by ARN to buckets named `ringleader-*` or to the one
+bucket you name. The `actions_granted` output is read from the same lists the policy is built
+from, so it is the authority on what your role actually holds.
 
-No `iam:*` unless you opt into per-workstation instance profiles (Terraform
-`enable_workstation_identities`, on by default and scoped to `iam:PassRole` under one
-path).
+No `iam:*` unless you opt into per-workstation instance profiles
+(`enable_workstation_identities` / `EnableWorkstationIdentities`, on by default and scoped to
+`iam:PassRole` under one path).
 
 ## Values Ringleader gives you
 
@@ -114,6 +116,9 @@ pad's range, and the plan fails rather than guessing if they disagree. See
   policy goes, and **`gateway_subnet_id`**, where the egress gateway VM runs — the second goes
   on the `EgressGateway` itself as `spec.subnet`, and Ringleader builds no gateway until it has
   one, because a gateway placed in the subnet it steers would route its own egress into itself
+- if you took artifact storage: **`artifact_storage_grant`** (`managed` or `named`), which
+  becomes the `Storage` object's `spec.grant`, and on the named width
+  **`artifact_storage_bucket`**, which becomes its `spec.bucket`
 
 ## Reaching your workstations
 
@@ -304,6 +309,55 @@ get public IPs, which is the default and which the internet gateway already serv
 `private_route_table_id` is the route table that points at it. Associate any subnet that should
 reach the internet without a public IP with that table.
 
+## Optional: artifact storage in a bucket of yours
+
+Ringleader holds **artifact payloads** — the sealed transcript of an agent session above all,
+plus workflow file outputs and files a workstation publishes. By default those bytes go to a
+bucket Ringleader owns. `enable_artifact_storage` (`ARTIFACT_STORAGE` on the CloudFormation
+path), **on by default**, lets them go to an S3 bucket in this account instead.
+
+**The S3 backend ships after the GCS one**, so on this cloud the grant deliberately arrives
+before the feature. That is the point: it costs an unused account nothing, and it is what stops
+S3 support from becoming a second apply for every customer later.
+
+### The two widths, and how you pick
+
+**Managed** — leave `artifact_storage_bucket` unset. Ringleader creates and converges its own
+buckets, bounded by **ARN pattern** to `arn:aws:s3:::ringleader-*` and the objects in them, so the
+grant reaches no bucket you already have.
+
+The bound is a name prefix rather than a region, on purpose twice over: S3 is global, so a
+region condition would break a bucket you deliberately placed elsewhere for residency, and a
+bucket has no VPC to bound it by. `s3:ResourceAccount` is not added on top either — the prefix is
+a global-namespace pattern, so it could in principle name a bucket in someone else's account, but
+reaching one needs **that bucket's own policy** to name this role as well, and nobody else's does.
+
+**Named** — set `artifact_storage_bucket` to a bucket you created. The grant is bound to that one
+ARN and drops `CreateBucket`, `DeleteBucket` and every lifecycle and public-access-block write:
+Ringleader can read and write objects in it and cannot create or reshape a bucket at all. Its
+region, its lifecycle rules and its **SSE-KMS key** stay yours, which is what makes key custody a
+decision Ringleader never touches.
+
+`s3:GetEncryptionConfiguration` and `s3:GetBucketLocation` are granted in **both** widths: they
+are what report the bucket's encryption and region back onto the `Storage` object, and without
+them that status can only say `unknown`.
+
+The multipart actions (`AbortMultipartUpload`, `ListMultipartUploadParts`,
+`ListBucketMultipartUploads`) are not extras. Any upload over the SDK's threshold becomes a
+multipart upload, so a grant without them fails on a large transcript and on nothing else — the
+worst shape of bug to find in production.
+
+### What is deliberately withheld
+
+`s3:PutBucketPolicy` and every ACL write. Nothing in this onboarding may **grant** authority, and
+a bucket policy is exactly that.
+
+### What you hand back
+
+`artifact_storage_grant` (`managed` or `named`) becomes the `Storage` object's `spec.grant`. On
+the named width `artifact_storage_bucket` becomes its `spec.bucket`; on the managed width
+Ringleader names the bucket itself, so ask it what it created rather than guessing.
+
 ## A second region: name it, do not renumber it
 
 An AWS VPC is regional. A second region means a second VPC, and joining them later needs an
@@ -384,7 +438,8 @@ $ cd aws/terraform && terraform init && terraform test
 A workstation runs with **no instance profile** unless an administrator sets
 `providerConfig.aws.iamInstanceProfile`. Without that, nothing inside the workstation can act as any
 IAM principal. Attaching one needs `iam:PassRole`, which this module grants only when you
-set `enable_workstation_identities` — read its warning first.
+set `enable_workstation_identities` (`EnableWorkstationIdentities` on the CloudFormation path) —
+read its warning first.
 
 ## Notes
 

@@ -479,9 +479,14 @@ class APinMustEvaluateToThisOrg(unittest.TestCase):
 
     def test_flow_style_says_what_is_actually_wrong(self):
         # A shape the guard cannot read must not be reported as a missing pin.
+        #
+        # Anchored on the line ABOVE as well, because `StringEquals:` alone is no longer unique in
+        # this template -- the PassRole statement carries one too, at a deeper indent that contains
+        # the shallower one as a substring.
         text = mutate(
             source(CLOUDFORMATION),
-            "              StringEquals:",
+            '            Condition:\n              StringEquals:',
+            '            Condition:\n'
             '              StringEquals: {"__OIDC_PROVIDER__:aud": !Ref Audience}\n'
             "              _unused:",
         )

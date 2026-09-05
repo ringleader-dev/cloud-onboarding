@@ -43,6 +43,11 @@ run "every_capability_is_on_by_default" {
   }
 
   assert {
+    condition     = var.enable_artifact_storage
+    error_message = "enable_artifact_storage defaults to false: a namespace that declared a Storage object naming a bucket here would be refused, and the customer's transcripts would keep landing in Ringleader's own bucket after they had been told otherwise."
+  }
+
+  assert {
     condition     = var.allow_internal_traffic
     error_message = "allow_internal_traffic defaults to false: a custom-mode VPC has no firewall rules and GCP denies ingress, so two workstations could not reach each other at all -- which is a real posture, but not one to arrive at by accident."
   }
@@ -56,6 +61,11 @@ run "the_two_deliberate_exceptions_stay_off" {
   assert {
     condition     = var.create_governed_subnet == false
     error_message = "create_governed_subnet is on by default on GCP. It should not be: a gateway's steering route here is scoped by NETWORK TAG, so a box is governed by carrying the tag and an untagged neighbour on the same subnet is untouched. A governed subnet buys nothing the tag has not already bought, and offering one teaches the subnet-scoped model that is wrong on this cloud. AWS and Azure default it ON because a route table attaches per subnet there."
+  }
+
+  assert {
+    condition     = var.artifact_storage_bucket == ""
+    error_message = "artifact_storage_bucket has a non-empty default, which silently takes the NAMED width. The default width has to be the managed one: it is the only one that works without the customer having created anything, and a default naming a bucket would be a default naming a bucket nobody has."
   }
 
   assert {

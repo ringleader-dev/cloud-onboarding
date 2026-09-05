@@ -60,6 +60,11 @@ run "every_capability_is_on_by_default" {
   }
 
   assert {
+    condition     = var.enable_artifact_storage
+    error_message = "enable_artifact_storage defaults to false: a namespace that declared a Storage object naming a destination here would be refused, and the customer's transcripts would keep landing in Ringleader's own bucket after they had been told otherwise."
+  }
+
+  assert {
     condition     = var.create_network
     error_message = "create_network defaults to false: a customer following the happy path would get no landing pad and no subnet to hand back."
   }
@@ -84,6 +89,11 @@ run "the_one_default_that_costs_money_is_on_deliberately" {
   assert {
     condition     = var.create_nat_gateway
     error_message = "create_nat_gateway defaults to false. It bills hourly plus $0.045/GB, so turning it off is tempting -- but a workstation with assignPublicIp:false then has no egress at all and never converges. If this is being changed on purpose, change this assertion and say why in the same commit."
+  }
+
+  assert {
+    condition     = var.artifact_storage_bucket == ""
+    error_message = "artifact_storage_bucket has a non-empty default, which silently takes the NAMED width. The default width has to be the managed one: it is the only one that works without the customer having created anything, and a default naming a destination would be a default naming one nobody has."
   }
 
   assert {

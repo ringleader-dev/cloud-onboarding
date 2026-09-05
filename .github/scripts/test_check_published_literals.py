@@ -27,6 +27,7 @@ from pathlib import Path
 from check_published_literals import (
     AWS_CFN,
     AWS_TF,
+    GCP_ONBOARD_SH,
     AZURE_ARM,
     AZURE_TF,
     GCP_SH,
@@ -68,6 +69,20 @@ def edited(*edits: tuple[str, str, str]) -> dict[str, str]:
     for path, old, new in edits:
         srcs[path] = mutate(srcs[path], old, new)
     return srcs
+
+
+def renamed_everywhere(old: str, new: str) -> dict[str, str]:
+    """`old` -> `new` in EVERY artifact and at every occurrence, asserting it appeared somewhere.
+
+    For the case a per-site edit cannot express: a value renamed consistently across all of its
+    sites. The pads then agree with each other and no longer with what Ringleader compiles, which
+    is the drift no amount of internal consistency can catch.
+    """
+    srcs = sources()
+    hits = sum(text.count(old) for text in srcs.values())
+    if hits == 0:
+        raise AssertionError(f"the anchor {old!r} appears in no artifact; this test asserts nothing")
+    return {path: text.replace(old, new) for path, text in srcs.items()}
 
 
 class Rejects(unittest.TestCase):
@@ -330,6 +345,62 @@ class CrossPathDefaultsMustAgree(Rejects):
             edited((GCP_VARS, 'variable "secondary_ssh_network_tag" {',
                     'variable "alt_ssh_network_tag" {')),
             'no `variable "secondary_ssh_network_tag"`',
+        )
+
+
+class TheManagedBucketPrefixCannotDrift(Rejects):
+    """The one bound between "the buckets Ringleader made" and "every bucket in the project"."""
+
+    def test_renamed_in_the_gcp_terraform_only(self):
+        self.assertRejected(
+            edited((GCP_TF, 'managed_bucket_prefix = "ringleader-"',
+                    'managed_bucket_prefix = "rl-"')),
+            "managed artifact-bucket prefix",
+        )
+
+    def test_renamed_in_the_gcloud_script_only(self):
+        self.assertRejected(
+            edited((GCP_ONBOARD_SH, 'MANAGED_BUCKET_PREFIX="ringleader-"',
+                    'MANAGED_BUCKET_PREFIX="rl-"')),
+            "managed artifact-bucket prefix",
+        )
+
+    def test_renamed_in_the_aws_terraform_only(self):
+        self.assertRejected(
+            edited((AWS_TF, 'managed_bucket_prefix = "ringleader-"',
+                    'managed_bucket_prefix = "rl-"')),
+            "managed artifact-bucket prefix",
+        )
+
+    def test_renamed_in_the_cloudformation_only(self):
+        self.assertRejected(
+            edited((AWS_CFN, 'arn:${AWS::Partition}:s3:::ringleader-*/*',
+                    'arn:${AWS::Partition}:s3:::rl-*/*')),
+            "not one",
+        )
+
+    def test_renamed_everywhere_still_fails(self):
+        # The pair that matters most: every site agrees with the others and no longer with the
+        # string Ringleader compiles, which no amount of internal consistency can catch.
+        self.assertRejected(
+            renamed_everywhere("ringleader-", "rl-"),
+            "storagekind.ManagedBucketPrefix",
+        )
+
+    def test_the_prefix_is_declared_but_not_what_bounds_the_grant(self):
+        # The shape every value-only guard misses: the pin still reads "ringleader-", and the
+        # condition it is supposed to bound now names something else.
+        self.assertRejected(
+            edited((GCP_TF, 'resource.name.startsWith(\\"projects/_/buckets/${local.managed_bucket_prefix}\\")',
+                    'resource.name.startsWith(\\"projects/_/buckets/\\")')),
+            "does not interpolate the declared prefix",
+        )
+
+    def test_the_aws_arn_stops_referencing_the_local(self):
+        self.assertRejected(
+            edited((AWS_TF, '"arn:${data.aws_partition.current.partition}:s3:::${local.managed_bucket_prefix}*",',
+                    '"arn:${data.aws_partition.current.partition}:s3:::ringleader-*",')),
+            "does not interpolate the declared prefix",
         )
 
 

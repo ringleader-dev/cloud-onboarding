@@ -124,7 +124,23 @@ output "actions_granted" {
       local.egress_describe_actions,
       ["ec2:ModifyNetworkInterfaceAttribute"],
     ) : [],
+    var.enable_artifact_storage ? concat(
+      local.artifact_storage_bucket_actions,
+      local.artifact_storage_managed ? local.artifact_storage_manage_actions : [],
+      local.artifact_storage_object_actions,
+      ["-- all of the above on ${join(", ", local.artifact_storage_bucket_arns)} and nothing else"],
+    ) : [],
   )
+}
+
+output "artifact_storage_grant" {
+  value       = var.enable_artifact_storage ? (local.artifact_storage_managed ? "managed" : "named") : null
+  description = "Hand back to Ringleader: which width you took, as the Storage object's spec.grant. Null when enable_artifact_storage = false, which is also the answer to \"do not declare a Storage at all\"."
+}
+
+output "artifact_storage_bucket" {
+  value       = var.enable_artifact_storage && !local.artifact_storage_managed ? var.artifact_storage_bucket : null
+  description = "Hand back to Ringleader as the Storage object's spec.bucket, on the NAMED width. Null on the managed width, where Ringleader creates the bucket and names it ringleader-... itself -- ask it what it created rather than guessing."
 }
 
 output "egress_scope" {

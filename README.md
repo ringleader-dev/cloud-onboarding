@@ -233,7 +233,8 @@ is a single variable away from off.
 | **Gateway subnet** | where the egress gateway VM runs on AWS and Azure — hand its id back as `EgressGateway.spec.subnet`, and no gateway is built until you do. On GCP a reserved range that stays empty: the VM runs in the workstations subnet and `spec.subnet` is refused | `create_gateway_subnet` | `CREATE_GATEWAY_SUBNET`, `GATEWAY_CIDR` (GCP) | the subnet, no. On AWS and Azure the gateway VM Ringleader puts in it, **yes**; on GCP nothing is placed in it, and the VM still bills — it just runs in the workstations subnet |
 | **Governed subnet** | an empty subnet for the workstations that gateway governs. On by default on AWS and Azure, **off on GCP**, which governs by network tag instead | `create_governed_subnet` | `CREATE_GOVERNED_SUBNET`, `GOVERNED_CIDR` (GCP) | no |
 | **Egress control** | Ringleader may create and maintain the firewall objects an egress policy compiles to, the routes that steer traffic at the gateway, and the gateway VM itself | `enable_egress_control` | `EGRESS_CONTROL` | only if you declare a policy naming hostnames, which builds the gateway VM |
-| **Workstation identities** | Ringleader may create per-user identities and bind roles to them | `enable_workstation_identities` | `WORKSTATION_IDENTITIES` (GCP `onboard.sh`, Azure `deploy.sh`) — **not available on the AWS CloudFormation path**, which grants no `iam:PassRole` at all; use the AWS Terraform module if you want it | no |
+| **Workstation identities** | Ringleader may create per-user identities and bind roles to them | `enable_workstation_identities` | `WORKSTATION_IDENTITIES` | no |
+| **Artifact storage** | Ringleader may hold artifact payloads — sealed agent-session transcripts, workflow file outputs, files a box publishes — in a bucket, container or storage account **in your own account** instead of in Ringleader's | `enable_artifact_storage`, and `artifact_storage_bucket` / `artifact_storage_account_name` to name one of yours | `ARTIFACT_STORAGE`, `ARTIFACT_STORAGE_BUCKET` / `ARTIFACT_STORAGE_ACCOUNT` | only the storage itself, and only once payloads land in it |
 | **Workstation-to-workstation** (GCP) | boxes on the subnet can reach each other | `allow_internal_traffic` | `ALLOW_INTERNAL` | no |
 
 Two of these deserve a deliberate decision rather than a default:
@@ -245,6 +246,18 @@ Two of these deserve a deliberate decision rather than a default:
 - **`allow_internal_traffic` on GCP** widens rather than grants. Off, two workstations cannot
   reach each other at all and a compromised box cannot scan its neighbours. On, they can —
   matching what Azure's default NSG rules already allow.
+
+**Artifact storage has two widths, and you pick between them by naming a bucket or not.** Leave
+`artifact_storage_bucket` (Azure: `artifact_storage_account_name`) empty and Ringleader creates
+and converges its own — confined on GCP and AWS to names beginning `ringleader-`, so the grant
+reaches nothing you already have. Name one you created and the grant narrows to object access on
+it, with no ability to create, reshape or delete a bucket at all: its location, its lifecycle
+rules and its encryption key stay yours. That second width is the one to take if you have a
+data-residency or key-custody position to defend — set the bucket's default encryption to a key
+in your own KMS and every payload lands under it, with nothing on our side to configure.
+
+With the switch off, payloads go to a bucket Ringleader owns, which is where they go today.
+Nothing degrades and nothing fails.
 
 **The AWS NAT gateway is worth a second look**, because it is the only default that meters
 traffic: $0.045/hour plus **$0.045/GB processed**, whether or not anything uses it. Turn it off
@@ -269,6 +282,7 @@ create_gateway_subnet         = false
 create_governed_subnet        = false   # AWS and Azure; already off on GCP
 enable_egress_control         = false
 enable_workstation_identities = false
+enable_artifact_storage       = false
 allow_internal_traffic        = false   # GCP only
 secondary_ssh_source_ranges   = []
 ```

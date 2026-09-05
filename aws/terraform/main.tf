@@ -83,6 +83,66 @@ locals {
   # The ingress pair is here for the DNS / HTTPS proxy VM, whose own group has to admit
   # workstation traffic. If you want the strict minimum for IP-level egress alone and no
   # proxy, drop those two -- the actions_granted output will show what you kept.
+  # Artifact storage. The bound here is a NAME PREFIX rather than a region or a VPC, and that is
+  # deliberate on both counts: S3 is global, so a region condition would break a bucket a customer
+  # deliberately placed elsewhere for residency, and a bucket has no VPC. Ringleader compiles the
+  # same prefix (`storagekind.ManagedBucketPrefix`); a landing pad admitting a different one
+  # grants an authority that matches no bucket, and every create fails with a 403 that looks like
+  # a Ringleader bug. Not a variable, on purpose -- it is not the operator's to choose.
+  #
+  # `s3:ResourceAccount` is deliberately NOT added on top. The prefix is a global-namespace
+  # pattern, so it could in principle match a bucket in someone else's account -- but reaching one
+  # needs that bucket's OWN policy to name this role as well, which nobody else's does. The
+  # condition key is also not populated uniformly across every S3 call, and one that is absent
+  # denies rather than allows, so adding it buys nothing and can break a create.
+  managed_bucket_prefix = "ringleader-"
+
+  # Reading the bucket's own configuration is in BOTH widths, and GetEncryptionConfiguration is
+  # the one easy to leave out: it is what reports the bucket's default encryption back onto the
+  # Storage object. Without it the destination still works and the status can only say "unknown",
+  # which is the answer this feature exists to stop having to give.
+  artifact_storage_bucket_actions = [
+    "s3:ListBucket",
+    "s3:GetBucketLocation",
+    "s3:GetEncryptionConfiguration",
+    "s3:ListBucketMultipartUploads",
+  ]
+
+  # Making and shaping a bucket is the managed width's alone. On a bucket you own, these would let
+  # Ringleader delete or re-shape something of yours, which is the opposite of what that width is
+  # for. PutBucketPublicAccessBlock is here because a bucket Ringleader creates is one Ringleader
+  # is responsible for locking down.
+  artifact_storage_manage_actions = [
+    "s3:CreateBucket",
+    "s3:DeleteBucket",
+    "s3:GetBucketPublicAccessBlock",
+    "s3:PutBucketPublicAccessBlock",
+    "s3:GetLifecycleConfiguration",
+    "s3:PutLifecycleConfiguration",
+  ]
+
+  # The object path itself. The multipart actions are not optional extras: any upload over the
+  # SDK's threshold becomes a multipart upload, and a grant without them fails on a large
+  # transcript and nothing else, which is the worst shape of bug to find in production.
+  artifact_storage_object_actions = [
+    "s3:GetObject",
+    "s3:PutObject",
+    "s3:DeleteObject",
+    "s3:AbortMultipartUpload",
+    "s3:ListMultipartUploadParts",
+  ]
+
+  artifact_storage_managed = var.enable_artifact_storage && var.artifact_storage_bucket == ""
+
+  # The bucket ARNs each width reaches: every `ringleader-*` bucket, or exactly the one named.
+  artifact_storage_bucket_arns = local.artifact_storage_managed ? [
+    "arn:${data.aws_partition.current.partition}:s3:::${local.managed_bucket_prefix}*",
+    ] : [
+    "arn:${data.aws_partition.current.partition}:s3:::${var.artifact_storage_bucket}",
+  ]
+
+  artifact_storage_object_arns = [for arn in local.artifact_storage_bucket_arns : "${arn}/*"]
+
   egress_group_actions = [
     "ec2:CreateSecurityGroup",
     "ec2:DeleteSecurityGroup",
@@ -436,6 +496,49 @@ data "aws_iam_policy_document" "permissions" {
           values   = local.egress_vpc_arns
         }
       }
+    }
+  }
+
+  # Artifact storage: where a namespace's payload bytes live (enable_artifact_storage).
+  #
+  # It grants no bucket and declares none. Which bucket a Ringleader namespace writes to is
+  # declared on a Storage object over there, and until one exists nothing is written here.
+  #
+  # Two statements because S3 splits its authorization that way: bucket-level actions authorize
+  # against the BUCKET arn and object-level ones against `<bucket>/*`, and a policy that puts
+  # `s3:ListBucket` on the object arn is the classic S3 mistake -- it lints clean, deploys, and
+  # denies at runtime.
+  dynamic "statement" {
+    for_each = var.enable_artifact_storage ? [1] : []
+    content {
+      sid       = "ArtifactStorageBuckets"
+      effect    = "Allow"
+      actions   = local.artifact_storage_bucket_actions
+      resources = local.artifact_storage_bucket_arns
+    }
+  }
+
+  # Making and shaping a bucket is the MANAGED width's alone, and it is a statement of its own so
+  # that the two widths differ by whether a statement is present rather than by what is inside
+  # one. That is what lets the CloudFormation route say the same thing in a template language
+  # with no list arithmetic, and what the route-parity guard compares.
+  dynamic "statement" {
+    for_each = local.artifact_storage_managed ? [1] : []
+    content {
+      sid       = "ArtifactStorageBucketProvisioning"
+      effect    = "Allow"
+      actions   = local.artifact_storage_manage_actions
+      resources = local.artifact_storage_bucket_arns
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.enable_artifact_storage ? [1] : []
+    content {
+      sid       = "ArtifactStorageObjects"
+      effect    = "Allow"
+      actions   = local.artifact_storage_object_actions
+      resources = local.artifact_storage_object_arns
     }
   }
 }

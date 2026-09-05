@@ -71,6 +71,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 GCP_TF = "gcp/terraform/main.tf"
 GCP_VARS = "gcp/terraform/variables.tf"
 GCP_SH = "gcp/gcloud/network-landing-pad.sh"
+GCP_ONBOARD_SH = "gcp/gcloud/onboard.sh"
 AWS_TF = "aws/terraform/main.tf"
 AWS_CFN = "aws/cloudformation/ringleader-onboarding.yaml"
 AZURE_TF = "azure/terraform/main.tf"
@@ -183,6 +184,7 @@ def shell_default(name: str):
 # would then report the assignment it can see while the script runs with another value.
 GUARDED_SHELL_VARS = frozenset({
     "GATEWAY_TAG", "SSH_TAG", "SECONDARY_SSH_TAG", "SECONDARY_SSH_PORT",
+    "MANAGED_BUCKET_PREFIX",
 })
 
 
@@ -264,6 +266,32 @@ def cfn_secondary_ssh_ports(source: str, path: str) -> str:
     return distinct[0]
 
 
+def cfn_managed_bucket_prefix(source: str, path: str) -> str:
+    """The bucket-name prefix every artifact-storage ARN in the template is bounded to.
+
+    Anchored on the ARN shape rather than on a statement name, because the prefix is the whole
+    bound: an ARN pattern is all that stops the grant from reaching a bucket the customer already
+    has. Every occurrence must agree -- a bucket-level statement bounded to one prefix and an
+    object-level statement bounded to another is a policy that lints clean and grants a shape
+    nobody intended.
+    """
+    found = re.findall(r"arn:\$\{AWS::Partition\}:s3:::([A-Za-z0-9.\-]*)\*", strip_yaml_comments(source))
+    if not found:
+        raise GuardError(
+            f"{path}: no `arn:${{AWS::Partition}}:s3:::<prefix>*` resource anywhere.\n\n"
+            "  That pattern is the artifact-storage grant's only bound. If the statements were\n"
+            "  restructured, move this guard with them -- an unread bound is an unchecked one."
+        )
+    distinct = sorted(set(found))
+    if len(distinct) != 1:
+        raise GuardError(
+            f"{path}: the artifact-storage statements are bounded to {distinct}, which is not one\n"
+            "  prefix. The bucket-level and object-level statements must name the same one, or the\n"
+            "  grant reaches objects in buckets it cannot see and vice versa."
+        )
+    return distinct[0]
+
+
 def arm_secondary_ssh_port(source: str, path: str) -> str:
     """The `destinationPortRange` of the ARM template's secondary-SSH security rules."""
     doc = json.loads(source)
@@ -340,6 +368,27 @@ LITERALS = [
             Site(AZURE_ARM, "variables.secondarySshRules", arm_secondary_ssh_port),
             Site(GCP_TF, "local.secondary_ssh_port", hcl_local("secondary_ssh_port")),
             Site(GCP_SH, "SECONDARY_SSH_PORT", shell_literal("SECONDARY_SSH_PORT")),
+        ],
+    ),
+    Literal(
+        name="the managed artifact-bucket prefix",
+        value="ringleader-",
+        other_half="`storagekind.ManagedBucketPrefix` in the ringleader repository",
+        why=(
+            "Under the MANAGED artifact-storage width Ringleader creates its own buckets, and each\n"
+            "  landing pad confines that grant to buckets whose NAME starts with this string -- an IAM\n"
+            "  condition on gcp, an ARN pattern on aws. It is the only bound there is, so the two ends\n"
+            "  have to agree exactly: a pad admitting a different prefix grants an authority that\n"
+            "  matches no bucket Ringleader will ever create, and every bucket create fails with a 403\n"
+            "  that looks like a Ringleader bug rather than like a landing pad that needs re-applying.\n"
+            "  Azure has no equivalent: its custom role is scoped to the resource group and Azure\n"
+            "  offers no name-prefix condition on these control-plane actions."
+        ),
+        sites=[
+            Site(GCP_TF, "local.managed_bucket_prefix", hcl_local("managed_bucket_prefix")),
+            Site(GCP_ONBOARD_SH, "MANAGED_BUCKET_PREFIX", shell_literal("MANAGED_BUCKET_PREFIX")),
+            Site(AWS_TF, "local.managed_bucket_prefix", hcl_local("managed_bucket_prefix")),
+            Site(AWS_CFN, "the artifact-storage statements' bucket ARNs", cfn_managed_bucket_prefix),
         ],
     ),
     Literal(
@@ -469,6 +518,32 @@ def check_literal(literal: Literal, sources: dict[str, str]) -> list[str]:
     return fails
 
 
+def check_bucket_prefix_wiring(sources: dict[str, str]) -> list[str]:
+    """The prefix must be what the artifact-storage BOUND is written against.
+
+    The same rule as the tag wiring above: pinning a value nothing applies proves nothing. Here it
+    matters more than usual, because the bound is the only thing between "Ringleader may manage
+    the buckets it creates" and "Ringleader may read every bucket in this project". A landing pad
+    that declares the prefix and then bounds the grant with a literal of its own would satisfy
+    every check above while granting something else entirely.
+    """
+    failures = []
+    checks = (
+        (AWS_TF, "s3:::${local.managed_bucket_prefix}", "the artifact-storage ARN patterns"),
+        (GCP_TF, 'projects/_/buckets/${local.managed_bucket_prefix}', "the artifact-storage IAM condition"),
+        (GCP_ONBOARD_SH, 'projects/_/buckets/${MANAGED_BUCKET_PREFIX}', "the artifact-storage IAM condition"),
+    )
+    for path, needle, what in checks:
+        if needle not in sources[path]:
+            failures.append(
+                f"{path}: {what} does not interpolate the declared prefix (`{needle}`).\n\n"
+                "  The prefix is pinned above, but the bound is written against something else -- so\n"
+                "  the pin proves nothing about what this landing pad actually grants. Bound and\n"
+                "  prefix have to be the same value, by reference and not by coincidence."
+            )
+    return failures
+
+
 PATHS = sorted({s.path for lit in LITERALS for s in lit.sites} | {GCP_TF, GCP_SH})
 
 
@@ -489,6 +564,10 @@ def check_all(sources: dict[str, str]) -> list[str]:
             failures += check(src)
         except GuardError as err:
             failures.append(str(err))
+    try:
+        failures += check_bucket_prefix_wiring(sources)
+    except GuardError as err:
+        failures.append(str(err))
     return failures
 
 

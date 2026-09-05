@@ -28,6 +28,20 @@
       "metadata": {
         "description": "Let Ringleader manage the network security groups that restrict where workstations may connect. On by default. Adds NSG and security-rule read/write/delete plus join/action, which is what lets Ringleader attach a group to a workstation NIC; and route-table read/write/delete plus subnet write and delete, which is how a workstation's traffic is steered to the egress gateway when a policy names hostnames -- an Azure route table attaches per subnet, so steering is per subnet rather than per workstation, which is what the landing pad's governed subnet exists to give it. Not a subnet per policy: one gateway serves many policies from one subnet, telling them apart by source address. It also adds two reads: Microsoft.Resources/subscriptions/resourcegroups/resources/read, which the sweep that collects a leaked gateway needs -- without it the sweep collects nothing and a billed public IP can be left behind -- and Microsoft.Network/natGateways/read, so Ringleader can see whether a subnet already has an outbound path before it gives a machine an address of its own. Still scoped to this resource group, and it restricts nothing on its own until you declare an egress policy. Set false to opt out."
       }
+    },
+    "enableArtifactStorage": {
+      "type": "Bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Let Ringleader hold artifact payloads -- sealed agent-session transcripts, workflow file outputs, files a workstation publishes -- in a storage account in THIS resource group rather than in Ringleader's own cloud. On by default. With it off those bytes go to a bucket Ringleader owns, which is where they go today; nothing degrades and nothing fails, but you cannot then answer \"which of our data is in whose account, under whose key\". Adds the Microsoft.Storage read actions plus the four blob DATA actions -- read, write, delete and add -- so access is by Entra ID and short-lived token. It deliberately does NOT add listKeys or listAccountSas: an account key is a long-lived static credential and this onboarding is keyless throughout. Leave artifactStorageAccountName empty for the managed width, where Ringleader also creates and converges the account and its containers. Granting it does nothing on its own -- no payload is written here until a Ringleader namespace declares a Storage object naming a destination. Set false to opt out."
+      }
+    },
+    "artifactStorageAccountName": {
+      "type": "String",
+      "defaultValue": "",
+      "metadata": {
+        "description": "The storage account Ringleader may write artifact payloads to, when you would rather own it than let Ringleader create one. Empty -- the default -- takes the managed width instead. Naming one drops every write and delete action on accounts and containers, so Ringleader can put blobs in containers you made and can neither create, reshape nor delete an account or a container. Its location, its lifecycle rules and its customer-managed key stay yours to set, which is the point of this width. NOTE the bound here is the RESOURCE GROUP, as it is for every other action in this role: naming an account narrows what Ringleader may DO, not which account it may reach. Put the account in a resource group of its own if you need that too. Hand the name back to Ringleader alongside the container it should write to."
+      }
     }
   },
   "variables": {
@@ -91,8 +105,29 @@
       "Microsoft.Resources/subscriptions/resourcegroups/resources/read",
       "Microsoft.Network/natGateways/read"
     ],
+    "storageActions": [
+      "Microsoft.Storage/storageAccounts/read",
+      "Microsoft.Storage/storageAccounts/blobServices/read",
+      "Microsoft.Storage/storageAccounts/blobServices/containers/read"
+    ],
+    "storageManagedActions": [
+      "Microsoft.Storage/storageAccounts/write",
+      "Microsoft.Storage/storageAccounts/delete",
+      "Microsoft.Storage/storageAccounts/blobServices/write",
+      "Microsoft.Storage/storageAccounts/blobServices/containers/write",
+      "Microsoft.Storage/storageAccounts/blobServices/containers/delete"
+    ],
+    "storageDataActions": [
+      "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+      "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
+      "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete",
+      "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/add/action"
+    ],
+    "storageEffectiveActions": "[if(parameters('enableArtifactStorage'), if(equals(parameters('artifactStorageAccountName'), ''), union(variables('storageActions'), variables('storageManagedActions')), variables('storageActions')), createArray())]",
+    "storageEffectiveDataActions": "[if(parameters('enableArtifactStorage'), variables('storageDataActions'), createArray())]",
     "actionsWithIdentities": "[if(parameters('enableWorkstationIdentities'), union(variables('actions'), variables('identityActions')), variables('actions'))]",
-    "effectiveActions": "[if(parameters('enableEgressControl'), union(variables('actionsWithIdentities'), variables('egressActions')), variables('actionsWithIdentities'))]"
+    "actionsWithEgress": "[if(parameters('enableEgressControl'), union(variables('actionsWithIdentities'), variables('egressActions')), variables('actionsWithIdentities'))]",
+    "effectiveActions": "[union(variables('actionsWithEgress'), variables('storageEffectiveActions'))]"
   },
   "resources": [
     {
@@ -107,7 +142,7 @@
           {
             "actions": "[variables('effectiveActions')]",
             "notActions": [],
-            "dataActions": [],
+            "dataActions": "[variables('storageEffectiveDataActions')]",
             "notDataActions": []
           }
         ],

@@ -90,7 +90,17 @@ deploy. See
 
 `EGRESS_CONTROL` is separate and goes on the **role**, not the network: it adds the NSG
 actions Ringleader needs to enforce an egress policy. Also on by default; `EGRESS_CONTROL=0`
-skips it. See [`../README.md`](../README.md#optional-egress-control) and
+skips it.
+
+`ARTIFACT_STORAGE` goes on the role too, and it is the only switch here that adds **dataActions**:
+the four blob actions (read, write, delete, add) that let Ringleader hold artifact payloads in a
+storage account in this resource group rather than in its own cloud. Access is by Entra ID and a
+short-lived token — `listKeys` and `listAccountSas` are deliberately **not** granted, because an
+account key is a long-lived static credential. On by default; `ARTIFACT_STORAGE=0` skips it, and
+`ARTIFACT_STORAGE_ACCOUNT=<name>` takes the narrower width, dropping every account and container
+write and delete so Ringleader may only put blobs in containers you made.
+
+See [`../README.md`](../README.md#optional-egress-control) and
 [the full list of defaults](../../README.md#what-is-on-by-default-and-how-to-turn-it-off).
 
 The NSG this template creates is the **subnet** layer, and it stays yours. A workstation that
@@ -165,10 +175,13 @@ stores, and edits must keep it that way:
 
 Parameter `metadata.description` blocks are preserved by Azure and are fine.
 
-The optional action sets — `enableWorkstationIdentities` and `enableEgressControl` — are
-folded in with nested `if`/`union` expressions over the `actions` variable, so the base list
-stays in one place. Both parameters carry a `defaultValue`, and both are passed explicitly by
-the Terraform module and `deploy.sh`, which is what rule three requires.
+The optional action sets — `enableWorkstationIdentities`, `enableEgressControl` and
+`enableArtifactStorage` — are folded in with nested `if`/`union` expressions over the `actions`
+variable, so the base list stays in one place. `enableArtifactStorage` additionally selects the
+role's `dataActions`, and `artifactStorageAccountName` chooses between the two widths by whether
+`storageManagedActions` is unioned in. Every one of those parameters carries a `defaultValue`,
+and every one is passed explicitly by the Terraform module and `deploy.sh`, which is what rule
+three requires — `check_route_parity.py` fails the build if one stops being passed.
 
 Check what Azure actually holds with
 `az deployment group export -g <rg> -n ringleader-onboarding`.

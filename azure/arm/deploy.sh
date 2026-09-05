@@ -21,6 +21,12 @@
 #                actions (see below)                          (default: 1, granted)
 #   EGRESS_CONTROL  0 to skip the NSG actions Ringleader needs to restrict
 #                where workstations may connect               (default: 1, granted)
+#   ARTIFACT_STORAGE  0 to skip the grant that lets Ringleader hold artifact
+#                payloads in a storage account in THIS resource group
+#                                                             (default: 1, granted)
+#   ARTIFACT_STORAGE_ACCOUNT  a storage account YOU created, to take the
+#                narrower "named" width instead of letting Ringleader
+#                create its own                               (default: empty, managed)
 #   CREATE_NETWORK  false to skip the vnet + subnet + NAT gateway
 #                + NSG landing pad. Its NAT gateway and public IP
 #                bill per hour                                 (default: true)
@@ -106,6 +112,12 @@ if [[ "${EGRESS_CONTROL:-1}" == "1" ]]; then
 else
   ENABLE_EGRESS=false
 fi
+if [[ "${ARTIFACT_STORAGE:-1}" == "1" ]]; then
+  ENABLE_ARTIFACT_STORAGE=true
+else
+  ENABLE_ARTIFACT_STORAGE=false
+fi
+ARTIFACT_STORAGE_ACCOUNT="${ARTIFACT_STORAGE_ACCOUNT:-}"
 
 case "$ISSUER_URL" in
   https://*/) echo "ISSUER_URL must not end in a slash" >&2; exit 1 ;;
@@ -165,6 +177,8 @@ az deployment group create \
   --parameters principalId="$SP_OBJECT_ID" roleName="$ROLE_NAME" \
                enableWorkstationIdentities="$ENABLE_IDENTITIES" \
                enableEgressControl="$ENABLE_EGRESS" \
+               enableArtifactStorage="$ENABLE_ARTIFACT_STORAGE" \
+               artifactStorageAccountName="$ARTIFACT_STORAGE_ACCOUNT" \
   --query 'properties.provisioningState' -o tsv
 
 # 4. The optional network landing pad, from its own template.

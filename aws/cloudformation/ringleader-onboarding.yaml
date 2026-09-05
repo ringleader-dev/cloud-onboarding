@@ -130,6 +130,50 @@ Parameters:
       beside the instance's own sshd on 22, and rl shell dials it instead of 22 for those;
       others never use it, and for those the rule is harmless.
 
+  EnableWorkstationIdentities:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Let a workstation run as an IAM role of yours, by letting Ringleader pass an instance
+      profile to it at launch. On by default. It grants iam:PassRole on roles under
+      WorkstationIdentityPath, to ec2.amazonaws.com only -- with no roles on that path it
+      reaches nothing. Set false and a workstation that names an instance profile fails to
+      launch; nothing else is affected.
+
+  WorkstationIdentityPath:
+    Type: String
+    Default: "/ringleader/"
+    Description: >-
+      IAM path the roles a workstation may run as live under. The PassRole grant is bounded to
+      it, so a role outside this path cannot be attached to a workstation whatever it is named.
+      Create the roles you want workstations to use with this Path.
+
+  EnableArtifactStorage:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Let Ringleader hold artifact payloads -- sealed agent-session transcripts, workflow file
+      outputs, files a workstation publishes -- in an S3 bucket in THIS account rather than in
+      Ringleader's own. On by default. With it off those bytes go to a bucket Ringleader owns,
+      which is where they go today; nothing degrades. Leave ArtifactStorageBucket empty for the
+      managed width (Ringleader creates its own buckets, confined by ARN to names starting
+      ringleader-), or name a bucket of yours for the narrower one. Granting it does nothing on
+      its own -- no payload is written here until a Ringleader namespace declares a Storage
+      object naming a bucket.
+
+  ArtifactStorageBucket:
+    Type: String
+    Default: ""
+    Description: >-
+      The one S3 bucket Ringleader may write artifact payloads to, when you would rather own it
+      than let Ringleader create one. Empty -- the default -- takes the managed width instead.
+      Set it to a bucket that already exists in this account: the grant is then bound to that
+      bucket's ARN alone and carries no CreateBucket, DeleteBucket or lifecycle write, so its
+      region, its lifecycle rules and its default encryption stay yours. Hand the same name back
+      to Ringleader as the Storage object's spec.bucket.
+
   EnableEgressControl:
     Type: String
     Default: "true"
@@ -240,6 +284,14 @@ Conditions:
     - !Condition WantNetwork
     - !Not [!Equals [!Ref SecondarySshSourceCidr, ""]]
   WantAnyInbound: !Or [!Condition WantSsh, !Condition WantSecondarySsh]
+  WantWorkstationIdentities: !Equals [!Ref EnableWorkstationIdentities, "true"]
+  WantArtifactStorage: !Equals [!Ref EnableArtifactStorage, "true"]
+  # An empty bucket name is the MANAGED width; a name is the narrower one. The two differ in
+  # which ARNs the statements reach and in whether the bucket-shaping actions are granted.
+  ArtifactStorageIsManaged: !Equals [!Ref ArtifactStorageBucket, ""]
+  WantArtifactStorageManaged: !And
+    - !Condition WantArtifactStorage
+    - !Condition ArtifactStorageIsManaged
   WantEgressControl: !Equals [!Ref EnableEgressControl, "true"]
   HasEgressVpc: !Not [!Equals [!Ref EgressVpcId, ""]]
   HasAnyEgressVpc: !Or [!Condition HasEgressVpc, !Condition WantNetwork]
@@ -333,6 +385,21 @@ Resources:
                 # GovCloud (aws-us-gov) and China (aws-cn), where a hardcoded partition yields a
                 # policy that is valid and matches nothing.
                 Resource: !Sub "arn:${AWS::Partition}:ssm:*::parameter/aws/service/*"
+
+              # Pass an instance-profile role to a workstation (runtime identities), so a box can
+              # run as an IAM role of yours. Bounded to roles under WorkstationIdentityPath and to
+              # ec2.amazonaws.com, so it can hand nothing to any other service and reaches no role
+              # outside that path.
+              - !If
+                - WantWorkstationIdentities
+                - Sid: PassWorkstationInstanceProfileRole
+                  Effect: Allow
+                  Action: "iam:PassRole"
+                  Resource: !Sub "arn:${AWS::Partition}:iam::*:role${WorkstationIdentityPath}*"
+                  Condition:
+                    StringEquals:
+                      "iam:PassedToService": "ec2.amazonaws.com"
+                - !Ref AWS::NoValue
 
               # Egress control, when EnableEgressControl=true. Ringleader compiles each distinct
               # egress policy into ONE security group and attaches it to the workstations
@@ -454,6 +521,69 @@ Resources:
                       - StringEquals:
                           "aws:RequestedRegion": !Ref AllowedRegion
                       - !Ref AWS::NoValue
+                - !Ref AWS::NoValue
+
+              # Artifact storage, when EnableArtifactStorage=true: where a namespace's payload
+              # bytes live. It grants no bucket and declares none -- which bucket a Ringleader
+              # namespace writes to is declared on a Storage object over there, and until one
+              # exists nothing is written here.
+              #
+              # Three statements, because S3 splits its authorization that way: bucket-level
+              # actions authorize against the BUCKET arn, object-level ones against `<bucket>/*`,
+              # and a policy that puts s3:ListBucket on the object arn is the classic S3 mistake --
+              # it lints clean, deploys, and denies at runtime. The third is the shaping the
+              # MANAGED width alone gets, kept separate so the two widths differ by whether a
+              # statement is present rather than by what is inside one.
+              #
+              # Bounded by NAME PREFIX rather than by region: S3 is global, so a region condition
+              # would break a bucket placed elsewhere for residency, and a bucket has no VPC.
+              # ringleader- is the prefix Ringleader names every bucket it creates with.
+              - !If
+                - WantArtifactStorage
+                - Sid: ArtifactStorageBuckets
+                  Effect: Allow
+                  Action:
+                    - "s3:ListBucket"
+                    - "s3:GetBucketLocation"
+                    - "s3:GetEncryptionConfiguration"
+                    - "s3:ListBucketMultipartUploads"
+                  Resource: !If
+                    - ArtifactStorageIsManaged
+                    - !Sub "arn:${AWS::Partition}:s3:::ringleader-*"
+                    - !Sub "arn:${AWS::Partition}:s3:::${ArtifactStorageBucket}"
+                - !Ref AWS::NoValue
+
+              - !If
+                - WantArtifactStorageManaged
+                - Sid: ArtifactStorageBucketProvisioning
+                  Effect: Allow
+                  Action:
+                    - "s3:CreateBucket"
+                    - "s3:DeleteBucket"
+                    - "s3:GetBucketPublicAccessBlock"
+                    - "s3:PutBucketPublicAccessBlock"
+                    - "s3:GetLifecycleConfiguration"
+                    - "s3:PutLifecycleConfiguration"
+                  Resource: !Sub "arn:${AWS::Partition}:s3:::ringleader-*"
+                - !Ref AWS::NoValue
+
+              # The multipart actions are not extras: any upload over the SDK's threshold becomes
+              # a multipart upload, so a grant without them fails on a large transcript and on
+              # nothing else -- the worst shape of bug to find in production.
+              - !If
+                - WantArtifactStorage
+                - Sid: ArtifactStorageObjects
+                  Effect: Allow
+                  Action:
+                    - "s3:GetObject"
+                    - "s3:PutObject"
+                    - "s3:DeleteObject"
+                    - "s3:AbortMultipartUpload"
+                    - "s3:ListMultipartUploadParts"
+                  Resource: !If
+                    - ArtifactStorageIsManaged
+                    - !Sub "arn:${AWS::Partition}:s3:::ringleader-*/*"
+                    - !Sub "arn:${AWS::Partition}:s3:::${ArtifactStorageBucket}/*"
                 - !Ref AWS::NoValue
 
   # --- Optional landing-pad network -----------------------------------------------------
@@ -764,6 +894,20 @@ Outputs:
   OidcProviderArn:
     Description: "The IAM OIDC provider ARN (for your reference)."
     Value: !Ref RingleaderOidcProvider
+  ArtifactStorageGrant:
+    Condition: WantArtifactStorage
+    Description: >-
+      Hand back to Ringleader: which width you took, as the Storage object's spec.grant.
+      Absent when EnableArtifactStorage=false, which is also the answer to "do not declare a
+      Storage at all".
+    Value: !If [ArtifactStorageIsManaged, "managed", "named"]
+  ArtifactStorageBucketName:
+    Condition: WantArtifactStorage
+    Description: >-
+      Hand back to Ringleader as the Storage object's spec.bucket, on the NAMED width. Empty on
+      the managed width, where Ringleader creates the bucket and names it ringleader-... itself --
+      ask it what it created rather than guessing.
+    Value: !Ref ArtifactStorageBucket
   SubnetId:
     Condition: WantNetwork
     Description: "providerConfig.aws.subnetId."
