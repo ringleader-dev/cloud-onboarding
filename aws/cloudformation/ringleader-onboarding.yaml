@@ -356,6 +356,29 @@ Resources:
                   - "ec2:DescribeTags"
                   - "ec2:DescribeAvailabilityZones"
                 Resource: "*"
+
+              # The one read that returns CONTENT rather than shape: with Attribute=userData,
+              # DescribeInstanceAttribute hands back an instance's WHOLE boot payload, from outside
+              # the box. It is granted so what Ringleader wrote to a box it created can be read back
+              # the way an attacker would and shown to carry no bearer secret.
+              #
+              # It is a statement of its OWN so it can take the region bound the reads above
+              # deliberately do not. Unbounded on "*" it would return the user-data of every
+              # instance in the account, including instances in regions this role may not otherwise
+              # touch at all. Bounded, it reaches only instances the role already holds
+              # StopInstances + ModifyInstanceAttribute + StartInstances over, which can REWRITE the
+              # bytes it merely reads.
+              - Sid: Ec2DescribeUserData
+                Effect: Allow
+                Action:
+                  - "ec2:DescribeInstanceAttribute"
+                Resource: "*"
+                Condition: !If
+                  - HasRegionCondition
+                  - StringEquals:
+                      "aws:RequestedRegion": !Ref AllowedRegion
+                  - !Ref AWS::NoValue
+
               # ModifyInstanceAttribute is what a machine RESIZE issues, on the stopped instance --
               # without it that cycle ends in UnauthorizedOperation and the workstation rests
               # stopped. The same API also sets user-data and IAM cannot tell the two apart, but the

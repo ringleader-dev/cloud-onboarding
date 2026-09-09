@@ -56,6 +56,24 @@ locals {
     "ec2:DescribeAvailabilityZones",
   ]
 
+  # The one read that returns CONTENT rather than shape: with Attribute=userData,
+  # DescribeInstanceAttribute hands back an instance's WHOLE boot payload, from outside the box,
+  # with no code execution on it. It is granted so what Ringleader wrote to a box it created can be
+  # read back the way an attacker would and shown to carry no bearer secret -- the check
+  # Ringleader's own end-to-end suite makes against an account onboarded from this module.
+  #
+  # It sits in a statement of its OWN, apart from the reads above, so that it can take the same
+  # region bound as the mutating actions. EC2 Describe* supports no resource-level permissions, so
+  # unbounded on "*" it would return the user-data of every instance in the account -- including,
+  # where you set allowed_regions, instances in regions this role may not otherwise touch at all,
+  # whose user-data is none of Ringleader's business and may hold secrets of yours. Bounded with
+  # the mutating actions it reaches only instances the role already holds StopInstances +
+  # ModifyInstanceAttribute + StartInstances over, which can REWRITE the bytes it merely reads, so
+  # it widens nothing this grant did not already permit.
+  user_data_read_actions = [
+    "ec2:DescribeInstanceAttribute",
+  ]
+
   # ModifyInstanceAttribute is what a machine RESIZE issues. EC2 refuses it on anything but a
   # stopped instance, so Ringleader stops the workstation, resizes it and starts it again; without
   # this action that cycle ends in UnauthorizedOperation and the workstation rests stopped. It sits
@@ -309,8 +327,10 @@ resource "aws_iam_role" "ringleader" {
 # 3. The permissions policy: the EC2 actions the workstation lifecycle drives, and nothing
 #    account-broad. Describe* actions do not support resource-level scoping, so they are on
 #    "*"; the mutating actions are on "*" too (RunInstances touches many resource types) but
-#    are optionally bounded to allowed_regions. The SSM read is the public-parameter AMI
-#    resolve (spec.image.distribution/version maps to a resolve:ssm:/aws/service/... alias).
+#    are optionally bounded to allowed_regions -- and so is the ONE read that returns an
+#    instance's user-data, which is why it is a statement apart from the other reads. The SSM
+#    read is the public-parameter AMI resolve (spec.image.distribution/version maps to a
+#    resolve:ssm:/aws/service/... alias).
 #
 # Scoped by region rather than by resource tag, deliberately. Tag-scoping RunInstances
 # correctly requires conditions across every resource type a launch touches -- instance,
@@ -326,6 +346,24 @@ data "aws_iam_policy_document" "permissions" {
     effect    = "Allow"
     actions   = local.describe_actions
     resources = ["*"]
+  }
+
+  # The user-data read, in a statement of its own so it can carry the region bound the reads above
+  # deliberately do not -- see user_data_read_actions.
+  statement {
+    sid       = "Ec2DescribeUserData"
+    effect    = "Allow"
+    actions   = local.user_data_read_actions
+    resources = ["*"]
+
+    dynamic "condition" {
+      for_each = local.region_condition ? [1] : []
+      content {
+        test     = "StringEquals"
+        variable = "aws:RequestedRegion"
+        values   = var.allowed_regions
+      }
+    }
   }
 
   statement {
