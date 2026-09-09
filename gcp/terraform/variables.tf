@@ -448,3 +448,39 @@ variable "governed_subnet_cidr" {
     it clear of every entry in additional_regions.
   EOT
 }
+
+variable "gateway_management_source_ranges" {
+  type        = list(string)
+  default     = null
+  description = <<-EOT
+    CIDRs allowed to reach the EGRESS GATEWAY VM on the management ports, when create_network is
+    set.
+
+    Unset -- the default -- MIRRORS ssh_source_ranges, the same shape secondary_ssh_source_ranges
+    uses and for the same reason: reaching a workstation an egress policy steers is not a second
+    decision about who your engineers are, it is the first one still being true after a policy
+    lands. Set it to [] to close the rule explicitly, or to a narrower list to open it to fewer.
+    Name no ssh_source_ranges and this opens nothing either.
+
+    What it is for. A workstation an egress policy steers at the gateway stops answering on its
+    own address from outside this VPC: the steering object is a 0.0.0.0/0 route, and a default
+    route governs the REPLY to a connection the box never opened as much as it governs traffic
+    the box sends. Nothing inside the box or on the gateway can undo that -- a guest routing
+    table does not participate in VPC routing, which is the same property that stops box root
+    defeating the chokepoint. The only path left is to terminate the management connection AT
+    the gateway and reach the box from inside the VPC, and on GCP the gateway's inbound firewall
+    is a VPC rule in THIS project rather than an object Ringleader owns. This variable is that
+    rule.
+
+    What it costs while nothing uses it: nothing. The gateway VM takes NO external address unless
+    EgressGateway.spec.publicAddress is declared, and that defaults to off -- so until you ask for
+    one there is no address for this rule to admit anybody to. What it saves is the case it exists
+    for: without it a steered box is enforced and unreachable, and reports that on its own
+    EgressEnforced condition (reason InboundUnreachable) rather than looking healthy.
+
+    It does admit SSH to the gateway appliance itself, which is why it follows the list you already
+    chose for your workstations rather than widening past it. Set [] if you would rather reach a
+    steered box only from inside this VPC (VPN / Interconnect / peering). You do not supply the
+    ports -- the module carries them, so they cannot drift from what Ringleader listens on.
+  EOT
+}

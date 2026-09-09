@@ -53,9 +53,9 @@ run "every_capability_is_on_by_default" {
   }
 }
 
-# The two things that are deliberately NOT on, asserted so that staying off is a RECORDED DECISION
-# rather than drift. Both would be bugs to "fix" by flipping the default.
-run "the_two_deliberate_exceptions_stay_off" {
+# The things that are deliberately NOT on, asserted so that staying off is a RECORDED DECISION
+# rather than drift. Every one would be a bug to "fix" by flipping the default.
+run "the_deliberate_exceptions_stay_off" {
   command = plan
 
   assert {
@@ -71,5 +71,105 @@ run "the_two_deliberate_exceptions_stay_off" {
   assert {
     condition     = length(var.ssh_source_ranges) == 0
     error_message = "ssh_source_ranges has a non-empty default. Opening TCP 22 is not a decision this module may make for an operator: 0.0.0.0/0 exposes every workstation, and any narrower guess locks them out of boxes that come up healthy and unreachable."
+  }
+
+  assert {
+    condition     = var.gateway_management_source_ranges == null
+    error_message = "gateway_management_source_ranges no longer defaults to null. null is what MIRRORS ssh_source_ranges here, the shape secondary_ssh_source_ranges already uses; [] would be a module that silently stops following, and any other default is this module choosing who may reach the egress gateway appliance in someone else's project."
+  }
+
+  assert {
+    condition     = length(google_compute_firewall.gateway_management) == 0
+    error_message = "the inbound-management rule is created when no ssh_source_ranges were named. It FOLLOWS those ranges, so naming none must open nothing here either -- an operator who reaches this VPC privately has decided, and this module does not overrule it."
+  }
+}
+
+# The mirror, which is what makes this rule land without a second decision. Asserted at the
+# RESOURCE, because the promise is not "the variable is null" but "the rule admits the people you
+# already named".
+run "the_gateway_admission_follows_the_inbound_ssh_ranges" {
+  command = plan
+
+  variables {
+    ssh_source_ranges = ["203.0.113.0/24"]
+  }
+
+  assert {
+    condition     = length(google_compute_firewall.gateway_management) == 1
+    error_message = "naming ssh_source_ranges created no inbound-management rule. A customer who opened 22 to their engineers would then lose those boxes the moment an egress policy steered one, and nothing in this module would have told them."
+  }
+
+  assert {
+    condition     = google_compute_firewall.gateway_management[0].source_ranges == toset(["203.0.113.0/24"])
+    error_message = "the inbound-management rule does not follow ssh_source_ranges: ${join(",", google_compute_firewall.gateway_management[0].source_ranges)}"
+  }
+}
+
+# ...and closing it stays possible, which is the other half of a default that follows.
+run "an_explicit_empty_list_closes_the_admission" {
+  command = plan
+
+  variables {
+    ssh_source_ranges                = ["203.0.113.0/24"]
+    gateway_management_source_ranges = []
+  }
+
+  assert {
+    condition     = length(google_compute_firewall.gateway_management) == 0
+    error_message = "an explicit [] did not close the inbound-management rule, so an operator who wants a steered box reachable only from inside the VPC has no way to say so."
+  }
+
+  assert {
+    condition     = length(google_compute_firewall.ssh) == 1
+    error_message = "closing the gateway admission also closed the workstations' own TCP 22 rule. They are separate decisions and one must not take the other with it."
+  }
+}
+
+# The rule the default suppresses, once an operator asks for it. Asserted on the RESOURCE rather
+# than on the variable: a rule that exists but targets the workstation tag, or opens some other
+# port set, is a rule that reads correctly in the console and leaves a steered workstation exactly
+# as unreachable as it was.
+run "the_admission_is_the_rule_it_promises" {
+  command = plan
+
+  variables {
+    ssh_source_ranges                = ["198.51.100.0/24"]
+    gateway_management_source_ranges = ["203.0.113.0/24"]
+  }
+
+  assert {
+    condition     = length(google_compute_firewall.gateway_management) == 1
+    error_message = "an explicit narrower list created no inbound-management rule, so a steered workstation stays unreachable while the operator has been told they named who may reach it."
+  }
+
+  assert {
+    condition     = google_compute_firewall.gateway_management[0].direction == "INGRESS"
+    error_message = "the inbound-management rule is not INGRESS. Ringleader writes only EGRESS rules on GCE, which is the whole reason this admission has to live in the landing pad."
+  }
+
+  assert {
+    condition     = google_compute_firewall.gateway_management[0].target_tags == toset(["ringleader-egress-gateway"])
+    error_message = "the inbound-management rule does not target the tag Ringleader puts on the gateway VM: ${join(",", google_compute_firewall.gateway_management[0].target_tags)}"
+  }
+
+  assert {
+    condition     = google_compute_firewall.gateway_management[0].source_ranges == toset(["203.0.113.0/24"])
+    error_message = "an explicit list did not override the ssh_source_ranges mirror: ${join(",", google_compute_firewall.gateway_management[0].source_ranges)}"
+  }
+
+  # ONE allow block, asserted before its contents: a second one is a second grant. The check below
+  # finds the tcp entry it expects whether or not an `allow { protocol = "udp" }` was appended
+  # beside it, and that appended block would hand these CIDRs unrestricted UDP to the appliance.
+  assert {
+    condition     = length(google_compute_firewall.gateway_management[0].allow) == 1
+    error_message = "the inbound-management rule carries more than one allow block, so it grants something besides TCP on the pinned ports -- to CIDRs an operator named for management access, on a landing pad we cannot narrow again."
+  }
+
+  assert {
+    condition = length([
+      for a in google_compute_firewall.gateway_management[0].allow :
+      a if a.protocol == "tcp" && a.ports == tolist(["22", "30000-32767"])
+    ]) == 1
+    error_message = "the inbound-management rule does not open TCP 22 plus the forwarded range. Both halves are needed: a jump host on the appliance answers on 22, a per-box DNAT bastion needs the high ports, and this pad is applied once whichever Ringleader ships."
   }
 }

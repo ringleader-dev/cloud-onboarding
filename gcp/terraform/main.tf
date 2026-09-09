@@ -746,6 +746,26 @@ locals {
   # reads correctly in the console, and admits nothing.
   gateway_network_tag = "ringleader-egress-gateway"
 
+  # Unset mirrors ssh_source_ranges, exactly as secondary_ssh_ranges does: if you opened 22 to your
+  # engineers, a policy steering one of their boxes must not be what takes it away again. An
+  # explicit [] closes the rule; naming no ssh_source_ranges opens nothing here either.
+  gateway_management_ranges = var.gateway_management_source_ranges == null ? var.ssh_source_ranges : var.gateway_management_source_ranges
+
+  # The ports the inbound-management rule below admits on that VM. Fixed by this module rather
+  # than asked of you, for the reason secondary_ssh_port is: a port set you chose could be one
+  # Ringleader does not listen on, and that is a rule that exists, reads correctly in the console
+  # and admits nothing -- with no way to repair it afterwards, since we hold no credentials here.
+  #
+  # It is an ENVELOPE, not a single port, because the two ways to reach a steered box through its
+  # gateway need different halves of it: an SSH jump host on the appliance answers on 22, and a
+  # per-box DNAT bastion needs one high port per governed box. Admitting both means the landing
+  # pad is applied ONCE whichever Ringleader ships. 30000-32767 sits below Linux's ephemeral range
+  # (32768-60999) so a forwarded port can never collide with a source port the appliance itself is
+  # using. Ports where nothing listens are refused exactly as if this rule did not exist -- the
+  # gateway's ruleset returns locally-destined traffic before any redirect, so a port only opens
+  # when Ringleader puts a listener behind it.
+  gateway_management_ports = ["22", "30000-32767"]
+
   # The workstation ranges, in one place because two rules now name them. The governed subnet counts
   # as a workstation range when you create one, and so does every extra region's.
   workstation_ranges = concat(
@@ -853,4 +873,55 @@ resource "google_compute_firewall" "gateway" {
   allow { protocol = "tcp" }
   allow { protocol = "udp" }
   allow { protocol = "icmp" }
+}
+
+# INBOUND management to the gateway -- the rule without which a steered workstation is enforced and
+# unreachable. It FOLLOWS ssh_source_ranges, so a landing pad that opened 22 to your engineers keeps
+# their boxes reachable after a policy steers one.
+#
+# A gateway steers a workstation with a `0.0.0.0/0` static route scoped to that box's tag. A default
+# route is destination-keyed and stateless, so it also carries the REPLY to a connection the box
+# never opened: an SSH segment arriving on the workstation's own external address is answered
+# towards the gateway rather than back the way it came, and the session never establishes. The box
+# goes on running, its egress goes on working through the gateway, and only the inbound path is
+# gone.
+#
+# Nothing Ringleader can write repairs that. A guest routing table does not participate in VPC
+# routing -- the property that stops a governed box's root defeating the chokepoint is the same
+# property that makes this unfixable from inside it -- and the gateway cannot forward the reply
+# either, because it is sourced from the workstation's INTERNAL address, which neither the fabric
+# nor your client would accept. The management connection has to TERMINATE at the gateway and be
+# carried to the box from inside the VPC.
+#
+# On AWS and Azure the gateway's inbound firewall is an object Ringleader creates and owns -- a
+# security group, an NSG -- so that admission is Ringleader's to make and no landing-pad change is
+# needed there. GCE has no per-instance firewall object: the gateway's inbound rules are VPC
+# ingress rules in THIS project, and Ringleader creates none (every rule it writes is EGRESS). So
+# on this cloud the landing pad is the only place the admission can live, and this is it.
+#
+# Why it follows rather than asking. These CIDRs get SSH to the appliance itself, so the rule is
+# scoped to the list you ALREADY chose for your workstations and never widens past it -- and it
+# costs nothing while nothing uses it, because the gateway VM takes no external address unless
+# EgressGateway.spec.publicAddress is declared, and that defaults to off. So there is no address
+# for this rule to admit anybody to until you ask for one, and no second decision to remember on
+# the day a policy first steers a box.
+#
+# Set gateway_management_source_ranges = [] to close it. Then a governed workstation is reachable
+# only from inside this VPC, and it SAYS so -- it reports EgressEnforced: True with reason
+# InboundUnreachable rather than looking healthy while nobody can open it. That is the right answer
+# if you reach this VPC privately, or if you do not use hostname-level egress control at all.
+resource "google_compute_firewall" "gateway_management" {
+  count     = var.create_network && length(local.gateway_management_ranges) > 0 ? 1 : 0
+  project   = var.project_id
+  name      = "${var.name_prefix}-allow-gateway-management"
+  network   = google_compute_network.workstations[0].name
+  direction = "INGRESS"
+
+  source_ranges = local.gateway_management_ranges
+  target_tags   = [local.gateway_network_tag]
+
+  allow {
+    protocol = "tcp"
+    ports    = local.gateway_management_ports
+  }
 }

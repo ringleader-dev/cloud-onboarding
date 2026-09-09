@@ -46,6 +46,34 @@ Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standal
 | `create_governed_subnet` | `false` | Reserve a subnet for the workstations that proxy governs. **Off by default, and the one switch that differs from the AWS and Azure modules**: on GCP the steering route is scoped by network tag, so a box is governed by its tag and an untagged neighbour is untouched. See `gcp/README.md`. |
 | `gateway_subnet_cidr` | `null` → 241st `/24` of `network_cidr` | Its range. An override; unset it follows `network_cidr` and sits well clear of `subnet_cidr` so growing that one does not collide. |
 | `governed_subnet_cidr` | `null` → 15th `/20` of `network_cidr` | The governed subnet's range, when `create_governed_subnet` is on. An override; unset it sits immediately below the gateway range. |
+| `gateway_management_source_ranges` | `null` | CIDRs allowed to reach the **egress gateway VM** on the management ports, so a workstation an egress policy *steers* stays reachable. Unset **mirrors `ssh_source_ranges`** — reaching a steered box is the decision you already made, still being true — and `[]` closes it. It admits SSH to the appliance itself, so it never widens past that list. Costs nothing until you ask Ringleader for `EgressGateway.spec.publicAddress`: the gateway takes no external address by default, so there is no address for the rule to admit anyone to. You do not supply the ports. |
+
+### Why the gateway needs an INGRESS rule of its own
+
+Every other rule this module writes is about your workstations. `gateway_management_source_ranges`
+is about the **appliance**, and it exists because of an asymmetry between the clouds.
+
+Ringleader steers a governed workstation with a `0.0.0.0/0` static route scoped to that box's
+network tag. A default route is destination-keyed and stateless, so it also carries the **reply**
+to a connection the box never opened: an SSH segment arriving on the workstation's own address is
+answered towards the gateway rather than back the way it came, and the session never establishes.
+Egress keeps working; only inbound is gone. Nothing in the guest can repair it — a guest routing
+table does not participate in VPC routing, which is the same property that stops the box's root
+defeating the chokepoint — and the gateway cannot forward the reply either, because it is sourced
+from the box's **internal** address. So the management connection has to terminate **at the
+gateway**.
+
+On AWS and Azure the gateway's inbound firewall is an object Ringleader creates and owns — a
+security group on one, an NSG on the other — so it makes that admission itself and no landing-pad
+change is needed there. GCE has no per-instance firewall object: a gateway's inbound rules are VPC
+ingress rules in **your** project, and everything Ringleader writes here is `EGRESS`. This variable
+is the only place that admission can live.
+
+It **follows `ssh_source_ranges`** rather than asking again, because it is not a second decision
+about who your engineers are — it is the first one still being true after a policy steers one of
+their boxes. And it is free while unused: the gateway VM takes no external address unless
+`EgressGateway.spec.publicAddress` is declared, which defaults to off, so until you ask for one
+there is no address for the rule to admit anybody to. Set `[]` to close it.
 
 ## Outputs
 
