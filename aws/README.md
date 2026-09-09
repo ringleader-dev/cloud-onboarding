@@ -18,13 +18,24 @@ OIDC provider (or the role).
 | **IAM role** (`ringleader-workstations`) | assumed via `sts:AssumeRoleWithWebIdentity`; trust pins **both** `aud` and `sub` to your org; permissions cover only the EC2 workstation lifecycle + the SSM public-parameter read that resolves an AMI |
 | _optional_ **VPC + public subnet + internet gateway + security group** | a landing pad: egress out (so a workstation can come up), inbound SSH from the CIDRs you name, and — only if you ask — a secondary SSH port |
 
-The permissions policy's **base** is exactly these three statements — no wildcard on any action:
+The permissions policy's **base** is exactly these four statements — no wildcard on any action:
 
 - eleven named read-only actions: `ec2:DescribeInstances`, `DescribeInstanceStatus`,
   `DescribeInstanceTypes`, `DescribeImages`, `DescribeSubnets`,
   `DescribeSecurityGroups`, `DescribeVpcs`, `DescribeVolumes`,
   `DescribeNetworkInterfaces`, `DescribeTags`, `DescribeAvailabilityZones` — on `*`,
   because EC2 `Describe` actions have no resource-level scoping,
+- `ec2:DescribeInstanceAttribute` — the twelfth read, on `*` but **bounded to one region** via
+  `aws:RequestedRegion` when you set `allowed_regions` / `AllowedRegion`, which is why it is a
+  statement of its own. It is the one read that returns **content** rather than shape: with
+  `Attribute=userData` it hands back an instance's whole boot payload from outside the box. It is
+  granted so that what Ringleader wrote to a workstation it created can be read back the way an
+  attacker would and shown to carry no bearer secret — the check Ringleader's own end-to-end test
+  suite makes against an account onboarded from this module. Within the region bound it reaches
+  only instances the role already holds `StopInstances` / `ModifyInstanceAttribute` /
+  `StartInstances` over, which can **rewrite** the bytes it merely reads, so it widens nothing
+  this grant did not already permit. **Leave `allowed_regions` empty and there is no bound**, on
+  this read or on the mutating statement below,
 - `ec2:RunInstances` / `TerminateInstances` / `StartInstances` / `StopInstances` /
   `ModifyInstanceAttribute` / `CreateTags` / `DeleteTags` — optionally bounded to one region
   via `aws:RequestedRegion`. `ModifyInstanceAttribute` is what a machine **resize** issues on
@@ -34,8 +45,8 @@ The permissions policy's **base** is exactly these three statements — no wildc
 - `ssm:GetParameters` / `GetParameter` on `arn:aws:ssm:*::parameter/aws/service/*` — the
   AWS-owned public AMI parameters.
 
-Three features that are **on by default** add statements beside those three, so a role applied on
-the defaults carries eleven, not three, and both supported paths carry the same eleven. All are one
+Three features that are **on by default** add statements beside those four, so a role applied on
+the defaults carries twelve, not four, and both supported paths carry the same twelve. All are one
 variable away from off, and each is enumerated where it is described rather than here:
 *[egress control](#optional-egress-control)* adds the security-group, subnet and route-table
 writes, two security-group reads, the Elastic-IP actions and

@@ -115,6 +115,8 @@ output "actions_granted" {
   description = "Every action the role holds, for audit. Read from the same lists the policy is built from, so it cannot overstate or understate what was granted."
   value = concat(
     local.describe_actions,
+    local.user_data_read_actions,
+    local.region_condition ? ["-- the user-data read above is bounded to ${join(", ", var.allowed_regions)}; the other reads are not"] : [],
     local.lifecycle_actions,
     ["ssm:GetParameter / ssm:GetParameters -- AWS's public image-alias parameters only"],
     var.enable_workstation_identities ? ["iam:PassRole -- roles under ${var.workstation_identity_path}, to ec2.amazonaws.com only"] : [],
