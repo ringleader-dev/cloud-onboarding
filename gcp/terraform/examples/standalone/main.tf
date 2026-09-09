@@ -48,6 +48,14 @@ variable "secondary_ssh_source_ranges" {
   default = null
 }
 
+# Who may reach the EGRESS GATEWAY VM on the management ports, which is what keeps a workstation an
+# egress policy STEERS reachable. Unset mirrors ssh_source_ranges; [] closes it. Forwarded below for
+# the same reason as the two above.
+variable "gateway_management_source_ranges" {
+  type    = list(string)
+  default = null
+}
+
 # Egress control, and an empty range reserved beside the workstations subnet. Both on by default;
 # set either false in terraform.tfvars to opt out. NOTHING is placed in that range on GCP: the
 # steering route here is scoped by network tag, so Ringleader runs the proxy VM in the
@@ -83,6 +91,8 @@ module "ringleader" {
 
   ssh_source_ranges           = var.ssh_source_ranges
   secondary_ssh_source_ranges = var.secondary_ssh_source_ranges
+
+  gateway_management_source_ranges = var.gateway_management_source_ranges
 
   enable_egress_control  = var.enable_egress_control
   create_gateway_subnet  = var.create_gateway_subnet

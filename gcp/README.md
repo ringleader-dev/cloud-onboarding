@@ -319,6 +319,74 @@ egress hardens nothing when removed and breaks egress control while leaving it l
 you never use hostname-level egress control there is no proxy VM, nothing carries the tag, and the
 rule admits nobody.
 
+### Reaching a workstation the gateway steers — the one rule GCP makes you add
+
+Once a policy naming hostnames steers a workstation, that box **stops answering on its own address
+from outside this VPC**. `rl shell`, `rl code`, `rl file`, `rl logs`, `rl tmux` and
+`rl troubleshoot`'s live probes all stop working. Its egress keeps working, through the gateway,
+the whole time.
+
+That is the steering route doing exactly what it is: a `0.0.0.0/0` static route is
+destination-keyed and stateless, so it carries the **reply** to a connection the box never opened
+as much as it carries traffic the box sends. An SSH segment arriving on the workstation's external
+address is answered towards the gateway instead of back the way it came.
+
+Nothing inside the box repairs it, and that is not an oversight — a guest routing table does not
+participate in VPC routing, which is precisely the property that stops a governed box's own root
+escaping the chokepoint. The gateway cannot forward the reply either: it is sourced from the box's
+**internal** address, which neither the fabric nor your client would accept. So the management
+connection has to **terminate at the gateway** and reach the box from inside the VPC.
+
+**On AWS and Azure that is Ringleader's to arrange** — the gateway's inbound firewall there is a
+security group or an NSG that Ringleader creates and owns. **On GCP it is yours**, because GCE has
+no per-instance firewall object: the gateway's inbound rules are VPC ingress rules in this project,
+and every rule Ringleader writes here is `EGRESS`.
+
+**So this landing pad adds the rule for you, and it follows `ssh_source_ranges`.** Set those and
+you are done — one rule, `ringleader-allow-gateway-management`, targeting the
+`ringleader-egress-gateway` tag, so it reaches the appliance and nothing else in this VPC:
+
+```hcl
+create_network    = true
+ssh_source_ranges = ["203.0.113.0/24"]   # the gateway admission follows this
+```
+
+It follows rather than asking again because it is not a second decision about who your engineers
+are — it is the first one still being true after a policy steers one of their boxes.
+
+**What it admits, exactly.** A GCE ingress rule matches by *source range* wherever the source sits,
+so read it as "these CIDRs may reach the appliance" rather than "the internet may not":
+
+- From **outside** this VPC it opens nothing until you ask Ringleader for
+  `EgressGateway.spec.publicAddress`. That is off by default, and until it is set the gateway VM has
+  no external address at all.
+- From **inside** this VPC, from a network you have joined to it (VPN / Interconnect / peering), or
+  from any range of yours that overlaps `network_cidr`, it takes effect the moment you apply — which
+  is the case whenever your `ssh_source_ranges` are private ranges.
+
+Behind it is the appliance's own sshd, which accepts only the keys Ringleader puts there, and a
+forwarded port range where nothing listens until the inbound path exists. That is why the rule
+follows the list you already chose for machines in this VPC and never widens past it.
+
+**You never supply the ports.** The module and the script carry the set, so it cannot drift from
+what Ringleader listens on — and the set is deliberately an *envelope* (TCP 22 plus a forwarded
+range) rather than one port, because a landing pad is applied once and both ways of carrying a
+session through an appliance have to fit inside what you already applied.
+
+**To close it** — it does admit SSH to the appliance itself, so this is a posture you may prefer:
+
+```hcl
+gateway_management_source_ranges = []
+```
+```bash
+GATEWAY_MANAGEMENT_RANGES=none ./network-landing-pad.sh
+```
+
+A steered workstation is then reachable only from inside this VPC — over VPN, Interconnect or
+peering — and it **reports** that rather than looking healthy while nobody can open it:
+`EgressEnforced: True`, reason `InboundUnreachable`, naming the gateway and the two remedies that
+exist (withdraw the box's egress policy, or the gateway).
+
 ### The reserved range
 
 The module still reserves an empty range beside the workstations subnet, on by default, taking the

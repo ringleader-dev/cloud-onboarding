@@ -59,6 +59,7 @@ from check_trust_pins import (
     hcl_attr,
     hcl_locals,
     hcl_resources,
+    hcl_sub_block,
     shell_assignments,
     shell_commands,
     strip_hcl_comments,
@@ -177,6 +178,106 @@ def shell_default(name: str):
     return read
 
 
+def hcl_local_port_set(name: str):
+    """A `locals` list of port specs, normalised to one comma-separated string.
+
+    Compared as ONE value rather than as a list, because the two GCP paths spell the same set in
+    two different languages -- an HCL list here, gcloud's `--rules` there -- and the property is
+    that they OPEN THE SAME PORTS, not that they are written alike.
+    """
+
+    def read(source: str, path: str) -> str:
+        locals_ = hcl_locals(strip_hcl_comments(source))
+        if name not in locals_:
+            raise GuardError(
+                f"{path}: no `{name}` in any `locals` block.\n\n"
+                "  It was renamed, moved out of `locals`, or spread over several lines. Any of the\n"
+                "  three leaves this guard reading nothing while the port set it pins can drift."
+            )
+        expr = locals_[name].strip()
+        if not (expr.startswith("[") and expr.endswith("]")):
+            raise GuardError(
+                f"{path}: `{name}` is `{expr}`, not a `[...]` list this guard can read.\n\n"
+                "  A computed port set is one this guard cannot compare against the shell path's,\n"
+                "  and an uncompared port set is how one route silently opens something the other\n"
+                "  does not."
+            )
+        return ",".join(_unquote(part) for part in expr[1:-1].split(",") if part.strip())
+
+    return read
+
+
+def shell_gcloud_rules(name: str):
+    """A shell variable bound to a bare `--rules` value, normalised to the same port string.
+
+    Every entry must be `tcp:<ports>`. A `udp:` or bare-protocol entry admits something the
+    Terraform path does not, and would compare equal if the protocol were simply stripped without
+    being checked -- so it is refused rather than normalised away.
+    """
+
+    def read(source: str, path: str) -> str:
+        value = _one_shell_assignment(source, path, name)
+        if SH_DEFAULT_RE.match(value):
+            raise GuardError(
+                f"{path}: `{name}` is `{value}`, an environment override.\n\n"
+                "  The port set is not the operator's to choose: Ringleader listens on these ports and\n"
+                "  a rule opening others reads correctly in the console and admits nothing. Bind it to\n"
+                "  the literal."
+            )
+        ports = []
+        for entry in value.split(","):
+            entry = entry.strip()
+            if not entry.startswith("tcp:") or len(entry) == 4:
+                raise GuardError(
+                    f"{path}: `{name}` contains `{entry}`, which is not a `tcp:<ports>` rule.\n\n"
+                    "  The management admission is TCP only, and the Terraform path can express nothing\n"
+                    "  else. An entry of another shape means the two routes no longer grant the same\n"
+                    "  thing -- and this guard will not guess which one is right."
+                )
+            ports.append(entry[4:])
+        return ",".join(ports)
+
+    return read
+
+
+def shell_mirror_default(name: str):
+    """The default of `NAME="${NAME:-...}"` in a file where a `none` sentinel may also close it.
+
+    Two assignments to this name are legitimate and only two: the one that supplies the default,
+    and the one that turns the documented `none` into emptiness. `shell_default` demands exactly
+    one, which is right for a name nothing else touches and wrong for this idiom -- so the shape
+    is read out rather than the count. What is refused is a second assignment carrying a VALUE: an
+    operator who ran the script would then get a rule built from something this guard never saw.
+    """
+
+    def read(source: str, path: str) -> str:
+        src = strip_shell_comments(source)
+        values = [_unquote(v) for n, v in shell_assignments(src, path, GUARDED_SHELL_VARS) if n == name]
+        defaults = [v for v in values if SH_DEFAULT_RE.match(v)]
+        rest = [v for v in values if not SH_DEFAULT_RE.match(v)]
+        if len(defaults) != 1:
+            raise GuardError(
+                f"{path}: found {len(defaults)} `${{{name}:-<default>}}` assignments to `{name}`,\n"
+                "  expected exactly 1. None means it was renamed or rewritten and this guard is\n"
+                "  reading nothing; two means the second one is what the customer actually gets."
+            )
+        if rest != [] and rest != [""]:
+            raise GuardError(
+                f"{path}: `{name}` is also assigned {rest}, which is not the `none` normalisation.\n\n"
+                "  The only other statement this name may carry is the one emptying it when the\n"
+                "  operator asked for `none`. An assignment carrying a VALUE means the rule is built\n"
+                "  from something other than the default read here, and both read right in isolation."
+            )
+        m = SH_DEFAULT_RE.match(defaults[0])
+        if m.group(1) != name:
+            raise GuardError(
+                f"{path}: `{name}` defaults through `${{{m.group(1)}:-...}}`, a different variable."
+            )
+        return m.group(2)
+
+    return read
+
+
 # The names this guard reads out of a shell script, handed to `check_trust_pins`' closed grammar
 # so a statement binding one of them any other way -- `read`, `printf -v`, `eval`, a `for`
 # variable -- is refused. That reader protects the names it is GIVEN; passing the trust guard's
@@ -184,7 +285,13 @@ def shell_default(name: str):
 # would then report the assignment it can see while the script runs with another value.
 GUARDED_SHELL_VARS = frozenset({
     "GATEWAY_TAG", "SSH_TAG", "SECONDARY_SSH_TAG", "SECONDARY_SSH_PORT",
-    "MANAGED_BUCKET_PREFIX",
+    "MANAGED_BUCKET_PREFIX", "GATEWAY_MANAGEMENT_RULES",
+    # Its VALUE is the operator's, so nothing below pins it -- but WHO it admits to the gateway
+    # appliance is the whole of the opt-in, and the closed grammar protects only the names it is
+    # given. Left out, `for GATEWAY_MANAGEMENT_RANGES in 0.0.0.0/0; do true; done` (a loop variable
+    # outlives its loop in bash) would rebind it and every later reader would still see the empty
+    # default it was declared with.
+    "GATEWAY_MANAGEMENT_RANGES",
 })
 
 
@@ -392,6 +499,35 @@ LITERALS = [
         ],
     ),
     Literal(
+        name="the egress gateway's inbound management port set",
+        value="22,30000-32767",
+        other_half="",
+        why=(
+            "A workstation an egress policy steers stops answering on its own address from outside\n"
+            "  its VPC -- the steering object is a 0.0.0.0/0 route, so it carries the reply to a\n"
+            "  connection the box never opened. The only repair is to terminate the management\n"
+            "  connection AT the gateway, and on gcp the gateway's inbound firewall is a VPC rule in\n"
+            "  the customer's project rather than an object Ringleader owns. This is the port set that\n"
+            "  rule opens, and the two gcp paths must open the SAME one: a customer who followed the\n"
+            "  Terraform README and a customer who ran the script would otherwise get landing pads on\n"
+            "  which different halves of the feature work.\n\n"
+            "  It is an ENVELOPE rather than one port, deliberately. The two shapes that can carry\n"
+            "  management through a gateway need different halves of it -- an SSH jump host on the\n"
+            "  appliance answers on 22, a per-box DNAT bastion needs one high port per governed box --\n"
+            "  and a landing pad is applied ONCE, by the customer, in an account we cannot re-enter.\n"
+            "  Narrowing this later does not narrow the pads already applied; widening it is a\n"
+            "  re-apply asked of every customer. Ringleader chooses WITHIN this envelope: the\n"
+            "  mechanism that terminates a management session at the gateway (RIN-1999) has no\n"
+            "  compiled counterpart to pin against yet, and when it lands it binds itself to these\n"
+            "  ports rather than the other way round. Changing this value is a decision about every\n"
+            "  pad already applied, not about the next one."
+        ),
+        sites=[
+            Site(GCP_TF, "local.gateway_management_ports", hcl_local_port_set("gateway_management_ports")),
+            Site(GCP_SH, "GATEWAY_MANAGEMENT_RULES", shell_gcloud_rules("GATEWAY_MANAGEMENT_RULES")),
+        ],
+    ),
+    Literal(
         name="the workstation network tag's default",
         value="ringleader-workstation",
         other_half="",
@@ -431,6 +567,7 @@ LITERALS = [
 # Terraform: the firewall resource, the reference its `target_tags` must carry, and why.
 TF_TAG_WIRING = [
     ("gateway", "local.gateway_network_tag"),
+    ("gateway_management", "local.gateway_network_tag"),
     ("ssh", "var.workstation_network_tag"),
     ("internal", "var.workstation_network_tag"),
     ("secondary_ssh", "var.secondary_ssh_network_tag"),
@@ -439,6 +576,7 @@ TF_TAG_WIRING = [
 # The shell script: the rule created by name, and the variable its `--target-tags` must be.
 SH_TAG_WIRING = [
     ("ringleader-allow-gateway", "GATEWAY_TAG"),
+    ("ringleader-allow-gateway-management", "GATEWAY_TAG"),
     ("ringleader-allow-ssh", "SSH_TAG"),
     ("ringleader-allow-internal", "SSH_TAG"),
     ("ringleader-allow-secondary-ssh", "SECONDARY_SSH_TAG"),
@@ -478,7 +616,10 @@ def check_shell_wiring(source: str) -> list[str]:
     for rule, want in SH_TAG_WIRING:
         creates = [
             c for c in shell_commands(src)
-            if re.search(r"\bfirewall-rules\s+create\s+" + re.escape(rule) + r"\b", c)
+            # `(?![\w-])` and not `\b`: a hyphen is a non-word character, so `\b` would find
+            # `ringleader-allow-gateway` inside `ringleader-allow-gateway-management` and report two
+            # invocations of a rule that has one. A name that PREFIXES another's is not that rule.
+            if re.search(r"\bfirewall-rules\s+create\s+" + re.escape(rule) + r"(?![\w-])", c)
         ]
         if len(creates) != 1:
             raise GuardError(
@@ -516,6 +657,173 @@ def check_literal(literal: Literal, sources: dict[str, str]) -> list[str]:
                 f" -- {literal.name}.\n\n  {literal.why}{other}"
             )
     return fails
+
+
+def check_management_port_wiring(sources: dict[str, str]) -> list[str]:
+    """The inbound-management rule must open the port set pinned above, by REFERENCE.
+
+    The same rule as the tag wiring: a pinned value the rule does not name is a value nothing
+    applies. Written out again at the rule, the set is a second definition free to drift from the
+    one checked above while both read correctly in isolation -- and the symptom of that drift is a
+    steered workstation that stays unreachable while every object Ringleader checks is as it wrote
+    it.
+    """
+    failures = []
+
+    src = strip_hcl_comments(sources[GCP_TF])
+    by_name = dict(hcl_resources(src, "google_compute_firewall"))
+    if "gateway_management" not in by_name:
+        raise GuardError(
+            f"{GCP_TF}: no `google_compute_firewall` named `gateway_management`.\n\n"
+            "  That is the rule admitting management traffic to the egress gateway, and the port set\n"
+            "  pinned above is what it opens. If it really was removed, remove its row from\n"
+            "  TF_TAG_WIRING and its Literal deliberately -- and know that no customer who has already\n"
+            "  applied this pad loses the rule when you do."
+        )
+    body = by_name["gateway_management"]
+
+    # ONE `allow` block, counted before anything is read out of it. `hcl_sub_block` returns the
+    # FIRST match, so a second block is invisible to every check below -- and a second block is a
+    # second grant: `allow { protocol = "udp" }` appended here hands the operator's CIDRs
+    # unrestricted UDP to the appliance while the port set above still reads exactly right.
+    # A `dynamic` block is a second grant this reader cannot count: `dynamic "allow" { content {
+    # protocol = "udp" } }` is valid, `terraform validate`-clean HCL that expands at plan time into
+    # an allow block no text scan sees. There is no legitimate use for one in a rule whose whole
+    # content is pinned, so the shape is refused rather than parsed.
+    for kind in re.findall(r'^[ \t]*dynamic[ \t]+"([A-Za-z_]+)"', body, re.M):
+        failures.append(
+            f"{GCP_TF}: `google_compute_firewall.gateway_management` builds its `{kind}` blocks with a\n"
+            "  `dynamic` block. What it expands to is decided at plan time, so nothing here can say\n"
+            "  what this rule admits -- and the pinned port set below would go on reading exactly\n"
+            "  right beside a second grant nobody judged. Write the block out."
+        )
+
+    allows = re.findall(r"^[ \t]*allow[ \t]*\{", body, re.M)
+    if len(allows) != 1:
+        failures.append(
+            f"{GCP_TF}: `google_compute_firewall.gateway_management` has {len(allows)} `allow` blocks,\n"
+            "  expected exactly 1. The pin above reads the first one only, so a second grants a\n"
+            "  protocol or a port range nothing here judges -- on a landing pad that cannot be\n"
+            "  narrowed again once a customer has applied it. This rule admits TCP on the pinned\n"
+            "  ports and nothing else."
+        )
+
+    allow = hcl_sub_block(body, "allow")
+    protocol = None if allow is None else _unquote(hcl_attr(allow, "protocol") or "")
+    if protocol != "tcp":
+        failures.append(
+            f"{GCP_TF}: `google_compute_firewall.gateway_management` admits protocol `{protocol}`,\n"
+            "  not `tcp`. The shell path can express nothing else -- its `--rules` entries are pinned\n"
+            "  to `tcp:` -- so the two gcp routes would grant different things, and the wider of the\n"
+            "  two is the one already applied in a customer's project."
+        )
+    ports = None if allow is None else hcl_attr(allow, "ports")
+    if ports != "local.gateway_management_ports":
+        failures.append(
+            f"{GCP_TF}: `google_compute_firewall.gateway_management` opens {ports}, not\n"
+            "  `local.gateway_management_ports`. The value checked above is then a value nothing\n"
+            "  applies, and the two gcp paths are free to open different ports while both look right."
+        )
+
+    sh = strip_shell_comments(sources[GCP_SH])
+    creates = [
+        c for c in shell_commands(sh)
+        if re.search(r"\bfirewall-rules\s+create\s+ringleader-allow-gateway-management(?![\w-])", c)
+    ]
+    if len(creates) != 1:
+        raise GuardError(
+            f"{GCP_SH}: found {len(creates)} `firewall-rules create ringleader-allow-gateway-management`\n"
+            "  invocations, expected 1. None means the rule was renamed and this guard reads nothing;\n"
+            "  two means the second one's flags are what the customer actually gets."
+        )
+    rules = gcloud_flag_values(creates[0], "rules")
+    if rules != ["${GATEWAY_MANAGEMENT_RULES}"] and rules != ["$GATEWAY_MANAGEMENT_RULES"]:
+        failures.append(
+            f"{GCP_SH}: `ringleader-allow-gateway-management` opens {rules or 'nothing'}, not\n"
+            "  `$GATEWAY_MANAGEMENT_RULES`. Writing the ports out again here is a second definition of\n"
+            "  the value, free to drift from the one checked above while both look right in isolation."
+        )
+    return failures
+
+
+def check_management_default_follows_ssh(sources: dict[str, str]) -> list[str]:
+    """The inbound-management admission must FOLLOW the inbound-SSH ranges, on both paths.
+
+    This is the property that makes the rule land without a second decision: an operator who named
+    the CIDRs their engineers connect from keeps reaching those boxes after a policy steers one.
+    It is checked rather than assumed because the two ways of losing it are both one line and both
+    read as caution -- an empty default here, or a hardcoded list there -- and either leaves ONE of
+    the two gcp routes silently unable to reach a steered box while the other can.
+
+    It does not check WHO is admitted: the ranges are the operator's. What it checks is that
+    neither path invents an answer of its own, and that neither stops following.
+
+    `shell_mirror_default` runs the closed grammar on the way and reads the script's two-statement
+    idiom exactly -- one assignment carrying the default, one emptying it for `none`. A third, or a
+    second carrying a value, is refused: the rule would then be built from something this guard
+    never read.
+    """
+    failures = []
+
+    sh_default = shell_mirror_default("GATEWAY_MANAGEMENT_RANGES")(sources[GCP_SH], GCP_SH)
+    if sh_default != "$SSH_RANGES":
+        failures.append(
+            f"{GCP_SH}: `GATEWAY_MANAGEMENT_RANGES` defaults to `{sh_default}`, not `$SSH_RANGES`.\n\n"
+            "  Empty, an operator who opened 22 to their engineers loses those boxes the moment a\n"
+            "  policy steers one, and gets no rule from the path the Terraform module would have\n"
+            "  given them. A hardcoded list is worse: it admits somebody to the egress gateway\n"
+            "  appliance that the operator never named. Follow the ranges they already chose."
+        )
+
+    tf_default = hcl_variable_default("gateway_management_source_ranges")(sources[GCP_VARS], GCP_VARS)
+    if tf_default != "null":
+        failures.append(
+            f"{GCP_VARS}: `gateway_management_source_ranges` defaults to `{tf_default}`, not `null`.\n\n"
+            "  `null` is what MIRRORS ssh_source_ranges here -- the shape secondary_ssh_source_ranges\n"
+            "  already uses. `[]` would be a module that silently stops following, and any other\n"
+            "  default is the module choosing who may reach the appliance in the operator's account."
+        )
+
+    # ...and the mirror has to be spelled against the variable it claims to follow. A default of
+    # `null` whose local resolves to something else is a promise the description makes and the
+    # module does not keep.
+    mirror = hcl_locals(strip_hcl_comments(sources[GCP_TF])).get("gateway_management_ranges")
+    if mirror is None:
+        raise GuardError(
+            f"{GCP_TF}: no `gateway_management_ranges` in any `locals` block.\n\n"
+            "  That local is where `null` becomes `var.ssh_source_ranges`. Without it the mirror is\n"
+            "  unchecked, and a rule that quietly stopped following would read exactly right."
+        )
+    # BOTH branches, read as the ternary it is. A substring test is not enough: `... == null ?
+    # var.ssh_source_ranges : var.ssh_source_ranges` still mentions both names, and an operator's
+    # explicit `[]` would no longer close the rule -- the override silently gone while the variable,
+    # its default and its description all go on promising it.
+    shape = re.match(
+        r"^var\.gateway_management_source_ranges\s*==\s*null\s*\?\s*(\S+)\s*:\s*(\S+)$",
+        mirror.strip(),
+    )
+    if shape is None:
+        raise GuardError(
+            f"{GCP_TF}: `local.gateway_management_ranges` is `{mirror}`, which is not the\n"
+            "  `var.gateway_management_source_ranges == null ? <mirror> : <override>` shape this guard\n"
+            "  reads. Written another way it may still be right, but nothing here can say so -- and an\n"
+            "  unread mirror is how one of the two gcp routes silently stops following."
+        )
+    if shape.group(1) != "var.ssh_source_ranges":
+        failures.append(
+            f"{GCP_TF}: `local.gateway_management_ranges` mirrors `{shape.group(1)}`, not\n"
+            "  `var.ssh_source_ranges`. The variable's default says unset follows the inbound-SSH\n"
+            "  ranges; this is the line that has to make that true, and a `null` resolving anywhere\n"
+            "  else is either a rule nobody asked for or a rule that never appears."
+        )
+    if shape.group(2) != "var.gateway_management_source_ranges":
+        failures.append(
+            f"{GCP_TF}: `local.gateway_management_ranges` resolves a SET value to `{shape.group(2)}`,\n"
+            "  not the variable itself. The mirror is only half the contract: the other half is that an\n"
+            "  operator who sets it -- to `[]` to close the rule, or to a narrower list -- gets what\n"
+            "  they set. This branch is the only thing that keeps that promise."
+        )
+    return failures
 
 
 def check_bucket_prefix_wiring(sources: dict[str, str]) -> list[str]:
@@ -564,10 +872,11 @@ def check_all(sources: dict[str, str]) -> list[str]:
             failures += check(src)
         except GuardError as err:
             failures.append(str(err))
-    try:
-        failures += check_bucket_prefix_wiring(sources)
-    except GuardError as err:
-        failures.append(str(err))
+    for cross in (check_management_port_wiring, check_management_default_follows_ssh, check_bucket_prefix_wiring):
+        try:
+            failures += cross(sources)
+        except GuardError as err:
+            failures.append(str(err))
     return failures
 
 

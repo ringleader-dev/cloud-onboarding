@@ -36,7 +36,9 @@ from check_published_literals import (
     LITERALS,
     PATHS,
     REPO_ROOT,
+    GuardError,
     check_all,
+    check_shell_wiring,
     main,
 )
 
@@ -165,7 +167,10 @@ class GatewayTagWiring(Rejects):
 
     def test_the_terraform_rule_targets_something_else(self):
         self.assertRejected(
-            edited((GCP_TF, "  target_tags   = [local.gateway_network_tag]",
+            edited((GCP_TF,
+                    "  source_ranges = local.workstation_ranges\n"
+                    "  target_tags   = [local.gateway_network_tag]",
+                    "  source_ranges = local.workstation_ranges\n"
                     "  target_tags   = [var.workstation_network_tag]")),
             "google_compute_firewall.gateway",
         )
@@ -346,6 +351,310 @@ class CrossPathDefaultsMustAgree(Rejects):
                     'variable "alt_ssh_network_tag" {')),
             'no `variable "secondary_ssh_network_tag"`',
         )
+
+
+class TheManagementPortSetCannotDrift(Rejects):
+    """The ports the GCP landing pad opens on the egress gateway, in two languages.
+
+    Unlike the tag, this set has no compiled counterpart to disagree with yet -- the mechanism that
+    listens behind it is still being chosen. What it has instead is the property that outlives that
+    choice: a pad is applied ONCE, in an account we cannot re-enter, so the two GCP paths must open
+    the same envelope, and it must be the envelope the pinned value names.
+    """
+
+    def test_the_module_narrows_the_set(self):
+        self.assertRejected(
+            edited((GCP_TF, '  gateway_management_ports = ["22", "30000-32767"]',
+                    '  gateway_management_ports = ["22"]')),
+            "inbound management port set",
+        )
+
+    def test_the_script_narrows_the_set(self):
+        self.assertRejected(
+            edited((GCP_SH, 'GATEWAY_MANAGEMENT_RULES="tcp:22,tcp:30000-32767"',
+                    'GATEWAY_MANAGEMENT_RULES="tcp:22"')),
+            "inbound management port set",
+        )
+
+    def test_both_paths_move_together_and_still_fail(self):
+        # The case a cross-file consistency check alone would pass: the pads agree with each other
+        # and no longer with the envelope every already-applied pad carries.
+        failures = self.assertRejected(
+            edited(
+                (GCP_TF, '  gateway_management_ports = ["22", "30000-32767"]',
+                 '  gateway_management_ports = ["22", "40000-49999"]'),
+                (GCP_SH, 'GATEWAY_MANAGEMENT_RULES="tcp:22,tcp:30000-32767"',
+                 'GATEWAY_MANAGEMENT_RULES="tcp:22,tcp:40000-49999"'),
+            )
+        )
+        self.assertIn("applied ONCE", "\n".join(failures))
+
+    def test_the_local_is_renamed(self):
+        self.assertRejected(
+            edited((GCP_TF, '  gateway_management_ports = ["22", "30000-32767"]',
+                    '  management_ports = ["22", "30000-32767"]')),
+            "no `gateway_management_ports`",
+        )
+
+    def test_the_port_set_becomes_an_environment_override(self):
+        # Reads as flexibility; is a rule that admits nothing, on a pad we cannot re-apply.
+        self.assertRejected(
+            edited((GCP_SH, 'GATEWAY_MANAGEMENT_RULES="tcp:22,tcp:30000-32767"',
+                    'GATEWAY_MANAGEMENT_RULES="${GATEWAY_MANAGEMENT_RULES:-tcp:22,tcp:30000-32767}"')),
+            "override",
+        )
+
+    def test_a_protocol_other_than_tcp_is_refused_rather_than_normalised(self):
+        # `udp:30000-32767` would compare equal to the TCP entry if the protocol were stripped
+        # without being read, and the shell path would then grant something the Terraform path
+        # cannot express at all.
+        self.assertRejected(
+            edited((GCP_SH, 'GATEWAY_MANAGEMENT_RULES="tcp:22,tcp:30000-32767"',
+                    'GATEWAY_MANAGEMENT_RULES="tcp:22,udp:30000-32767"')),
+            "not a `tcp:<ports>` rule",
+        )
+
+    def test_a_computed_port_set_is_refused_rather_than_guessed(self):
+        self.assertRejected(
+            edited((GCP_TF, '  gateway_management_ports = ["22", "30000-32767"]',
+                    '  gateway_management_ports = concat(["22"], var.extra_ports)')),
+            "not a `[...]` list",
+        )
+
+
+class TheManagementRuleWiring(Rejects):
+    """A pinned port set the rule does not name is a port set nothing applies."""
+
+    def test_the_terraform_rule_writes_the_ports_out_again(self):
+        self.assertRejected(
+            edited((GCP_TF, "    ports    = local.gateway_management_ports",
+                    '    ports    = ["22", "30000-32767"]')),
+            "local.gateway_management_ports",
+        )
+
+    def test_the_terraform_rule_targets_the_workstation_tag(self):
+        self.assertRejected(
+            edited((GCP_TF,
+                    "  source_ranges = local.gateway_management_ranges\n"
+                    "  target_tags   = [local.gateway_network_tag]",
+                    "  source_ranges = local.gateway_management_ranges\n"
+                    "  target_tags   = [var.workstation_network_tag]")),
+            "google_compute_firewall.gateway_management",
+        )
+
+    def test_the_terraform_rule_is_renamed(self):
+        self.assertRejected(
+            edited((GCP_TF, 'resource "google_compute_firewall" "gateway_management" {',
+                    'resource "google_compute_firewall" "gateway_inbound" {')),
+            "gateway_management",
+        )
+
+    def test_a_second_allow_block_widens_the_rule_unseen(self):
+        # The shape every "read the block and check it" guard misses: the pinned block still reads
+        # exactly right, and the one appended after it hands the operator's CIDRs unrestricted UDP
+        # to the appliance.
+        self.assertRejected(
+            edited((GCP_TF, """  allow {
+    protocol = "tcp"
+    ports    = local.gateway_management_ports
+  }""", """  allow {
+    protocol = "tcp"
+    ports    = local.gateway_management_ports
+  }
+
+  allow { protocol = "udp" }""")),
+            "`allow` blocks",
+        )
+
+    def test_the_rule_changes_protocol(self):
+        # The ports are still the pinned ones; the protocol is not one the shell path can express.
+        self.assertRejected(
+            edited((GCP_TF, """  allow {
+    protocol = "tcp"
+    ports    = local.gateway_management_ports
+  }""", """  allow {
+    protocol = "udp"
+    ports    = local.gateway_management_ports
+  }""")),
+            "admits protocol `udp`",
+        )
+
+    def test_a_dynamic_block_hides_a_second_grant(self):
+        # Valid, `terraform validate`-clean HCL that expands at plan time into an allow block no
+        # text scan can count. The pinned block beside it still reads exactly right.
+        self.assertRejected(
+            edited((GCP_TF,
+                    '  allow {\n'
+                    '    protocol = "tcp"\n'
+                    "    ports    = local.gateway_management_ports\n"
+                    "  }",
+                    '  allow {\n'
+                    '    protocol = "tcp"\n'
+                    "    ports    = local.gateway_management_ports\n"
+                    "  }\n\n"
+                    '  dynamic "allow" {\n'
+                    "    for_each = var.extra_protocols\n"
+                    "    content {\n"
+                    "      protocol = allow.value\n"
+                    "    }\n"
+                    "  }")),
+            "`dynamic` block",
+        )
+
+    def test_the_shell_rule_writes_the_ports_out_again(self):
+        self.assertRejected(
+            edited((GCP_SH, '    --rules "$GATEWAY_MANAGEMENT_RULES" \\',
+                    '    --rules tcp:22,tcp:30000-32767 \\')),
+            "GATEWAY_MANAGEMENT_RULES",
+        )
+
+    def test_the_shell_rule_is_renamed(self):
+        self.assertRejected(
+            edited((GCP_SH, "gcloud compute firewall-rules create ringleader-allow-gateway-management --project",
+                    "gcloud compute firewall-rules create ringleader-allow-mgmt --project")),
+            "ringleader-allow-gateway-management",
+        )
+
+
+class TheFollowedRangesCannotBeRebound(Rejects):
+    """`GATEWAY_MANAGEMENT_RANGES` carries no pinned VALUE, only the closed grammar's protection.
+
+    Who is admitted to the appliance is the whole of this rule, so a statement that binds the name
+    by any means an assignment reader cannot see -- a `for` variable outlives its loop in bash --
+    must be refused even though the value itself is legitimately the operator's to choose.
+    """
+
+    ANCHOR = 'GATEWAY_MANAGEMENT_RANGES="${GATEWAY_MANAGEMENT_RANGES:-$SSH_RANGES}"'
+
+    def test_a_for_loop_variable_rebinds_the_ranges(self):
+        self.assertRejected(
+            edited((GCP_SH, self.ANCHOR,
+                    self.ANCHOR + '\nfor GATEWAY_MANAGEMENT_RANGES in "0.0.0.0/0"; do true; done'))
+        )
+
+    def test_a_printf_v_rebinds_the_ranges(self):
+        self.assertRejected(
+            edited((GCP_SH, self.ANCHOR,
+                    self.ANCHOR + "\nprintf -v GATEWAY_MANAGEMENT_RANGES %s 0.0.0.0/0"))
+        )
+
+    def test_a_read_rebinds_the_ranges(self):
+        self.assertRejected(
+            edited((GCP_SH, self.ANCHOR,
+                    self.ANCHOR + '\nread -r GATEWAY_MANAGEMENT_RANGES <<< "0.0.0.0/0"'))
+        )
+
+
+class TheAdmissionFollowsTheInboundSSHRanges(Rejects):
+    """The default that makes this rule land without a second decision, on BOTH gcp paths.
+
+    Losing it is one line either way and both read as caution -- an empty default, or a list
+    written out here instead of followed -- and either leaves one of the two routes unable to reach
+    a steered box while the other can.
+    """
+
+    def test_the_script_stops_following(self):
+        self.assertRejected(
+            edited((GCP_SH, 'GATEWAY_MANAGEMENT_RANGES="${GATEWAY_MANAGEMENT_RANGES:-$SSH_RANGES}"',
+                    'GATEWAY_MANAGEMENT_RANGES="${GATEWAY_MANAGEMENT_RANGES:-}"')),
+            "not `$SSH_RANGES`",
+        )
+
+    def test_the_script_invents_its_own_ranges(self):
+        self.assertRejected(
+            edited((GCP_SH, 'GATEWAY_MANAGEMENT_RANGES="${GATEWAY_MANAGEMENT_RANGES:-$SSH_RANGES}"',
+                    'GATEWAY_MANAGEMENT_RANGES="${GATEWAY_MANAGEMENT_RANGES:-0.0.0.0/0}"')),
+            "not `$SSH_RANGES`",
+        )
+
+    def test_the_module_stops_following(self):
+        self.assertRejected(
+            edited((GCP_VARS,
+                    'variable "gateway_management_source_ranges" {\n'
+                    "  type        = list(string)\n"
+                    "  default     = null",
+                    'variable "gateway_management_source_ranges" {\n'
+                    "  type        = list(string)\n"
+                    "  default     = []")),
+            "not `null`",
+        )
+
+    def test_the_module_variable_is_renamed(self):
+        self.assertRejected(
+            edited((GCP_VARS, 'variable "gateway_management_source_ranges" {',
+                    'variable "gateway_mgmt_source_ranges" {')),
+            'no `variable "gateway_management_source_ranges"`',
+        )
+
+    def test_the_mirror_local_resolves_somewhere_else(self):
+        # The shape a default-only check misses: the variable still defaults to `null`, and the
+        # line that gives `null` its meaning now names something the description never promised.
+        self.assertRejected(
+            edited((GCP_TF, "var.gateway_management_source_ranges == null ? var.ssh_source_ranges :",
+                    "var.gateway_management_source_ranges == null ? var.secondary_ssh_source_ranges :")),
+            "mirrors `var.secondary_ssh_source_ranges`",
+        )
+
+    def test_the_mirror_local_is_renamed(self):
+        self.assertRejected(
+            edited((GCP_TF, "  gateway_management_ranges = var.gateway_management_source_ranges",
+                    "  gw_management_ranges = var.gateway_management_source_ranges")),
+            "no `gateway_management_ranges`",
+        )
+
+    def test_the_override_branch_is_dropped(self):
+        # Still "follows ssh_source_ranges" by every substring test, and an operator's explicit []
+        # no longer closes the rule: the variable, its default and its description all go on
+        # promising an override the module stopped reading.
+        self.assertRejected(
+            edited((GCP_TF,
+                    "var.gateway_management_source_ranges == null ? var.ssh_source_ranges : var.gateway_management_source_ranges",
+                    "var.gateway_management_source_ranges == null ? var.ssh_source_ranges : var.ssh_source_ranges")),
+            "resolves a SET value",
+        )
+
+    def test_a_second_assignment_carrying_a_value_is_refused(self):
+        # The `none` normalisation is legitimate; a second assignment carrying a VALUE is the one
+        # that leaves a reader judging something the script does not use.
+        self.assertRejected(
+            edited((GCP_SH, 'GATEWAY_MANAGEMENT_RANGES="${GATEWAY_MANAGEMENT_RANGES:-$SSH_RANGES}"',
+                    'GATEWAY_MANAGEMENT_RANGES="${GATEWAY_MANAGEMENT_RANGES:-$SSH_RANGES}"\n'
+                    'GATEWAY_MANAGEMENT_RANGES="0.0.0.0/0"')),
+            "not the `none` normalisation",
+        )
+
+    def test_a_second_default_assignment_is_refused(self):
+        self.assertRejected(
+            edited((GCP_SH, 'GATEWAY_MANAGEMENT_RANGES="${GATEWAY_MANAGEMENT_RANGES:-$SSH_RANGES}"',
+                    'GATEWAY_MANAGEMENT_RANGES="${GATEWAY_MANAGEMENT_RANGES:-$SSH_RANGES}"\n'
+                    'GATEWAY_MANAGEMENT_RANGES="${GATEWAY_MANAGEMENT_RANGES:-0.0.0.0/0}"')),
+            "expected exactly 1",
+        )
+
+
+class ARuleNameThatPrefixesAnotherIsNotThatRule(unittest.TestCase):
+    """`ringleader-allow-gateway` and `ringleader-allow-gateway-management` are two rules.
+
+    Matched with a trailing `\\b`, the first name is found inside the second -- a hyphen is a
+    non-word character -- and the shell wiring check then reports two invocations of a rule that
+    has one. It fails on a correct artifact, and the cheapest way out is renaming the new rule
+    rather than reading the file properly, so it is pinned here instead.
+    """
+
+    def test_the_shipped_script_is_not_miscounted(self):
+        self.assertEqual(check_shell_wiring(sources()[GCP_SH]), [])
+
+    def test_a_genuinely_duplicated_rule_is_still_caught(self):
+        # The lookahead narrows the match; it must not stop the check seeing a real second
+        # invocation, whose flags are what the customer would actually get.
+        one = (
+            'gcloud compute firewall-rules create ringleader-allow-gateway --project "$PROJECT" \\\n'
+            "  --network ringleader-vpc --direction INGRESS --action allow \\\n"
+            '  --rules tcp,udp,icmp --source-ranges "$WORKSTATION_RANGES" --target-tags "$GATEWAY_TAG"'
+        )
+        src = mutate(sources()[GCP_SH], one, one + "\n" + one)
+        with self.assertRaises(GuardError):
+            check_shell_wiring(src)
 
 
 class TheManagedBucketPrefixCannotDrift(Rejects):

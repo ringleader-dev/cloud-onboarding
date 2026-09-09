@@ -36,6 +36,20 @@ network_cidr = "10.80.0.0/16"
 #   providerConfig.gcp.networkTags: [ringleader-workstation, ringleader-secondary-ssh]
 # secondary_ssh_source_ranges = []
 
+# REACHING A WORKSTATION AN EGRESS GATEWAY STEERS -- follows ssh_source_ranges above, so there is
+# nothing to set here. Once a hostname-level egress policy steers a workstation, its steering route
+# carries the REPLY to a connection it never opened, so it stops answering on its own address from
+# outside this VPC. Nothing in the box or in Ringleader can repair that on GCP: the management
+# connection has to terminate at the gateway appliance, and the gateway's inbound firewall is a VPC
+# rule in THIS project. From OUTSIDE the VPC it opens nothing until you ask Ringleader for
+# EgressGateway.spec.publicAddress (off by default -- the gateway has no external address before
+# it); from inside the VPC, or from a network you have joined to it, it is live on apply, which is
+# the case if the ranges above are private. Behind it is the appliance's own sshd, which takes only
+# the keys Ringleader puts there. Set [] to close it: a steered box is then reachable only from
+# inside this VPC and reports EgressEnforced: True with reason InboundUnreachable rather than
+# looking healthy while nobody can open it.
+# gateway_management_source_ranges = []
+
 # Let Ringleader CREATE a service account per workstation user and bind roles to it. Not needed
 # to run workstations as an identity -- every workstation already runs as one. This grants
 # roles/resourcemanager.projectIamAdmin, which can grant any role in this project to any

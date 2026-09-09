@@ -448,3 +448,49 @@ variable "governed_subnet_cidr" {
     it clear of every entry in additional_regions.
   EOT
 }
+
+variable "gateway_management_source_ranges" {
+  type        = list(string)
+  default     = null
+  description = <<-EOT
+    CIDRs allowed to reach the EGRESS GATEWAY VM on the management ports, when create_network is
+    set.
+
+    Unset -- the default -- MIRRORS ssh_source_ranges, the same shape secondary_ssh_source_ranges
+    uses and for the same reason: reaching a workstation an egress policy steers is not a second
+    decision about who your engineers are, it is the first one still being true after a policy
+    lands. Set it to [] to close the rule explicitly, or to a narrower list to open it to fewer.
+    Name no ssh_source_ranges and this opens nothing either.
+
+    What it is for. A workstation an egress policy steers at the gateway stops answering on its
+    own address from outside this VPC: the steering object is a 0.0.0.0/0 route, and a default
+    route governs the REPLY to a connection the box never opened as much as it governs traffic
+    the box sends. Nothing inside the box or on the gateway can undo that -- a guest routing
+    table does not participate in VPC routing, which is the same property that stops box root
+    defeating the chokepoint. The only path left is to terminate the management connection AT
+    the gateway and reach the box from inside the VPC, and on GCP the gateway's inbound firewall
+    is a VPC rule in THIS project rather than an object Ringleader owns. This variable is that
+    rule.
+
+    What it exposes, stated exactly. A GCE ingress rule matches by SOURCE RANGE wherever the source
+    sits, so read this as "these CIDRs may reach the appliance", not as "the internet may not":
+
+      * From OUTSIDE the VPC it opens nothing until you ask Ringleader for
+        EgressGateway.spec.publicAddress, which defaults to off -- before that the gateway VM has no
+        external address at all.
+      * From INSIDE, or from anywhere you have joined to this VPC (VPN / Interconnect / peering),
+        or from any of your own ranges overlapping network_cidr, it takes effect on APPLY. If your
+        ssh_source_ranges are private ranges, that is the case you are in.
+
+    What is behind it is the appliance's own sshd, which accepts only the keys Ringleader puts
+    there, and a forwarded port range where nothing listens until the inbound path exists. That is
+    why the rule follows the list you already chose for machines in this VPC and never widens past
+    it -- and why closing it is one line.
+
+    Set [] if you would rather reach a steered box only from inside this VPC and never reach the
+    appliance. Without the rule a steered box is enforced and unreachable, and reports that on its
+    own EgressEnforced condition (reason InboundUnreachable) rather than looking healthy. You do
+    not supply the ports -- the module carries them, so they cannot drift from what Ringleader
+    listens on.
+  EOT
+}
