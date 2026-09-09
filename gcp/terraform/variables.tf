@@ -472,15 +472,25 @@ variable "gateway_management_source_ranges" {
     is a VPC rule in THIS project rather than an object Ringleader owns. This variable is that
     rule.
 
-    What it costs while nothing uses it: nothing. The gateway VM takes NO external address unless
-    EgressGateway.spec.publicAddress is declared, and that defaults to off -- so until you ask for
-    one there is no address for this rule to admit anybody to. What it saves is the case it exists
-    for: without it a steered box is enforced and unreachable, and reports that on its own
-    EgressEnforced condition (reason InboundUnreachable) rather than looking healthy.
+    What it exposes, stated exactly. A GCE ingress rule matches by SOURCE RANGE wherever the source
+    sits, so read this as "these CIDRs may reach the appliance", not as "the internet may not":
 
-    It does admit SSH to the gateway appliance itself, which is why it follows the list you already
-    chose for your workstations rather than widening past it. Set [] if you would rather reach a
-    steered box only from inside this VPC (VPN / Interconnect / peering). You do not supply the
-    ports -- the module carries them, so they cannot drift from what Ringleader listens on.
+      * From OUTSIDE the VPC it opens nothing until you ask Ringleader for
+        EgressGateway.spec.publicAddress, which defaults to off -- before that the gateway VM has no
+        external address at all.
+      * From INSIDE, or from anywhere you have joined to this VPC (VPN / Interconnect / peering),
+        or from any of your own ranges overlapping network_cidr, it takes effect on APPLY. If your
+        ssh_source_ranges are private ranges, that is the case you are in.
+
+    What is behind it is the appliance's own sshd, which accepts only the keys Ringleader puts
+    there, and a forwarded port range where nothing listens until the inbound path exists. That is
+    why the rule follows the list you already chose for machines in this VPC and never widens past
+    it -- and why closing it is one line.
+
+    Set [] if you would rather reach a steered box only from inside this VPC and never reach the
+    appliance. Without the rule a steered box is enforced and unreachable, and reports that on its
+    own EgressEnforced condition (reason InboundUnreachable) rather than looking healthy. You do
+    not supply the ports -- the module carries them, so they cannot drift from what Ringleader
+    listens on.
   EOT
 }

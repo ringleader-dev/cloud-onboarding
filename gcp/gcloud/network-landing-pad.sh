@@ -86,12 +86,16 @@
 #
 #   SSH_RANGES=203.0.113.0/24 PROJECT=... ./network-landing-pad.sh
 #
-# It costs nothing while nothing uses it. The gateway VM takes no external address unless
-# EgressGateway.spec.publicAddress is declared, and that is off by default -- so there is no address
-# for this rule to admit anybody to until you ask Ringleader for one. What it saves is the second
-# decision nobody remembers to make on the day a policy first steers a box.
+# What that admits, exactly. A GCE ingress rule matches by SOURCE RANGE wherever the source sits.
+# From OUTSIDE this VPC it opens nothing until you ask Ringleader for
+# EgressGateway.spec.publicAddress -- off by default, and the gateway VM has no external address
+# before it. From inside, from a network you joined to this VPC (VPN / Interconnect / peering), or
+# from any range of yours overlapping CIDR, it takes effect when you run this script -- which is
+# the case if your SSH_RANGES are private ranges. Behind it is the appliance's own sshd, which
+# accepts only the keys Ringleader puts there, and a port range where nothing listens yet.
 #
-# It does admit SSH to the appliance itself, so it never widens past the list you already chose:
+# So it never widens past the list you already chose for machines in this VPC, and closing it is
+# one word:
 #
 #   GATEWAY_MANAGEMENT_RANGES=none PROJECT=... ./network-landing-pad.sh   # close it
 #
@@ -270,8 +274,8 @@ if [[ -n "$GATEWAY_MANAGEMENT_RANGES" ]]; then
     --rules "$GATEWAY_MANAGEMENT_RULES" \
     --source-ranges "$GATEWAY_MANAGEMENT_RANGES" --target-tags "$GATEWAY_TAG"
   echo ">> ${GATEWAY_MANAGEMENT_RANGES} can reach the egress gateway tagged ${GATEWAY_TAG} on ${GATEWAY_MANAGEMENT_RULES}"
-  echo "   Ask Ringleader to set EgressGateway.spec.publicAddress too -- without an external"
-  echo "   address on the gateway there is nothing for this rule to admit anyone to."
+  echo "   Reachable from OUTSIDE this VPC only once EgressGateway.spec.publicAddress is set;"
+  echo "   from inside it, or from a network you have joined to it, this is live now."
 else
   echo ">> NOTE: no inbound-management rule created (GATEWAY_MANAGEMENT_RANGES is empty or none)."
   echo "   A workstation an egress policy steers will be reachable only from INSIDE this VPC."

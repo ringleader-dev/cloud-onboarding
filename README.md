@@ -202,11 +202,13 @@ Two things follow that are worth knowing before you budget:
   proxy**. On AWS and Azure that admission is a security group or an NSG Ringleader owns and
   writes itself. GCE has no per-instance firewall object, so on GCP it is a VPC ingress rule in
   your project — and the GCP landing pad now creates it, **following `ssh_source_ranges`**, so
-  there is nothing extra to set. It costs nothing until you ask Ringleader for
-  `EgressGateway.spec.publicAddress` (off by default), because until then the proxy has no external
-  address to admit anyone to. Close it with `gateway_management_source_ranges = []` and a steered
-  box is reachable only from inside the VPC — which it *reports*, rather than looking healthy while
-  nobody can open it.
+  there is nothing extra to set. From outside the VPC it opens nothing until you ask Ringleader for
+  `EgressGateway.spec.publicAddress` (off by default, and the proxy has no external address before
+  it); from inside the VPC, or from a network you have joined to it, it is live on apply — so treat
+  it as "these CIDRs may reach the proxy", and close it with
+  `gateway_management_source_ranges = []` if that is not what you want. Closed, a steered box is
+  reachable only from inside the VPC — which it *reports*, rather than looking healthy while nobody
+  can open it.
 - **Put the proxy in the same zone as the workstations it serves.** Same-zone traffic is free
   on all three clouds; cross-zone is $0.01/GB, charged to the sender on GCP and to **both
   sides** on AWS and Azure. At 10 TB/month a misplaced proxy costs $100–$200, which is more

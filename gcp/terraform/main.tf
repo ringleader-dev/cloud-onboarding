@@ -900,11 +900,17 @@ resource "google_compute_firewall" "gateway" {
 # on this cloud the landing pad is the only place the admission can live, and this is it.
 #
 # Why it follows rather than asking. These CIDRs get SSH to the appliance itself, so the rule is
-# scoped to the list you ALREADY chose for your workstations and never widens past it -- and it
-# costs nothing while nothing uses it, because the gateway VM takes no external address unless
-# EgressGateway.spec.publicAddress is declared, and that defaults to off. So there is no address
-# for this rule to admit anybody to until you ask for one, and no second decision to remember on
-# the day a policy first steers a box.
+# scoped to the list the operator ALREADY chose for machines in this VPC and never widens past it,
+# and there is no second decision to remember on the day a policy first steers a box.
+#
+# What that admits, stated exactly, because "it opens nothing yet" is only half true. A GCE ingress
+# rule matches by SOURCE RANGE wherever the source sits. From OUTSIDE the VPC this opens nothing
+# until EgressGateway.spec.publicAddress is declared -- off by default, and the VM has no external
+# address before it. From inside, from a joined network (VPN / Interconnect / peering), or from any
+# range of the operator's that overlaps network_cidr, it takes effect on APPLY, which is exactly
+# the case when ssh_source_ranges are private ranges. Behind it is the appliance's own sshd, which
+# accepts only the keys Ringleader puts there, and a port range where nothing listens until the
+# inbound path exists.
 #
 # Set gateway_management_source_ranges = [] to close it. Then a governed workstation is reachable
 # only from inside this VPC, and it SAYS so -- it reports EgressEnforced: True with reason

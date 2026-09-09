@@ -352,10 +352,21 @@ ssh_source_ranges = ["203.0.113.0/24"]   # the gateway admission follows this
 ```
 
 It follows rather than asking again because it is not a second decision about who your engineers
-are — it is the first one still being true after a policy steers one of their boxes. And it costs
-nothing while nothing uses it: the gateway VM takes **no external address** unless you ask
-Ringleader for `EgressGateway.spec.publicAddress`, which is off by default, so until then there is
-no address for this rule to admit anybody to.
+are — it is the first one still being true after a policy steers one of their boxes.
+
+**What it admits, exactly.** A GCE ingress rule matches by *source range* wherever the source sits,
+so read it as "these CIDRs may reach the appliance" rather than "the internet may not":
+
+- From **outside** this VPC it opens nothing until you ask Ringleader for
+  `EgressGateway.spec.publicAddress`. That is off by default, and until it is set the gateway VM has
+  no external address at all.
+- From **inside** this VPC, from a network you have joined to it (VPN / Interconnect / peering), or
+  from any range of yours that overlaps `network_cidr`, it takes effect the moment you apply — which
+  is the case whenever your `ssh_source_ranges` are private ranges.
+
+Behind it is the appliance's own sshd, which accepts only the keys Ringleader puts there, and a
+forwarded port range where nothing listens until the inbound path exists. That is why the rule
+follows the list you already chose for machines in this VPC and never widens past it.
 
 **You never supply the ports.** The module and the script carry the set, so it cannot drift from
 what Ringleader listens on — and the set is deliberately an *envelope* (TCP 22 plus a forwarded

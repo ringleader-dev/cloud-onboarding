@@ -592,7 +592,7 @@ class TheAdmissionFollowsTheInboundSSHRanges(Rejects):
         self.assertRejected(
             edited((GCP_TF, "var.gateway_management_source_ranges == null ? var.ssh_source_ranges :",
                     "var.gateway_management_source_ranges == null ? var.secondary_ssh_source_ranges :")),
-            "does not follow",
+            "mirrors `var.secondary_ssh_source_ranges`",
         )
 
     def test_the_mirror_local_is_renamed(self):
@@ -600,6 +600,17 @@ class TheAdmissionFollowsTheInboundSSHRanges(Rejects):
             edited((GCP_TF, "  gateway_management_ranges = var.gateway_management_source_ranges",
                     "  gw_management_ranges = var.gateway_management_source_ranges")),
             "no `gateway_management_ranges`",
+        )
+
+    def test_the_override_branch_is_dropped(self):
+        # Still "follows ssh_source_ranges" by every substring test, and an operator's explicit []
+        # no longer closes the rule: the variable, its default and its description all go on
+        # promising an override the module stopped reading.
+        self.assertRejected(
+            edited((GCP_TF,
+                    "var.gateway_management_source_ranges == null ? var.ssh_source_ranges : var.gateway_management_source_ranges",
+                    "var.gateway_management_source_ranges == null ? var.ssh_source_ranges : var.ssh_source_ranges")),
+            "resolves a SET value",
         )
 
     def test_a_second_assignment_carrying_a_value_is_refused(self):

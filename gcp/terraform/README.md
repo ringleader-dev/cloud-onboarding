@@ -46,7 +46,7 @@ Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standal
 | `create_governed_subnet` | `false` | Reserve a subnet for the workstations that proxy governs. **Off by default, and the one switch that differs from the AWS and Azure modules**: on GCP the steering route is scoped by network tag, so a box is governed by its tag and an untagged neighbour is untouched. See `gcp/README.md`. |
 | `gateway_subnet_cidr` | `null` → 241st `/24` of `network_cidr` | Its range. An override; unset it follows `network_cidr` and sits well clear of `subnet_cidr` so growing that one does not collide. |
 | `governed_subnet_cidr` | `null` → 15th `/20` of `network_cidr` | The governed subnet's range, when `create_governed_subnet` is on. An override; unset it sits immediately below the gateway range. |
-| `gateway_management_source_ranges` | `null` | CIDRs allowed to reach the **egress gateway VM** on the management ports, so a workstation an egress policy *steers* stays reachable. Unset **mirrors `ssh_source_ranges`** — reaching a steered box is the decision you already made, still being true — and `[]` closes it. It admits SSH to the appliance itself, so it never widens past that list. Costs nothing until you ask Ringleader for `EgressGateway.spec.publicAddress`: the gateway takes no external address by default, so there is no address for the rule to admit anyone to. You do not supply the ports. |
+| `gateway_management_source_ranges` | `null` | CIDRs allowed to reach the **egress gateway VM** on the management ports, so a workstation an egress policy *steers* stays reachable. Unset **mirrors `ssh_source_ranges`** — reaching a steered box is the decision you already made, still being true — and `[]` closes it. It admits SSH to the appliance itself, so it never widens past that list. From **outside** the VPC it opens nothing until you ask Ringleader for `EgressGateway.spec.publicAddress` (off by default, and the VM has no external address before it); from **inside**, or from a network you have joined to this VPC, it is live on apply. You do not supply the ports. |
 
 ### Why the gateway needs an INGRESS rule of its own
 
@@ -71,9 +71,17 @@ is the only place that admission can live.
 
 It **follows `ssh_source_ranges`** rather than asking again, because it is not a second decision
 about who your engineers are — it is the first one still being true after a policy steers one of
-their boxes. And it is free while unused: the gateway VM takes no external address unless
-`EgressGateway.spec.publicAddress` is declared, which defaults to off, so until you ask for one
-there is no address for the rule to admit anybody to. Set `[]` to close it.
+their boxes. It never widens past that list, and what sits behind it is the appliance's own sshd —
+which accepts only the keys Ringleader puts there — plus a port range where nothing listens until
+the inbound path exists.
+
+Read the rule as *"these CIDRs may reach the appliance"*, not as *"the internet may not"*: a GCE
+ingress rule matches by source range wherever the source sits. From **outside** this VPC it opens
+nothing until `EgressGateway.spec.publicAddress` is declared, which defaults to off and without
+which the VM has no external address at all. From **inside** it — or from a network you have joined
+to it by VPN, Interconnect or peering, or from any range of yours that overlaps `network_cidr` — it
+takes effect on apply, which is the case whenever `ssh_source_ranges` are private ranges. Set `[]`
+to close it.
 
 ## Outputs
 

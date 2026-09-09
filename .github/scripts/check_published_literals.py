@@ -794,12 +794,34 @@ def check_management_default_follows_ssh(sources: dict[str, str]) -> list[str]:
             "  That local is where `null` becomes `var.ssh_source_ranges`. Without it the mirror is\n"
             "  unchecked, and a rule that quietly stopped following would read exactly right."
         )
-    if "var.ssh_source_ranges" not in mirror:
+    # BOTH branches, read as the ternary it is. A substring test is not enough: `... == null ?
+    # var.ssh_source_ranges : var.ssh_source_ranges` still mentions both names, and an operator's
+    # explicit `[]` would no longer close the rule -- the override silently gone while the variable,
+    # its default and its description all go on promising it.
+    shape = re.match(
+        r"^var\.gateway_management_source_ranges\s*==\s*null\s*\?\s*(\S+)\s*:\s*(\S+)$",
+        mirror.strip(),
+    )
+    if shape is None:
+        raise GuardError(
+            f"{GCP_TF}: `local.gateway_management_ranges` is `{mirror}`, which is not the\n"
+            "  `var.gateway_management_source_ranges == null ? <mirror> : <override>` shape this guard\n"
+            "  reads. Written another way it may still be right, but nothing here can say so -- and an\n"
+            "  unread mirror is how one of the two gcp routes silently stops following."
+        )
+    if shape.group(1) != "var.ssh_source_ranges":
         failures.append(
-            f"{GCP_TF}: `local.gateway_management_ranges` is `{mirror}`, which does not follow\n"
-            "  `var.ssh_source_ranges`. The variable's default says unset mirrors the inbound-SSH\n"
-            "  ranges; this is the line that has to make that true, and a default of `null` resolving\n"
-            "  to anything else is a rule nobody asked for or a rule that never appears."
+            f"{GCP_TF}: `local.gateway_management_ranges` mirrors `{shape.group(1)}`, not\n"
+            "  `var.ssh_source_ranges`. The variable's default says unset follows the inbound-SSH\n"
+            "  ranges; this is the line that has to make that true, and a `null` resolving anywhere\n"
+            "  else is either a rule nobody asked for or a rule that never appears."
+        )
+    if shape.group(2) != "var.gateway_management_source_ranges":
+        failures.append(
+            f"{GCP_TF}: `local.gateway_management_ranges` resolves a SET value to `{shape.group(2)}`,\n"
+            "  not the variable itself. The mirror is only half the contract: the other half is that an\n"
+            "  operator who sets it -- to `[]` to close the rule, or to a narrower list -- gets what\n"
+            "  they set. This branch is the only thing that keeps that promise."
         )
     return failures
 
