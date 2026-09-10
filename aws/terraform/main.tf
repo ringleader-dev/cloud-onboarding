@@ -168,6 +168,30 @@ locals {
     "ec2:RevokeSecurityGroupEgress",
     "ec2:AuthorizeSecurityGroupIngress",
     "ec2:RevokeSecurityGroupIngress",
+
+    # Provenance for the gateway's own inbound management rule, `tcp 30000-32767 from 0.0.0.0/0`.
+    # An operator can write that rule by hand, and one matching on all three terms is
+    # indistinguishable from Ringleader's, so Ringleader stamps every range it writes with a
+    # description naming the control plane behind it and can then revoke only what that stamp
+    # proves is its own.
+    #
+    # The stamp on a NEW rule needs no grant: it rides the AuthorizeSecurityGroupIngress above.
+    # This action is for a rule that already exists WITHOUT one. An authorize naming an existing
+    # protocol, port range and source is rejected as a duplicate, and the description is not part
+    # of what EC2 compares, so an authorize can never back-fill one. This action can, and it is
+    # the narrowest thing that can: it selects a rule by that same tuple and replaces its
+    # description text, expressing no protocol, port or address of its own, so it cannot add,
+    # remove or widen a rule. (ec2:ModifySecurityGroupRules would also write a description -- and
+    # would also be able to REWRITE the rule, which is why it is not granted here.)
+    #
+    # It acts on the security group itself, exactly as the pair above does, so this statement's
+    # ec2:Vpc and region bounds already cover it and it needs no statement of its own.
+    #
+    # Both halves of the stamp -- writing it on a new rule, back-filling it on an old one -- ship
+    # in Ringleader rather than here, and this grant deliberately arrives ahead of them. A landing
+    # pad is applied ONCE, in your own account, by you, so an action added afterwards costs a
+    # second apply.
+    "ec2:UpdateSecurityGroupRuleDescriptionsIngress",
   ]
 
   # Steering: what makes a workstation's traffic ARRIVE at the DNS / HTTPS proxy when a policy
@@ -191,6 +215,17 @@ locals {
     "ec2:DisassociateRouteTable",
     "ec2:CreateSubnet",
     "ec2:DeleteSubnet",
+  ]
+
+  # The gateway's own reserved address. In a list of its own for the same reason the others are:
+  # the actions_granted output is built from these lists, and an action declared only inside the
+  # statement below is an action that output silently understates.
+  egress_address_actions = [
+    "ec2:AllocateAddress",
+    "ec2:ReleaseAddress",
+    "ec2:AssociateAddress",
+    "ec2:DisassociateAddress",
+    "ec2:DescribeAddresses",
   ]
 
   # The two reads the reconciler and its sweep need, in their own list because they cannot go
@@ -481,15 +516,9 @@ data "aws_iam_policy_document" "permissions" {
   dynamic "statement" {
     for_each = var.enable_egress_control ? [1] : []
     content {
-      sid    = "EgressGatewayAddress"
-      effect = "Allow"
-      actions = [
-        "ec2:AllocateAddress",
-        "ec2:ReleaseAddress",
-        "ec2:AssociateAddress",
-        "ec2:DisassociateAddress",
-        "ec2:DescribeAddresses",
-      ]
+      sid       = "EgressGatewayAddress"
+      effect    = "Allow"
+      actions   = local.egress_address_actions
       resources = ["*"]
 
       dynamic "condition" {

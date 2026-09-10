@@ -180,9 +180,11 @@ Parameters:
     AllowedValues: ["true", "false"]
     Description: >-
       Let Ringleader manage the security groups that restrict where your workstations may
-      connect. On by default; set false to opt out. It grants six security-group actions, a
-      security-group-rules read and ec2:ModifyNetworkInterfaceAttribute, bounded to
-      EgressVpcId (and to AllowedRegion, if set). Granting it restricts nothing on its own --
+      connect. On by default; set false to opt out. It grants seven security-group actions,
+      nine route-table and subnet writes and ec2:ModifyNetworkInterfaceAttribute, all bounded
+      to EgressVpcId (and to AllowedRegion, if set), plus five Elastic IP actions and two
+      reads that take the region bound alone -- an Elastic IP belongs to no VPC, and EC2
+      Describe actions support no resource-level scoping. Granting it restricts nothing on its own --
       until you declare an egress policy on a workstation, nothing changes.
 
   EgressVpcId:
@@ -429,8 +431,9 @@ Resources:
               # carrying that policy, so a fleet sharing a policy costs one group -- which
               # matters, because AWS caps an ENI at 5 security groups and a region at 2,500.
               #
-              # The ingress pair is for the DNS / HTTPS proxy VM, whose own group has to admit
-              # workstation traffic.
+              # The three ingress actions are for the DNS / HTTPS proxy VM, whose own group
+              # has to admit workstation traffic. The third of them marks the rule admitting
+              # inbound management traffic to that VM as Ringleader's own.
               #
               # Bounded by VPC where one is known, since a VPC sits in exactly one region and is
               # the tighter of the two bounds; by AllowedRegion otherwise.
@@ -445,6 +448,23 @@ Resources:
                     - "ec2:RevokeSecurityGroupEgress"
                     - "ec2:AuthorizeSecurityGroupIngress"
                     - "ec2:RevokeSecurityGroupIngress"
+                    # Provenance. The gateway's inbound management rule is
+                    # tcp 30000-32767 from 0.0.0.0/0, which an operator can write by hand and
+                    # Ringleader could then not tell from its own, so Ringleader stamps every
+                    # range it writes with a description naming the control plane behind it
+                    # and can then revoke only what that stamp proves is its. The stamp on a
+                    # NEW rule rides the authorize above; this action is for a rule that
+                    # already exists WITHOUT one, since an authorize naming an existing
+                    # protocol, ports and source is rejected as a duplicate and the
+                    # description is not part of what EC2 compares. It selects a rule and
+                    # replaces its description text, expressing no protocol, port or address
+                    # of its own, so it cannot add, remove or widen a rule.
+                    #
+                    # The code writing those descriptions ships in Ringleader rather than
+                    # here, and this grant arrives ahead of it on purpose: a landing pad is
+                    # applied once, in the customer's own account, so an action added
+                    # afterwards costs a second apply.
+                    - "ec2:UpdateSecurityGroupRuleDescriptionsIngress"
                     # Steering: what makes a workstation's traffic arrive at the DNS / HTTPS
                     # proxy when a policy names hostnames rather than address ranges. An AWS
                     # route table is per subnet, so per-policy steering needs a subnet per

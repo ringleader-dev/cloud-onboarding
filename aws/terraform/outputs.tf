@@ -124,6 +124,7 @@ output "actions_granted" {
       local.egress_group_actions,
       local.egress_route_actions,
       local.egress_describe_actions,
+      local.egress_address_actions,
       ["ec2:ModifyNetworkInterfaceAttribute"],
     ) : [],
     var.enable_artifact_storage ? concat(

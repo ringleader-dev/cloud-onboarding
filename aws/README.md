@@ -172,21 +172,36 @@ egress_vpc_ids = []   # empty uses the VPC this module creates
 EGRESS_CONTROL=false ./deploy.sh   # the CloudFormation path, to opt out
 ```
 
-It grants two sets of actions and no more — the objects a policy compiles to, and the routing
-that makes a workstation's traffic arrive at the proxy:
+It grants exactly these actions and no more — the objects a policy compiles to, the routing
+that makes a workstation's traffic arrive at the proxy, the gateway's own reserved address,
+and the reads that let Ringleader see what it wrote:
 
 | action | why |
 |---|---|
 | `ec2:CreateSecurityGroup`, `ec2:DeleteSecurityGroup` | one group per distinct egress policy |
 | `ec2:AuthorizeSecurityGroupEgress`, `ec2:RevokeSecurityGroupEgress` | keep that group's rules in step with the manifest |
 | `ec2:AuthorizeSecurityGroupIngress`, `ec2:RevokeSecurityGroupIngress` | the egress gateway's own group, which has to admit workstation traffic |
+| `ec2:UpdateSecurityGroupRuleDescriptionsIngress` | mark a rule on that group as Ringleader's own, so that it can revoke only the rules it wrote. It selects an existing rule and replaces its description text, expressing no protocol, port or address of its own: it cannot add, remove or widen a rule. Read the paragraph under this table before granting it |
 | `ec2:ModifyNetworkInterfaceAttribute` | move a running workstation onto the group its policy compiled to — and clear the source/destination check on the proxy's own interface, without which AWS silently drops every packet it forwards |
-| route-table and subnet writes (`CreateRouteTable`, `CreateRoute`, `AssociateRouteTable`, `CreateSubnet`, …) | steer a workstation's traffic at the proxy. An AWS route table is **per subnet**, so steering is per subnet rather than per workstation — which is what `create_governed_subnet` below exists to give it. Not a subnet per policy: one proxy serves many policies from one subnet, telling them apart by source address |
+| nine route-table and subnet writes (`CreateRouteTable`, `DeleteRouteTable`, `CreateRoute`, `ReplaceRoute`, `DeleteRoute`, `AssociateRouteTable`, `DisassociateRouteTable`, `CreateSubnet`, `DeleteSubnet`) | steer a workstation's traffic at the proxy. An AWS route table is **per subnet**, so steering is per subnet rather than per workstation — which is what `create_governed_subnet` below exists to give it. Not a subnet per policy: one proxy serves many policies from one subnet, telling them apart by source address |
+| `ec2:DescribeSecurityGroupRules`, `ec2:DescribeRouteTables` | read back what Ringleader wrote, so a rule or route someone changed is reported rather than silently overwritten. On `*`, in a statement of their own: EC2 `Describe` actions take no resource-level scoping, so a VPC condition on them could never match |
+| `ec2:AllocateAddress`, `ec2:ReleaseAddress`, `ec2:AssociateAddress`, `ec2:DisassociateAddress`, `ec2:DescribeAddresses` | reserve one fixed public address for the gateway VM, so what your upstreams see does not change when Ringleader replaces that machine. Region-bounded only: an Elastic IP is account-level and belongs to no VPC when it is allocated |
 
-**Bound them to a VPC.** With `egress_vpc_ids` set — or with `create_network = true`, where
-the module uses the VPC it made — the permissions apply only to security groups in that VPC.
-If you bring your own network and name no VPC, the only bound is `allowed_regions`, which
-lets Ringleader manage security groups anywhere in that region. The `egress_scope` output
+**The description write is the one grant here that arrives ahead of the code that uses it.**
+The egress gateway's own group admits inbound management traffic with `tcp 30000-32767` from
+`0.0.0.0/0`, and an operator who writes that same rule by hand writes something Ringleader
+cannot tell from its own. So a later build stamps every rule Ringleader writes with a
+description naming the control plane behind it, and back-fills that stamp onto a rule an
+earlier build left unmarked, which is what this action is for. It is granted now because a
+landing pad is applied once, in your own account: an action added afterwards would cost you a
+second apply.
+
+**Bound the writes to a VPC.** With `egress_vpc_ids` set — or with `create_network = true`,
+where the module uses the VPC it made — the security-group, route-table, subnet and interface
+writes apply only to that VPC. If you bring your own network and name no VPC, the only bound is
+`allowed_regions`, which lets Ringleader manage security groups anywhere in that region. The
+reads and the Elastic IP actions take the region bound alone whatever you do, for the reason
+their rows give: neither can be scoped to a VPC at all. The `egress_scope` output
 tells you which of the three you ended up with, so it is worth reading after an apply.
 
 Ringleader compiles each distinct policy into **one** security group and attaches it to the
