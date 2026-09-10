@@ -103,21 +103,27 @@ variable "enable_egress_control" {
     Let Ringleader manage the security groups that restrict where your workstations may
     connect. On by default; set false to opt out.
 
-It grants two sets, both bounded to the VPCs in egress_vpc_ids and to allowed_regions
-    if set:
+It grants two sets of writes, both bounded to the VPCs in egress_vpc_ids and to
+    allowed_regions if set -- plus the Elastic IP actions that reserve the gateway's own
+    address and two reads, which take the region bound alone because neither an Elastic IP
+    nor an EC2 Describe action can be scoped to a VPC at all:
 
       - security-group actions, for the object each compiled policy becomes. Ringleader makes
         one group per distinct policy and attaches it to the workstations carrying that
         policy, so a fleet sharing a policy costs one group -- which matters, because AWS caps
-        an ENI at 5 security groups and a region at 2,500. The two ingress actions are for the
-        DNS / HTTPS proxy VM, whose own group has to admit workstation traffic.
+        an ENI at 5 security groups and a region at 2,500. The three ingress actions are for
+        the DNS / HTTPS proxy VM, whose own group has to admit workstation traffic. The third
+        of them only marks a rule on that group as Ringleader's own, so that a later build can
+        revoke the rules it wrote and leave the rest alone; it replaces a rule's description
+        text and cannot add, remove or widen a rule. It is granted now because a landing pad is
+        applied once, in your own account, so adding an action later costs a second apply.
       - subnet and route-table actions, which is how a workstation's traffic is made to arrive
         at that proxy. An AWS route table is per subnet, so per-policy steering needs a subnet
         per policy.
 
-    ec2:ModifyNetworkInterfaceAttribute does double duty: moving a running workstation between
-    security groups, and clearing the source/destination check on the proxy's own interface,
-    without which AWS silently drops every packet it forwards.
+    ec2:ModifyNetworkInterfaceAttribute, bounded the same way, does double duty: moving a
+    running workstation between security groups, and clearing the source/destination check on
+    the proxy's own interface, without which AWS silently drops every packet it forwards.
 
     Read the actions_granted and egress_scope outputs to see exactly what was granted and how
     tightly it is bounded.
