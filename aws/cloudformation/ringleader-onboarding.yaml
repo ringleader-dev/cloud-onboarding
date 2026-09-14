@@ -387,15 +387,16 @@ Resources:
               # stopped. The same API also sets user-data and IAM cannot tell the two apart, but the
               # role already holds RunInstances, so it widens nothing this grant did not permit.
               #
-              # ModifyVolume grows a workstation's disk without replacing the machine, and EC2
-              # refuses to make a volume smaller. The same call can change a volume's type, IOPS,
-              # throughput and Multi-Attach setting, and so its cost. RunInstances can already
+              # ModifyVolume grows a workstation's root volume without replacing the machine, and
+              # EC2 refuses to make a volume smaller. The same call can change a volume's type,
+              # IOPS, throughput and Multi-Attach setting, and so its cost. RunInstances can already
               # launch a volume of any type, IOPS or throughput, and the role holds no AttachVolume,
-              # so a Multi-Attach volume cannot be attached to a second instance. Ringleader does
-              # not resize a disk yet: the grant is here now because an action added later would ask
-              # every customer to apply this again. DescribeVolumesModifications, in Ec2Describe
-              # above, is the read a resize will need, because EC2 accepts no second change to a
-              # volume until the first reports completed.
+              # so a Multi-Attach volume cannot be attached to a second instance. Ringleader calls
+              # it when you raise a workstation's rootVolumeGiB. Ringleader does not call
+              # DescribeVolumesModifications yet. It is listed in Ec2Describe above and reports a
+              # modification's state, and EC2 accepts no second change to a volume until the first
+              # reaches completed. It is granted now because an action added later would ask every
+              # customer to apply this again.
               - Sid: Ec2Lifecycle
                 Effect: Allow
                 Action:
