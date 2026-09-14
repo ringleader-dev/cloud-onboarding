@@ -354,6 +354,7 @@ Resources:
                   - "ec2:DescribeSecurityGroups"
                   - "ec2:DescribeVpcs"
                   - "ec2:DescribeVolumes"
+                  - "ec2:DescribeVolumesModifications"
                   - "ec2:DescribeNetworkInterfaces"
                   - "ec2:DescribeTags"
                   - "ec2:DescribeAvailabilityZones"
@@ -385,6 +386,16 @@ Resources:
               # without it that cycle ends in UnauthorizedOperation and the workstation rests
               # stopped. The same API also sets user-data and IAM cannot tell the two apart, but the
               # role already holds RunInstances, so it widens nothing this grant did not permit.
+              #
+              # ModifyVolume grows a workstation's disk without replacing the machine, and EC2
+              # refuses to make a volume smaller. The same call can change a volume's type, IOPS,
+              # throughput and Multi-Attach setting, and so its cost. RunInstances can already
+              # launch a volume of any type, IOPS or throughput, and the role holds no AttachVolume,
+              # so a Multi-Attach volume cannot be attached to a second instance. Ringleader does
+              # not resize a disk yet: the grant is here now because an action added later would ask
+              # every customer to apply this again. DescribeVolumesModifications, in Ec2Describe
+              # above, is the read a resize will need, because EC2 accepts no second change to a
+              # volume until the first reports completed.
               - Sid: Ec2Lifecycle
                 Effect: Allow
                 Action:
@@ -393,6 +404,7 @@ Resources:
                   - "ec2:StartInstances"
                   - "ec2:StopInstances"
                   - "ec2:ModifyInstanceAttribute"
+                  - "ec2:ModifyVolume"
                   - "ec2:CreateTags"
                   - "ec2:DeleteTags"
                 Resource: "*"
@@ -442,7 +454,6 @@ Resources:
                 - Sid: EgressSecurityGroups
                   Effect: Allow
                   Action:
-                    - "ec2:CreateSecurityGroup"
                     - "ec2:DeleteSecurityGroup"
                     - "ec2:AuthorizeSecurityGroupEgress"
                     - "ec2:RevokeSecurityGroupEgress"
@@ -469,14 +480,12 @@ Resources:
                     # proxy when a policy names hostnames rather than address ranges. An AWS
                     # route table is per subnet, so per-policy steering needs a subnet per
                     # policy and a route table to go with it.
-                    - "ec2:CreateRouteTable"
                     - "ec2:DeleteRouteTable"
                     - "ec2:CreateRoute"
                     - "ec2:ReplaceRoute"
                     - "ec2:DeleteRoute"
                     - "ec2:AssociateRouteTable"
                     - "ec2:DisassociateRouteTable"
-                    - "ec2:CreateSubnet"
                     - "ec2:DeleteSubnet"
                   Resource: "*"
                   Condition: !If
@@ -491,6 +500,39 @@ Resources:
                       - StringEquals:
                           "aws:RequestedRegion": !Ref AllowedRegion
                       - !Ref AWS::NoValue
+                - !Ref AWS::NoValue
+
+              # The creates: a security group per compiled policy, and the route table and subnet
+              # steering uses. A statement of their own because the ec2:Vpc condition above can
+              # never match a create. AWS's service reference lists what each create is authorized
+              # against, the new object and the VPC it goes in, and for a create it lists no
+              # ec2:Vpc key on either, so under that condition every create is refused. They are
+              # bounded to the same VPC by resource ARN instead, because the service reference lists
+              # the VPC among those resources. AWS's example policies do not show a create scoped
+              # this way, so that bound rests on the service reference alone.
+              - !If
+                - WantEgressControl
+                - Sid: EgressCreate
+                  Effect: Allow
+                  Action:
+                    - "ec2:CreateSecurityGroup"
+                    - "ec2:CreateRouteTable"
+                    - "ec2:CreateSubnet"
+                  Resource: !If
+                    - HasAnyEgressVpc
+                    - - !If
+                        - HasEgressVpc
+                        - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:vpc/${EgressVpcId}"
+                        - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:vpc/${Vpc}"
+                      - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:security-group/*"
+                      - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:route-table/*"
+                      - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:subnet/*"
+                    - "*"
+                  Condition: !If
+                    - HasRegionCondition
+                    - StringEquals:
+                        "aws:RequestedRegion": !Ref AllowedRegion
+                    - !Ref AWS::NoValue
                 - !Ref AWS::NoValue
 
               # The two reads the reconciler and its sweep need, in a statement of their own

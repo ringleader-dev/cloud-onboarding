@@ -63,11 +63,12 @@ defeating the chokepoint — and the gateway cannot forward the reply either, be
 from the box's **internal** address. So the management connection has to terminate **at the
 gateway**.
 
-On AWS and Azure the gateway's inbound firewall is an object Ringleader creates and owns — a
-security group on one, an NSG on the other — so it makes that admission itself and no landing-pad
-change is needed there. GCE has no per-instance firewall object: a gateway's inbound rules are VPC
-ingress rules in **your** project, and everything Ringleader writes here is `EGRESS`. This variable
-is the only place that admission can live.
+On AWS the gateway's inbound firewall is a security group Ringleader creates and owns, so it makes
+that admission itself and no landing-pad change is needed there. On Azure Ringleader writes it in
+the NSG on the gateway VM's NIC, but Azure also evaluates the gateway subnet's NSG, which belongs to
+the landing pad, so the Azure module carries the same admission. GCE has no per-instance firewall
+object: a gateway's inbound rules are VPC ingress rules in **your** project, and everything
+Ringleader writes here is `EGRESS`. This variable is the only place that admission can live.
 
 It **follows `ssh_source_ranges`** rather than asking again, because it is not a second decision
 about who your engineers are — it is the first one still being true after a policy steers one of

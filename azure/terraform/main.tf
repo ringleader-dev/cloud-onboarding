@@ -212,25 +212,27 @@ resource "azurerm_subnet" "workstations" {
 # IT GETS AN NSG OF ITS OWN, and the reason is the one thing about Azure that is easy to state
 # backwards: "Azure allows intra-VNet traffic and denies the internet" describes the DEFAULT RULES
 # INSIDE an NSG, not the platform. A subnet with no NSG and a NIC with no NSG have no rules at all,
-# so nothing is filtered -- and the gateway VM Ringleader builds here carries a STANDALONE PUBLIC IP
-# (azgateway's EnsureGatewayNetwork creates one before the NIC, unconditionally), which would put the
-# proxy's listeners and its sshd on the internet. Ringleader does attach an NSG to that VM's own NIC,
-# so this one is the second layer rather than the only one; a NIC NSG that failed to be created, or
-# was removed, would otherwise leave nothing.
+# so nothing is filtered -- and the gateway VM Ringleader builds here carries a public address
+# whenever EgressGateway.spec.publicAddress asks for one, which would put the proxy's listeners and
+# its sshd on the internet. Ringleader does attach an NSG to that VM's own NIC, so this one is the
+# second layer rather than the only one; a NIC NSG that failed to be created, or was removed, would
+# otherwise leave nothing.
 #
-# IT CARRIES ONE RULE, AND THE DEFAULTS ARE NOT A SUBSTITUTE FOR IT. Azure's AllowVnetInBound at
-# 65000 is `source VirtualNetwork -> DESTINATION VirtualNetwork`, and a steered packet is neither:
-# a UDR next hop does not rewrite the destination, so what arrives here is `src = the governed
-# workstation, dst = the public host it was talking to`. That misses AllowVnetInBound, falls through
-# to DenyAllInBound at 65500, and every governed box loses the internet while the gateway itself
-# stays healthy and the route stays in place -- the silent outage this whole feature exists to
-# remove. So the rule below allows the VNet inbound to ANY destination, which is exactly what
-# Ringleader writes on the gateway VM'''s own NIC (azgateway'''s `gatewayNSGRule`); this group is the
-# second layer, and the two must say the same thing or the outer one decides.
+# ITS FIRST RULE IS NOT OPTIONAL, AND THE DEFAULTS ARE NOT A SUBSTITUTE FOR IT. Azure's
+# AllowVnetInBound at 65000 is `source VirtualNetwork -> DESTINATION VirtualNetwork`, and a steered
+# packet is neither: a UDR next hop does not rewrite the destination, so what arrives here is
+# `src = the governed workstation, dst = the public host it was talking to`. That misses
+# AllowVnetInBound, falls through to DenyAllInBound at 65500, and every governed box loses the
+# internet while the gateway itself stays healthy and the route stays in place -- the silent outage
+# this whole feature exists to remove. So the rule below allows the VNet inbound to ANY destination,
+# which is exactly what Ringleader writes on the gateway VM's own NIC; this group is the second
+# layer, and the two must say the same thing or the outer one decides.
 #
-# Everything else is Azure'''s defaults, which is the point: one allow plus DenyAllInBound is
-# "reachable from inside the network, from nowhere else". Outbound is untouched, so the gateway keeps
-# the internet access it exists to police (AllowInternetOutBound at 65001).
+# The second rule, gateway_management below, admits management traffic to the gateway VM from the
+# ranges you let reach your workstations. Everything else is Azure's defaults, which is the point:
+# those two allows plus DenyAllInBound are "reachable from inside the network, and on the management
+# ports from the ranges you named, and from nowhere else". Outbound is untouched, so the gateway
+# keeps the internet access it exists to police (AllowInternetOutBound at 65001).
 #
 # The subnet is associated with the NAT gateway below, so anything placed here has egress without an
 # address of its own.
@@ -265,6 +267,56 @@ resource "azurerm_network_security_rule" "gateway_vnet_inbound" {
   # same as denying it.
   destination_address_prefix = "*"
   destination_port_range     = "*"
+}
+
+locals {
+  # Unset mirrors ssh_source_ranges, exactly as secondary_ssh_ranges does: if you opened 22 to your
+  # engineers, a policy steering one of their boxes must not be what takes it away again. An
+  # explicit [] closes the rule; naming no ssh_source_ranges opens nothing here either.
+  gateway_management_ranges = var.gateway_management_source_ranges == null ? var.ssh_source_ranges : var.gateway_management_source_ranges
+
+  # The ports the rule below admits. Fixed by this module rather than asked of you, for the reason
+  # secondary_ssh_port is: a port Ringleader does not use is a rule that reads correctly in the
+  # portal and admits nothing. It is the same set the GCP landing pad opens on its gateway, and an
+  # ENVELOPE rather than one port because a landing pad is applied once, whichever way Ringleader
+  # carries a management connection through the gateway: an SSH jump host would answer on 22, and a
+  # per-box forward takes one port from 30000-32767. That band sits below Linux's default ephemeral
+  # range (32768-60999), so on a default kernel a forwarded port does not collide with a source port
+  # the gateway is using.
+  gateway_management_ports = ["22", "30000-32767"]
+}
+
+# Inbound MANAGEMENT to the gateway VM -- the rule that decides whether a workstation an egress
+# policy STEERS stays reachable. It follows ssh_source_ranges; gateway_management_source_ranges = []
+# closes it.
+#
+# A steered workstation stops answering on its own address from outside the VNet. The steering
+# object is a 0.0.0.0/0 route, and a default route carries the REPLY to a connection the box never
+# opened as much as it carries what the box sends, so the session never establishes. The management
+# connection therefore goes through the gateway VM, which forwards it to the box from inside the
+# VNet. Ringleader admits that traffic in the NSG on the gateway VM's NIC, but for inbound traffic
+# Azure evaluates a subnet's NSG before a NIC's and both must allow -- and this subnet's NSG is
+# yours. Without this rule the connection meets DenyAllInBound here and never reaches the NIC.
+#
+# What it admits. Ringleader puts only the gateway VM in this subnet, and the NSG on the gateway
+# VM's NIC still decides what reaches it. From the internet nothing is reachable until the gateway
+# has a public address, which it has only when EgressGateway.spec.publicAddress asks for one.
+# Sources inside the VNet are already admitted by the rule above, so this adds nothing for them. A
+# forwarded connection keeps its source address, so the steered box's own subnet NSG still decides
+# whether to accept it: this rule cannot reach a box that box's own rules would refuse.
+resource "azurerm_network_security_rule" "gateway_management" {
+  count                       = var.create_network && var.create_gateway_subnet && length(local.gateway_management_ranges) > 0 ? 1 : 0
+  name                        = "allow-management-inbound"
+  resource_group_name         = var.resource_group_name
+  network_security_group_name = azurerm_network_security_group.gateway[0].name
+  priority                    = 4010
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_address_prefixes     = local.gateway_management_ranges
+  source_port_range           = "*"
+  destination_address_prefix  = "*"
+  destination_port_ranges     = local.gateway_management_ports
 }
 
 resource "azurerm_subnet_network_security_group_association" "gateway" {

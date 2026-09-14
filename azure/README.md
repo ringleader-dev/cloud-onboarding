@@ -272,16 +272,34 @@ gateway's per-GB processing charge nor the source address your upstreams see. (O
 other way round: an external address there bypasses Cloud NAT, which is why that cloud's README
 prices the two against each other.)
 
-**The NSG matters, and its one rule matters more.** Azure's default security rules are rules
-*inside* a group, so a bare subnet is not "closed by default" — it is unfiltered. That matters
+**The NSG matters, and its first rule matters more.** Azure's default security rules are rules
+*inside* a group, so a bare subnet is not "closed by default": it is unfiltered. That matters
 whenever the gateway does carry a public address, and it costs nothing when it does not. But the
-group cannot be an *empty* one: `AllowVnetInBound` allows the VNet **to a VNet
-destination**, and a packet steered to the proxy still carries the **public** address the
-workstation was reaching, because a route's next hop does not rewrite the destination. An empty
-group would drop exactly the traffic the proxy exists to carry, while the gateway went on
-reporting healthy. So the group carries one rule — allow the VNet inbound to **any** destination —
-which is the same rule Ringleader writes on that VM's own NIC. Both layers must say it; the outer
-one decides. Outbound is untouched.
+group cannot be an *empty* one. `AllowVnetInBound` allows the VNet **to a VNet destination**, and a
+packet steered to the proxy still carries the **public** address the workstation was reaching,
+because a route's next hop does not rewrite the destination. An empty group would drop exactly the
+traffic the proxy exists to carry, while the gateway went on reporting healthy. So the group's
+first rule allows the VNet inbound to **any** destination, which is the same rule Ringleader writes
+in the NSG on the gateway VM's NIC. Both layers must say it, and the outer one decides. Outbound is
+untouched.
+
+**Its second rule keeps a steered workstation reachable, and it follows `ssh_source_ranges`.** A
+workstation an egress policy steers stops answering on its own address from outside the VNet,
+because the steering route is `0.0.0.0/0` and a default route also carries the *reply* to a
+connection the box never opened. So the management connection goes through the gateway VM, which
+forwards it to the box. Ringleader admits that traffic in the NSG on the gateway VM's NIC. For
+inbound traffic Azure evaluates the subnet's NSG before the NIC's, and both must allow, so this
+group carries the other half: `allow-management-inbound`, TCP 22 and 30000-32767, from the ranges in
+`ssh_source_ranges`. You do not supply the ports.
+
+Ringleader puts only the gateway VM in this subnet, and the NSG on its NIC still decides what
+reaches it. From the internet nothing is reachable until the gateway has a public address, which it
+gets only when `EgressGateway.spec.publicAddress` asks for one. Sources inside the VNet were already
+admitted by the first rule. A forwarded connection keeps its source address, so the steered
+workstation's own NSG still decides whether to accept it. To close the rule, set
+`gateway_management_source_ranges = []` (Terraform) or `GATEWAY_MANAGEMENT_SOURCE_CIDR=none`
+(`deploy.sh`). A steered workstation is then reachable only from inside the VNet or a network joined
+to it.
 
 **Hand its id back as `spec.subnet` on the `EgressGateway`.** It is `gateway_subnet_id` in the
 handoff, and Ringleader builds no gateway VM until it has one: a route table attaches per

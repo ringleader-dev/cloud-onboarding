@@ -356,6 +356,36 @@ variable "secondary_ssh_source_ranges" {
   EOT
 }
 
+variable "gateway_management_source_ranges" {
+  type        = list(string)
+  default     = null
+  description = <<-EOT
+    CIDRs allowed through the gateway subnet's NSG to the EGRESS GATEWAY VM on the management
+    ports, when create_network and create_gateway_subnet are set.
+
+    Unset -- the default -- mirrors ssh_source_ranges, so the engineers who could reach a
+    workstation still can after an egress policy steers it. Set it to [] to close the rule, or to a
+    narrower list to open it to fewer. Name no ssh_source_ranges and this opens nothing either.
+
+    What it is for. A workstation an egress policy steers stops answering on its own address from
+    outside the VNet, because the steering route also carries the reply to a connection the box
+    never opened. The management connection then goes through the gateway VM, which forwards it to
+    the box. Ringleader admits that traffic in the NSG on the gateway VM's NIC, but for inbound
+    traffic Azure evaluates the subnet's NSG first and both must allow. This variable is the
+    subnet's half.
+
+    What it exposes. The rule admits TCP 22 and 30000-32767 into the gateway subnet. Ringleader puts
+    only the gateway VM there, and the NSG on that VM's NIC still decides what reaches it. From the
+    internet nothing is reachable until the gateway has a public address, which it has only when
+    EgressGateway.spec.publicAddress asks for one. A forwarded connection keeps its source address,
+    so the steered workstation's own NSG still decides whether to accept it.
+
+    Set [] if you reach the VNet privately. Without the rule a steered workstation is reachable only
+    from inside the VNet or a network joined to it. You do not supply the ports: the module carries
+    them.
+  EOT
+}
+
 variable "name_prefix" {
   type        = string
   default     = "ringleader"

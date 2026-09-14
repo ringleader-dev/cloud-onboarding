@@ -113,11 +113,12 @@ you are running, every module **follows whatever you set for port 22**:
 | `aws/cloudformation/deploy.sh` | `SECONDARY_SSH_SOURCE_CIDR` | mirrors `SSH_SOURCE_CIDR`; `none` closes it |
 | `azure/arm/deploy.sh` | `SECONDARY_SSH_SOURCE_CIDR` | mirrors `SSH_SOURCE_CIDR`; `none` closes it |
 
-One more thing follows port 22, on GCP only: the rule admitting you to the **egress gateway VM**,
-without which a workstation an egress policy steers keeps its egress and stops answering on its own
-address. `gateway_management_source_ranges` (Terraform) and `GATEWAY_MANAGEMENT_RANGES` (the
-script) both mirror the ranges above; `[]` and `none` close them. AWS and Azure need no equivalent
-— there the gateway's inbound firewall is an object Ringleader creates and owns.
+One more thing follows port 22, on GCP and Azure: the rule admitting you to the **egress gateway
+VM**. Without it, a workstation an egress policy steers keeps its egress and stops answering on its
+own address. Both Terraform modules call it `gateway_management_source_ranges`. The GCP script calls
+it `GATEWAY_MANAGEMENT_RANGES`, and the Azure `deploy.sh` calls it `GATEWAY_MANAGEMENT_SOURCE_CIDR`.
+All of them mirror the ranges above, and `[]` and `none` close them. AWS needs no equivalent,
+because there the gateway's inbound firewall is a security group Ringleader creates and owns.
 
 Open nothing for 22 and nothing opens for 2222 either. **You never supply the port number** —
 each asset carries it, so it cannot drift from the port Ringleader actually dials.
@@ -192,23 +193,27 @@ Two things follow that are worth knowing before you budget:
   proxy holds a rule per box and refuses a source it has no rule for, so an ungoverned
   workstation sharing a steered subnet loses its egress the moment steering lands. That is the
   whole reason for a second subnet rather than steering the landing pad's own.
-- **A steered workstation stops answering on its own address, and on GCP only, the landing pad
-  is what restores it.** The steering object is a `0.0.0.0/0` route, and a default route carries
-  the *reply* to a connection the box never opened as much as it carries what the box sends — so
-  once a policy naming hostnames takes hold, `rl shell` and everything built on it stop working
-  from outside the VPC while egress keeps working. Nothing inside the box can undo that (a guest
-  routing table does not participate in VPC routing, which is exactly why the box's own root
-  cannot escape the chokepoint either), so the management connection has to terminate **at the
-  proxy**. On AWS and Azure that admission is a security group or an NSG Ringleader owns and
-  writes itself. GCE has no per-instance firewall object, so on GCP it is a VPC ingress rule in
-  your project — and the GCP landing pad now creates it, **following `ssh_source_ranges`**, so
-  there is nothing extra to set. From outside the VPC it opens nothing until you ask Ringleader for
+- **A steered workstation stops answering on its own address, and on GCP and Azure the landing
+  pad is part of what restores it.** The steering object is a `0.0.0.0/0` route, and a default
+  route carries the *reply* to a connection the box never opened as much as it carries what the
+  box sends. So once a policy naming hostnames takes hold, `rl shell` and everything built on it
+  stop working from outside the VPC, while egress keeps working. Nothing inside the box can undo
+  that (a guest routing table does not take part in VPC routing, which is also why the box's own
+  root cannot escape the chokepoint), so the management connection has to end **at the proxy**.
+  How that connection is admitted differs by cloud:
+  - On AWS it is a security group Ringleader owns and writes itself.
+  - On Azure Ringleader writes it in the NSG on the proxy VM's NIC. Azure also evaluates the
+    gateway subnet's NSG, which is yours, so the Azure landing pad adds the same admission there.
+  - On GCP, which has no per-instance firewall object, it is a VPC ingress rule in your project.
+
+  Both landing pads create their rule **following `ssh_source_ranges`**, so there is nothing extra
+  to set, and `gateway_management_source_ranges = []` (`none` in the scripts) closes it. On Azure
+  the rule adds nothing for sources inside the VNet, which the gateway subnet already admits. On
+  GCP, from outside the VPC the rule opens nothing until you ask Ringleader for
   `EgressGateway.spec.publicAddress` (off by default, and the proxy has no external address before
-  it); from inside the VPC, or from a network you have joined to it, it is live on apply — so treat
-  it as "these CIDRs may reach the proxy", and close it with
-  `gateway_management_source_ranges = []` if that is not what you want. Closed, a steered box is
-  reachable only from inside the VPC — which it *reports*, rather than looking healthy while nobody
-  can open it.
+  it). From inside the VPC, or from a network you have joined to it, it is live on apply, so treat
+  it as "these CIDRs may reach the proxy". On GCP a closed rule leaves a steered box reachable only
+  from inside the VPC, which it *reports* rather than looking healthy while nobody can open it.
 - **Put the proxy in the same zone as the workstations it serves.** Same-zone traffic is free
   on all three clouds; cross-zone is $0.01/GB, charged to the sender on GCP and to **both
   sides** on AWS and Azure. At 10 TB/month a misplaced proxy costs $100–$200, which is more
@@ -308,7 +313,7 @@ enable_workstation_identities = false
 enable_artifact_storage       = false
 allow_internal_traffic        = false   # GCP only
 secondary_ssh_source_ranges   = []
-gateway_management_source_ranges = []   # GCP only
+gateway_management_source_ranges = []   # GCP and Azure
 ```
 
 Run `terraform plan` before applying, as always — the plan is the authority on what changes.

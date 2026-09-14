@@ -77,6 +77,8 @@ AWS_TF = "aws/terraform/main.tf"
 AWS_CFN = "aws/cloudformation/ringleader-onboarding.yaml"
 AZURE_TF = "azure/terraform/main.tf"
 AZURE_ARM = "azure/arm/azuredeploy-network.json"
+AZURE_VARS = "azure/terraform/variables.tf"
+AZURE_SH = "azure/arm/deploy.sh"
 
 
 # --------------------------------------------------------------------------------------
@@ -285,7 +287,7 @@ def shell_mirror_default(name: str):
 # would then report the assignment it can see while the script runs with another value.
 GUARDED_SHELL_VARS = frozenset({
     "GATEWAY_TAG", "SSH_TAG", "SECONDARY_SSH_TAG", "SECONDARY_SSH_PORT",
-    "MANAGED_BUCKET_PREFIX", "GATEWAY_MANAGEMENT_RULES",
+    "MANAGED_BUCKET_PREFIX", "GATEWAY_MANAGEMENT_RULES", "GATEWAY_MANAGEMENT_SOURCE_CIDR",
     # Its VALUE is the operator's, so nothing below pins it -- but WHO it admits to the gateway
     # appliance is the whole of the opt-in, and the closed grammar protects only the names it is
     # given. Left out, `for GATEWAY_MANAGEMENT_RANGES in 0.0.0.0/0; do true; done` (a loop variable
@@ -417,6 +419,45 @@ def arm_secondary_ssh_port(source: str, path: str) -> str:
     return str(ports[0])
 
 
+def arm_gateway_management_ports(source: str, path: str) -> str:
+    """The port set of the ARM template's gateway-management rules, normalised like the HCL list.
+
+    Every rule must be TCP and spell its ports ONCE, as `destinationPortRanges`. ARM accepts a
+    singular `destinationPortRange` beside the list, and a second spelling is a port set this guard
+    would not compare -- so it is refused rather than read.
+    """
+    doc = json.loads(source)
+    rules = doc.get("variables", {}).get("gatewayManagementRules")
+    if not rules:
+        raise GuardError(
+            f"{path}: no `variables.gatewayManagementRules`.\n\n"
+            "  That array is the rule admitting management traffic through the gateway subnet's NSG.\n"
+            "  If it was renamed or folded into another variable, move this guard with it."
+        )
+    sets = set()
+    for rule in rules:
+        props = rule.get("properties", {})
+        if props.get("protocol") != "Tcp":
+            raise GuardError(
+                f"{path}: a `gatewayManagementRules` rule admits protocol `{props.get('protocol')}`, not `Tcp`.\n\n"
+                "  The Terraform module and the gcp routes admit TCP alone, so this route would grant\n"
+                "  something the others do not, on a pad nobody can narrow again once it is applied."
+            )
+        if "destinationPortRange" in props:
+            raise GuardError(
+                f"{path}: a `gatewayManagementRules` rule sets `destinationPortRange` as well as\n"
+                "  `destinationPortRanges`. That is a second spelling of the port set, free to drift from\n"
+                "  the one this guard compares."
+            )
+        ports = props.get("destinationPortRanges")
+        if not isinstance(ports, list) or not all(isinstance(x, str) for x in ports):
+            raise GuardError(f"{path}: a `gatewayManagementRules` rule has no `destinationPortRanges` list.")
+        sets.add(",".join(ports))
+    if len(sets) != 1:
+        raise GuardError(f"{path}: `gatewayManagementRules` open different port sets: {sorted(sets)}.")
+    return sets.pop()
+
+
 # --------------------------------------------------------------------------------------
 # The literals
 # --------------------------------------------------------------------------------------
@@ -504,27 +545,28 @@ LITERALS = [
         other_half="",
         why=(
             "A workstation an egress policy steers stops answering on its own address from outside\n"
-            "  its VPC -- the steering object is a 0.0.0.0/0 route, so it carries the reply to a\n"
+            "  its network -- the steering object is a 0.0.0.0/0 route, so it carries the reply to a\n"
             "  connection the box never opened. The only repair is to terminate the management\n"
-            "  connection AT the gateway, and on gcp the gateway's inbound firewall is a VPC rule in\n"
-            "  the customer's project rather than an object Ringleader owns. This is the port set that\n"
-            "  rule opens, and the two gcp paths must open the SAME one: a customer who followed the\n"
-            "  Terraform README and a customer who ran the script would otherwise get landing pads on\n"
-            "  which different halves of the feature work.\n\n"
+            "  connection AT the gateway, and on two clouds the landing pad carries that admission: on\n"
+            "  gcp the gateway's inbound firewall is a VPC rule in the customer's project, and on azure\n"
+            "  the gateway SUBNET's NSG, which Azure evaluates before the NSG on the gateway VM's\n"
+            "  NIC, is the landing pad's. This is the port set those rules open, and every route on both\n"
+            "  clouds must open the SAME one: customers who took different routes would otherwise get\n"
+            "  landing pads on which different halves of the feature work.\n\n"
             "  It is an ENVELOPE rather than one port, deliberately. The two shapes that can carry\n"
             "  management through a gateway need different halves of it -- an SSH jump host on the\n"
             "  appliance answers on 22, a per-box DNAT bastion needs one high port per governed box --\n"
             "  and a landing pad is applied ONCE, by the customer, in an account we cannot re-enter.\n"
             "  Narrowing this later does not narrow the pads already applied; widening it is a\n"
-            "  re-apply asked of every customer. Ringleader chooses WITHIN this envelope: the\n"
-            "  mechanism that terminates a management session at the gateway (RIN-1999) has no\n"
-            "  compiled counterpart to pin against yet, and when it lands it binds itself to these\n"
-            "  ports rather than the other way round. Changing this value is a decision about every\n"
-            "  pad already applied, not about the next one."
+            "  re-apply asked of every customer. Ringleader chooses WITHIN this envelope and binds its\n"
+            "  forwarded ports to it, not the other way round. Changing this value is a decision about\n"
+            "  every pad already applied, not about the next one."
         ),
         sites=[
             Site(GCP_TF, "local.gateway_management_ports", hcl_local_port_set("gateway_management_ports")),
             Site(GCP_SH, "GATEWAY_MANAGEMENT_RULES", shell_gcloud_rules("GATEWAY_MANAGEMENT_RULES")),
+            Site(AZURE_TF, "local.gateway_management_ports", hcl_local_port_set("gateway_management_ports")),
+            Site(AZURE_ARM, "variables.gatewayManagementRules", arm_gateway_management_ports),
         ],
     ),
     Literal(
@@ -747,38 +789,52 @@ def check_management_port_wiring(sources: dict[str, str]) -> list[str]:
 
 
 def check_management_default_follows_ssh(sources: dict[str, str]) -> list[str]:
-    """The inbound-management admission must FOLLOW the inbound-SSH ranges, on both paths.
+    """The inbound-management admission must FOLLOW the inbound-SSH ranges, on every route.
 
     This is the property that makes the rule land without a second decision: an operator who named
     the CIDRs their engineers connect from keeps reaching those boxes after a policy steers one.
     It is checked rather than assumed because the two ways of losing it are both one line and both
-    read as caution -- an empty default here, or a hardcoded list there -- and either leaves ONE of
-    the two gcp routes silently unable to reach a steered box while the other can.
+    read as caution -- an empty default here, or a hardcoded list there -- and either leaves ONE
+    route silently unable to reach a steered box while the other can. Four routes carry it: both on
+    gcp, and both on azure.
 
-    It does not check WHO is admitted: the ranges are the operator's. What it checks is that
-    neither path invents an answer of its own, and that neither stops following.
+    It does not check WHO is admitted: the ranges are the operator's. What it checks is that no
+    route invents an answer of its own, and that none stops following.
 
-    `shell_mirror_default` runs the closed grammar on the way and reads the script's two-statement
+    `shell_mirror_default` runs the closed grammar on the way and reads each script's two-statement
     idiom exactly -- one assignment carrying the default, one emptying it for `none`. A third, or a
     second carrying a value, is refused: the rule would then be built from something this guard
     never read.
     """
     failures = []
 
-    sh_default = shell_mirror_default("GATEWAY_MANAGEMENT_RANGES")(sources[GCP_SH], GCP_SH)
-    if sh_default != "$SSH_RANGES":
-        failures.append(
-            f"{GCP_SH}: `GATEWAY_MANAGEMENT_RANGES` defaults to `{sh_default}`, not `$SSH_RANGES`.\n\n"
-            "  Empty, an operator who opened 22 to their engineers loses those boxes the moment a\n"
-            "  policy steers one, and gets no rule from the path the Terraform module would have\n"
-            "  given them. A hardcoded list is worse: it admits somebody to the egress gateway\n"
-            "  appliance that the operator never named. Follow the ranges they already chose."
-        )
+    for path, name, want in (
+        (GCP_SH, "GATEWAY_MANAGEMENT_RANGES", "$SSH_RANGES"),
+        (AZURE_SH, "GATEWAY_MANAGEMENT_SOURCE_CIDR", "$SSH_SOURCE_CIDR"),
+    ):
+        sh_default = shell_mirror_default(name)(sources[path], path)
+        if sh_default != want:
+            failures.append(
+                f"{path}: `{name}` defaults to `{sh_default}`, not `{want}`.\n\n"
+                "  Empty, an operator who opened 22 to their engineers loses those boxes the moment a\n"
+                "  policy steers one, and gets no rule from the path the Terraform module would have\n"
+                "  given them. A hardcoded list is worse: it admits somebody to the egress gateway\n"
+                "  appliance that the operator never named. Follow the ranges they already chose."
+            )
 
-    tf_default = hcl_variable_default("gateway_management_source_ranges")(sources[GCP_VARS], GCP_VARS)
+    for tf, variables in ((GCP_TF, GCP_VARS), (AZURE_TF, AZURE_VARS)):
+        failures += terraform_management_mirror(sources, tf, variables)
+    return failures
+
+
+def terraform_management_mirror(sources: dict[str, str], tf: str, variables: str) -> list[str]:
+    """One Terraform module's half of the mirror: a `null` default, and the local that gives it meaning."""
+    failures = []
+
+    tf_default = hcl_variable_default("gateway_management_source_ranges")(sources[variables], variables)
     if tf_default != "null":
         failures.append(
-            f"{GCP_VARS}: `gateway_management_source_ranges` defaults to `{tf_default}`, not `null`.\n\n"
+            f"{variables}: `gateway_management_source_ranges` defaults to `{tf_default}`, not `null`.\n\n"
             "  `null` is what MIRRORS ssh_source_ranges here -- the shape secondary_ssh_source_ranges\n"
             "  already uses. `[]` would be a module that silently stops following, and any other\n"
             "  default is the module choosing who may reach the appliance in the operator's account."
@@ -787,10 +843,10 @@ def check_management_default_follows_ssh(sources: dict[str, str]) -> list[str]:
     # ...and the mirror has to be spelled against the variable it claims to follow. A default of
     # `null` whose local resolves to something else is a promise the description makes and the
     # module does not keep.
-    mirror = hcl_locals(strip_hcl_comments(sources[GCP_TF])).get("gateway_management_ranges")
+    mirror = hcl_locals(strip_hcl_comments(sources[tf])).get("gateway_management_ranges")
     if mirror is None:
         raise GuardError(
-            f"{GCP_TF}: no `gateway_management_ranges` in any `locals` block.\n\n"
+            f"{tf}: no `gateway_management_ranges` in any `locals` block.\n\n"
             "  That local is where `null` becomes `var.ssh_source_ranges`. Without it the mirror is\n"
             "  unchecked, and a rule that quietly stopped following would read exactly right."
         )
@@ -804,24 +860,106 @@ def check_management_default_follows_ssh(sources: dict[str, str]) -> list[str]:
     )
     if shape is None:
         raise GuardError(
-            f"{GCP_TF}: `local.gateway_management_ranges` is `{mirror}`, which is not the\n"
+            f"{tf}: `local.gateway_management_ranges` is `{mirror}`, which is not the\n"
             "  `var.gateway_management_source_ranges == null ? <mirror> : <override>` shape this guard\n"
             "  reads. Written another way it may still be right, but nothing here can say so -- and an\n"
-            "  unread mirror is how one of the two gcp routes silently stops following."
+            "  unread mirror is how one route silently stops following."
         )
     if shape.group(1) != "var.ssh_source_ranges":
         failures.append(
-            f"{GCP_TF}: `local.gateway_management_ranges` mirrors `{shape.group(1)}`, not\n"
+            f"{tf}: `local.gateway_management_ranges` mirrors `{shape.group(1)}`, not\n"
             "  `var.ssh_source_ranges`. The variable's default says unset follows the inbound-SSH\n"
             "  ranges; this is the line that has to make that true, and a `null` resolving anywhere\n"
             "  else is either a rule nobody asked for or a rule that never appears."
         )
     if shape.group(2) != "var.gateway_management_source_ranges":
         failures.append(
-            f"{GCP_TF}: `local.gateway_management_ranges` resolves a SET value to `{shape.group(2)}`,\n"
+            f"{tf}: `local.gateway_management_ranges` resolves a SET value to `{shape.group(2)}`,\n"
             "  not the variable itself. The mirror is only half the contract: the other half is that an\n"
             "  operator who sets it -- to `[]` to close the rule, or to a narrower list -- gets what\n"
             "  they set. This branch is the only thing that keeps that promise."
+        )
+    return failures
+
+
+def check_azure_management_wiring(sources: dict[str, str]) -> list[str]:
+    """The azure rule must open the pinned ports, to the followed ranges, on the gateway SUBNET's NSG.
+
+    The gcp wiring rule on the other cloud: a pinned value the rule does not name is a value nothing
+    applies. Azure evaluates the subnet's NSG before the one on the gateway VM's NIC, so a rule on
+    any other group, or opening its ports by a second spelling, leaves a steered workstation
+    unreachable while every object reads as written.
+    """
+    failures = []
+
+    body = dict(hcl_resources(strip_hcl_comments(sources[AZURE_TF]), "azurerm_network_security_rule")).get(
+        "gateway_management"
+    )
+    if body is None:
+        raise GuardError(
+            f"{AZURE_TF}: no `azurerm_network_security_rule` named `gateway_management`.\n\n"
+            "  That is the rule admitting management traffic through the gateway subnet's NSG, and the\n"
+            "  port set pinned above is what it opens. If it really was removed, remove its sites from\n"
+            "  the Literal deliberately -- and know that no customer who applied it loses the rule."
+        )
+    for attr, want in (
+        ("destination_port_ranges", "local.gateway_management_ports"),
+        ("source_address_prefixes", "local.gateway_management_ranges"),
+        ("network_security_group_name", "azurerm_network_security_group.gateway[0].name"),
+        ("protocol", "Tcp"),
+        ("direction", "Inbound"),
+        ("access", "Allow"),
+    ):
+        got = _unquote(hcl_attr(body, attr) or "")
+        if got != want:
+            failures.append(
+                f"{AZURE_TF}: `azurerm_network_security_rule.gateway_management` sets `{attr}` to `{got}`,\n"
+                f"  not `{want}`. The rule then admits something other than the pinned ports, to someone\n"
+                "  other than the followed ranges, or on a group Azure does not evaluate for this subnet."
+            )
+    for single in ("destination_port_range", "source_address_prefix"):
+        if hcl_attr(body, single) is not None:
+            failures.append(
+                f"{AZURE_TF}: `azurerm_network_security_rule.gateway_management` also sets `{single}`, a\n"
+                "  second spelling of a value checked above and free to drift from it."
+            )
+
+    doc = json.loads(sources[AZURE_ARM])
+    nsgs = [
+        r for r in doc.get("resources", [])
+        if r.get("type") == "Microsoft.Network/networkSecurityGroups"
+        and r.get("name") == "[variables('gatewayNsgName')]"
+    ]
+    if len(nsgs) != 1:
+        raise GuardError(
+            f"{AZURE_ARM}: found {len(nsgs)} gateway NSG resources named `[variables('gatewayNsgName')]`,\n"
+            "  expected 1. If it was renamed, move this guard with it."
+        )
+    if nsgs[0].get("properties", {}).get("securityRules") != "[variables('effectiveGatewaySecurityRules')]":
+        failures.append(
+            f"{AZURE_ARM}: the gateway NSG does not deploy `variables('effectiveGatewaySecurityRules')`, so\n"
+            "  the management rule pinned above is a rule this template never creates."
+        )
+    variables = doc.get("variables", {})
+    effective = variables.get("effectiveGatewaySecurityRules", "")
+    if "variables('gatewayManagementRules')" not in effective or "variables('gatewayVnetRules')" not in effective:
+        failures.append(
+            f"{AZURE_ARM}: `effectiveGatewaySecurityRules` is `{effective}`, which does not deploy both\n"
+            "  `gatewayVnetRules` and `gatewayManagementRules`."
+        )
+    for rule in variables.get("gatewayManagementRules", []):
+        prefix = rule.get("properties", {}).get("sourceAddressPrefix")
+        if prefix != "[parameters('gatewayManagementSourceCidr')]":
+            failures.append(
+                f"{AZURE_ARM}: a `gatewayManagementRules` rule admits `{prefix}`, not\n"
+                "  `[parameters('gatewayManagementSourceCidr')]`, so it no longer follows what deploy.sh passes."
+            )
+
+    sh = strip_shell_comments(sources[AZURE_SH])
+    if not re.search(r'\bgatewayManagementSourceCidr="\$GATEWAY_MANAGEMENT_SOURCE_CIDR"', sh):
+        failures.append(
+            f"{AZURE_SH}: does not pass `gatewayManagementSourceCidr=\"$GATEWAY_MANAGEMENT_SOURCE_CIDR\"` to the\n"
+            "  network template, so the default this guard checks above reaches no rule at all."
         )
     return failures
 
@@ -852,7 +990,7 @@ def check_bucket_prefix_wiring(sources: dict[str, str]) -> list[str]:
     return failures
 
 
-PATHS = sorted({s.path for lit in LITERALS for s in lit.sites} | {GCP_TF, GCP_SH})
+PATHS = sorted({s.path for lit in LITERALS for s in lit.sites} | {GCP_TF, GCP_SH, AZURE_VARS, AZURE_SH})
 
 
 def check_all(sources: dict[str, str]) -> list[str]:
@@ -872,7 +1010,12 @@ def check_all(sources: dict[str, str]) -> list[str]:
             failures += check(src)
         except GuardError as err:
             failures.append(str(err))
-    for cross in (check_management_port_wiring, check_management_default_follows_ssh, check_bucket_prefix_wiring):
+    for cross in (
+        check_management_port_wiring,
+        check_azure_management_wiring,
+        check_management_default_follows_ssh,
+        check_bucket_prefix_wiring,
+    ):
         try:
             failures += cross(sources)
         except GuardError as err:

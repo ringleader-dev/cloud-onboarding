@@ -48,6 +48,13 @@ variable "secondary_ssh_source_ranges" {
   default = null
 }
 
+# Unset mirrors ssh_source_ranges; [] closes the gateway subnet's management rule, and a workstation
+# an egress policy steers is then reachable only from inside the VNet or a network joined to it.
+variable "gateway_management_source_ranges" {
+  type    = list(string)
+  default = null
+}
+
 # Egress control, and the subnet the proxy VM runs in. Both on by default; set either false in
 # terraform.tfvars to opt out. Hand `gateway_subnet_id` from the handoff back as
 # EgressGateway.spec.subnet -- no gateway VM is built until you do.
@@ -112,8 +119,9 @@ module "ringleader" {
   org_uid               = var.org_uid
   create_network        = var.create_network
 
-  ssh_source_ranges           = var.ssh_source_ranges
-  secondary_ssh_source_ranges = var.secondary_ssh_source_ranges
+  ssh_source_ranges                = var.ssh_source_ranges
+  secondary_ssh_source_ranges      = var.secondary_ssh_source_ranges
+  gateway_management_source_ranges = var.gateway_management_source_ranges
 
   enable_egress_control  = var.enable_egress_control
   create_gateway_subnet  = var.create_gateway_subnet
