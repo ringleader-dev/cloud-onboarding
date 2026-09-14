@@ -337,10 +337,12 @@ escaping the chokepoint. The gateway cannot forward the reply either: it is sour
 **internal** address, which neither the fabric nor your client would accept. So the management
 connection has to **terminate at the gateway** and reach the box from inside the VPC.
 
-**On AWS and Azure that is Ringleader's to arrange** — the gateway's inbound firewall there is a
-security group or an NSG that Ringleader creates and owns. **On GCP it is yours**, because GCE has
-no per-instance firewall object: the gateway's inbound rules are VPC ingress rules in this project,
-and every rule Ringleader writes here is `EGRESS`.
+**On AWS that is Ringleader's to arrange**, because the gateway's inbound firewall there is a
+security group that Ringleader creates and owns. Azure sits in between. Ringleader writes the rule
+in the NSG on the gateway VM's NIC, and the Azure landing pad adds the matching rule to the gateway
+subnet's NSG, which Azure evaluates first. **On GCP it is yours**, because GCE has no per-instance
+firewall object: the gateway's inbound rules are VPC ingress rules in this project, and every rule
+Ringleader writes here is `EGRESS`.
 
 **So this landing pad adds the rule for you, and it follows `ssh_source_ranges`.** Set those and
 you are done — one rule, `ringleader-allow-gateway-management`, targeting the

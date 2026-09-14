@@ -55,27 +55,38 @@ here can tell a first region from a second, so guessing would hand the second on
 one's range in silence. See [`../README.md`](../README.md#a-second-region-name-it-do-not-renumber-it).
 
 Env vars for it: `NAME_PREFIX` (`ringleader`), `VNET_CIDR` and
-`SUBNET_CIDR` (both empty — overrides, derived from `REGION_INDEX` when unset),
-`SSH_SOURCE_CIDR` (empty), and
-`SECONDARY_SSH_SOURCE_CIDR` (mirrors `SSH_SOURCE_CIDR`; `none` closes it — see
-[`../README.md`](../README.md#a-second-ssh-port--opened-to-the-same-people-as-22)).
+`SUBNET_CIDR` (both empty: overrides, derived from `REGION_INDEX` when unset),
+`SSH_SOURCE_CIDR` (empty),
+`SECONDARY_SSH_SOURCE_CIDR` (mirrors `SSH_SOURCE_CIDR`, and `none` closes it, as
+[`../README.md`](../README.md#a-second-ssh-port--opened-to-the-same-people-as-22) describes), and
+`GATEWAY_MANAGEMENT_SOURCE_CIDR` (mirrors `SSH_SOURCE_CIDR`, and `none` closes it, as described
+below).
 `SSH_SOURCE_CIDR` empty means the NSG is created with **no inbound rule**, which is
 correct only if you reach the VNet privately.
 
 `CREATE_GATEWAY_SUBNET` is on by default (`GATEWAY_SUBNET_CIDR` overrides its range; unset, it
-derives the 241st `/24` of the VNet — `10.70.240.0/24` at index `0`): it
-reserves the subnet the egress gateway VM for hostname-level egress control runs in, and prints
-its id as `gateway subnet`. **Hand that id back as `spec.subnet` on the `EgressGateway`** — not on
-a workstation, and Ringleader builds no gateway VM until it has one, because a proxy placed in a
-subnet it steers would route its own egress into itself. Azure does not bill for the subnet, but
-the subnet is associated with the NAT gateway, which is what the VM Ringleader builds in it uses to
-reach the internet — it takes no public address of its own unless `EgressGateway.spec.publicAddress`
-asks for one. The subnet also gets an NSG (`<prefix>-gateway-nsg`). Azure's default rules live *inside*
-a group, so a bare subnet would leave the proxy's listeners reachable from the internet rather than
-closed. The group carries **one** rule: allow the VNet inbound to **any** destination. It cannot be
-empty — `AllowVnetInBound` allows the VNet only to a *VNet* destination, and a steered packet still
-carries the public address the workstation was reaching, so an empty group would drop exactly the
-traffic the proxy exists to carry. Set `createGatewaySubnet` to `false` to skip both.
+derives the 241st `/24` of the VNet, `10.70.240.0/24` at index `0`). It reserves the subnet the
+egress gateway VM for hostname-level egress control runs in, and prints its id as `gateway subnet`.
+**Hand that id back as `spec.subnet` on the `EgressGateway`**, not on a workstation. Ringleader
+builds no gateway VM until it has one, because a proxy placed in a subnet it steers would route its
+own egress into itself. Azure does not bill for the subnet. The subnet is associated with the NAT
+gateway, which is what the VM Ringleader builds in it uses to reach the internet. The VM takes no
+public address of its own unless `EgressGateway.spec.publicAddress` asks for one.
+
+The subnet also gets an NSG (`<prefix>-gateway-nsg`), because Azure's default rules live *inside* a
+group and a bare subnet would leave the proxy's listeners reachable from the internet rather than
+closed. The NSG carries two rules:
+
+- **Allow the VNet inbound to any destination.** The group cannot go without it. `AllowVnetInBound`
+  allows the VNet only to a *VNet* destination, and a steered packet still carries the public
+  address the workstation was reaching, so an empty group would drop exactly the traffic the proxy
+  exists to carry.
+- **Allow `GATEWAY_MANAGEMENT_SOURCE_CIDR` on TCP 22 and 30000-32767**, created when that variable
+  is not empty. It keeps a workstation an egress policy steers reachable through the gateway VM.
+  Azure evaluates this subnet's NSG before the NSG on the gateway VM's NIC, and both must allow. See
+  [`../README.md`](../README.md#room-for-the-egress-gateway).
+
+Set `createGatewaySubnet` to `false` to skip the subnet and its NSG.
 
 `CREATE_GOVERNED_SUBNET` is also on by default (`GOVERNED_SUBNET_CIDR` overrides its range;
 unset, it derives the 15th `/20` — `10.70.224.0/20` at index `0`): it reserves the subnet the workstations that proxy **governs** go in, and

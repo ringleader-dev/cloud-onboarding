@@ -261,9 +261,10 @@ echo ">> workstations within ${WORKSTATION_RANGES} can reach the egress gateway 
 # gateway and the session never establishes. Nothing in the box or on the appliance repairs that --
 # the reply is sourced from the box's INTERNAL address, which neither the fabric nor your client
 # would accept -- so the management connection has to terminate at the gateway and reach the box
-# from inside the VPC. AWS and Azure need no landing-pad change for it, because there the gateway's
-# inbound firewall is a security group or an NSG that Ringleader creates and owns; GCE has no
-# per-instance firewall object, so on this cloud the admission can only live here.
+# from inside the VPC. AWS needs no landing-pad change for it, because there the gateway's inbound
+# firewall is a security group Ringleader creates and owns; the Azure landing pad carries a matching
+# rule on the gateway subnet's NSG, which Azure evaluates before the NSG on the gateway VM's NIC.
+# GCE has no per-instance firewall object, so on this cloud the admission can only live here.
 #
 # GATEWAY_MANAGEMENT_RULES is not yours to set. A port set that differed from what Ringleader
 # listens on would be a rule that reads correctly in the console and admits nothing, and this

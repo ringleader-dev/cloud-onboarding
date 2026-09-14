@@ -45,6 +45,11 @@
 #                secondary SSH port, for workstation types that
 #                run their own SSH daemon inside the VM. "none"
 #                closes it                     (default: same as SSH_SOURCE_CIDR)
+#   GATEWAY_MANAGEMENT_SOURCE_CIDR  one CIDR allowed through the
+#                egress gateway subnet's NSG on its management
+#                ports, so a workstation an egress policy steers
+#                stays reachable. "none" closes it
+#                                              (default: same as SSH_SOURCE_CIDR)
 #   CREATE_GATEWAY_SUBNET  false to skip the empty subnet reserved for
 #                the egress gateway VM                         (default: true)
 #   GATEWAY_SUBNET_CIDR  override; empty derives the 241st /24  (default: empty)
@@ -97,6 +102,14 @@ SSH_SOURCE_CIDR="${SSH_SOURCE_CIDR:-}"
 SECONDARY_SSH_SOURCE_CIDR="${SECONDARY_SSH_SOURCE_CIDR:-$SSH_SOURCE_CIDR}"
 if [ "$SECONDARY_SSH_SOURCE_CIDR" = "none" ]; then
   SECONDARY_SSH_SOURCE_CIDR=""
+fi
+# The egress gateway's management ports follow 22 as well: a workstation an egress policy steers is
+# reached through the gateway VM, and this is the gateway subnet's half of that admission -- Azure
+# evaluates the subnet's NSG before the NSG on the gateway VM's NIC, and both must allow. "none"
+# closes it.
+GATEWAY_MANAGEMENT_SOURCE_CIDR="${GATEWAY_MANAGEMENT_SOURCE_CIDR:-$SSH_SOURCE_CIDR}"
+if [ "$GATEWAY_MANAGEMENT_SOURCE_CIDR" = "none" ]; then
+  GATEWAY_MANAGEMENT_SOURCE_CIDR=""
 fi
 CREATE_GATEWAY_SUBNET="${CREATE_GATEWAY_SUBNET:-true}"
 GATEWAY_SUBNET_CIDR="${GATEWAY_SUBNET_CIDR:-}"
@@ -192,6 +205,7 @@ if [ "$CREATE_NETWORK" = "true" ]; then
   echo ">> deploying the network landing pad (${NAME_PREFIX}-vnet, NAT gateway, NSG)"
   echo ">>   inbound 22:   ${SSH_SOURCE_CIDR:-<none>}"
   echo ">>   secondary:    ${SECONDARY_SSH_SOURCE_CIDR:-<none>}"
+  echo ">>   gateway mgmt: ${GATEWAY_MANAGEMENT_SOURCE_CIDR:-<none>}"
   NETWORK_OUTPUTS="$(az deployment group create \
     --resource-group "$RG" \
     --name ringleader-onboarding-network \
@@ -204,6 +218,7 @@ if [ "$CREATE_NETWORK" = "true" ]; then
                  vnetCidr="$VNET_CIDR" subnetCidr="$SUBNET_CIDR" \
                  sshSourceCidr="$SSH_SOURCE_CIDR" \
                  secondarySshSourceCidr="$SECONDARY_SSH_SOURCE_CIDR" \
+                 gatewayManagementSourceCidr="$GATEWAY_MANAGEMENT_SOURCE_CIDR" \
                  createGatewaySubnet="$CREATE_GATEWAY_SUBNET" \
                  gatewaySubnetCidr="$GATEWAY_SUBNET_CIDR" \
                  createGovernedSubnet="$CREATE_GOVERNED_SUBNET" \

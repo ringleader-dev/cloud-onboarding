@@ -51,6 +51,7 @@ locals {
     "ec2:DescribeSecurityGroups",
     "ec2:DescribeVpcs",
     "ec2:DescribeVolumes",
+    "ec2:DescribeVolumesModifications",
     "ec2:DescribeNetworkInterfaces",
     "ec2:DescribeTags",
     "ec2:DescribeAvailabilityZones",
@@ -84,12 +85,25 @@ locals {
   # its agent bootstrap, written once at create -- its egress policy arrives over the agent's own
   # config stream, not through this API. The role already holds RunInstances, which can launch an
   # instance with any user-data at all, so the action widens nothing this grant did not permit.
+  #
+  # ModifyVolume grows a workstation's DISK without replacing the machine. EC2 can usually apply it
+  # to a volume in use without stopping the instance, and it refuses to make a volume smaller. The
+  # same call can also change a volume's type, IOPS, throughput and Multi-Attach setting, and with
+  # them what the volume costs. RunInstances can already launch a volume of any type, IOPS or
+  # throughput, and the role holds no AttachVolume, so a Multi-Attach volume cannot be attached to a
+  # second instance. It takes the same region bound as the actions around it.
+  #
+  # Ringleader does not resize a disk yet. The grant is here now because a landing pad is applied
+  # once, in your own account, and an action added later would ask you to apply it again.
+  # DescribeVolumesModifications, in describe_actions above, is the read a resize will need: EC2
+  # accepts no second change to a volume until the first reports completed.
   lifecycle_actions = [
     "ec2:RunInstances",
     "ec2:TerminateInstances",
     "ec2:StartInstances",
     "ec2:StopInstances",
     "ec2:ModifyInstanceAttribute",
+    "ec2:ModifyVolume",
     "ec2:CreateTags",
     "ec2:DeleteTags",
   ]
@@ -161,8 +175,21 @@ locals {
 
   artifact_storage_object_arns = [for arn in local.artifact_storage_bucket_arns : "${arn}/*"]
 
-  egress_group_actions = [
+  # Creating the three objects egress control makes: one security group per compiled policy, and the
+  # route table and subnet that steering uses. They get a list, and a statement, of their own
+  # because the ec2:Vpc condition bounding every other write here can never match a create. AWS's
+  # service reference lists what each create is authorized against -- the new object, and the VPC it
+  # goes in -- and for a create it lists no ec2:Vpc key on either. A condition key missing from the
+  # request makes the condition false, so under that condition all three are refused as soon as the
+  # grant is bounded to a VPC. They are bounded to the same VPCs by resource ARN instead, in
+  # egress_create_resources below.
+  egress_create_actions = [
     "ec2:CreateSecurityGroup",
+    "ec2:CreateRouteTable",
+    "ec2:CreateSubnet",
+  ]
+
+  egress_group_actions = [
     "ec2:DeleteSecurityGroup",
     "ec2:AuthorizeSecurityGroupEgress",
     "ec2:RevokeSecurityGroupEgress",
@@ -205,15 +232,15 @@ locals {
   # ec2:ModifyNetworkInterfaceAttribute (granted separately below) does double duty: it moves a
   # running workstation between security groups, and it clears the source/destination check on
   # the proxy's own interface, without which AWS silently drops every packet it forwards.
+  # CreateRouteTable and CreateSubnet belong to this set too, and are in egress_create_actions above
+  # for the reason given there.
   egress_route_actions = [
-    "ec2:CreateRouteTable",
     "ec2:DeleteRouteTable",
     "ec2:CreateRoute",
     "ec2:ReplaceRoute",
     "ec2:DeleteRoute",
     "ec2:AssociateRouteTable",
     "ec2:DisassociateRouteTable",
-    "ec2:CreateSubnet",
     "ec2:DeleteSubnet",
   ]
 
@@ -254,6 +281,17 @@ locals {
     for id in local.egress_vpc_ids :
     "arn:${data.aws_partition.current.partition}:ec2:*:${data.aws_caller_identity.current.account_id}:vpc/${id}"
   ]
+
+  # What the creates may name: the VPCs above, plus a new object of each kind they make, in this
+  # account. AWS's service reference lists the VPC among the resources each create is authorized
+  # against, so listing only your VPCs here keeps each new group, route table and subnet inside
+  # them. AWS's own example policies do not show a create scoped this way, so that bound rests on
+  # the service reference alone. With no VPC known this is "*", and the region bound is all there
+  # is, exactly as for the other writes.
+  egress_create_resources = length(local.egress_vpc_arns) > 0 ? concat(local.egress_vpc_arns, [
+    for kind in ["security-group", "route-table", "subnet"] :
+    "arn:${data.aws_partition.current.partition}:ec2:*:${data.aws_caller_identity.current.account_id}:${kind}/*"
+  ]) : ["*"]
 
   # The secondary SSH port (see the security group below). Fixed by Ringleader, so it is a
   # constant here rather than a variable: you never have to know the number, and it cannot
@@ -477,6 +515,27 @@ data "aws_iam_policy_document" "permissions" {
           test     = "StringLike"
           variable = "ec2:Vpc"
           values   = local.egress_vpc_arns
+        }
+      }
+    }
+  }
+
+  # The creates, bounded by resource ARN rather than by the ec2:Vpc condition above, which no create
+  # can satisfy. egress_create_actions says why, and egress_create_resources describes the bound.
+  dynamic "statement" {
+    for_each = var.enable_egress_control ? [1] : []
+    content {
+      sid       = "EgressCreate"
+      effect    = "Allow"
+      actions   = local.egress_create_actions
+      resources = local.egress_create_resources
+
+      dynamic "condition" {
+        for_each = local.region_condition ? [1] : []
+        content {
+          test     = "StringEquals"
+          variable = "aws:RequestedRegion"
+          values   = var.allowed_regions
         }
       }
     }

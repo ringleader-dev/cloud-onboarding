@@ -65,6 +65,13 @@
         "description": "Optional, and empty opens nothing. A single CIDR allowed inbound on the secondary SSH port (TCP 2222). Some Ringleader workstation types run their own SSH daemon on that port inside the VM, beside the VM's own sshd on 22, and rl shell dials it instead of 22 for those; others never use it. An NSG covers the whole subnet, so this admits the port to every VM on it."
       }
     },
+    "gatewayManagementSourceCidr": {
+      "type": "String",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional, and empty opens nothing; deploy.sh passes SSH_SOURCE_CIDR unless told otherwise. A single CIDR allowed through the egress gateway subnet's NSG on TCP 22 and 30000-32767, so a workstation an egress policy steers stays reachable through the gateway VM. Azure evaluates this subnet's NSG before the NSG on the gateway VM's NIC, and both must allow. Ringleader puts only the gateway VM in this subnet, and it is reachable from the internet only when EgressGateway.spec.publicAddress gives it a public address. Ignored when createGatewaySubnet is false."
+      }
+    },
     "createGatewaySubnet": {
       "type": "Bool",
       "defaultValue": true,
@@ -148,6 +155,40 @@
       }
     ],
     "effectiveSecurityRules": "[concat(if(equals(parameters('sshSourceCidr'), ''), createArray(), variables('sshRules')), if(equals(parameters('secondarySshSourceCidr'), ''), createArray(), variables('secondarySshRules')))]",
+    "gatewayVnetRules": [
+      {
+        "name": "allow-vnet-inbound",
+        "properties": {
+          "protocol": "*",
+          "direction": "Inbound",
+          "access": "Allow",
+          "priority": 4000,
+          "sourceAddressPrefix": "VirtualNetwork",
+          "sourcePortRange": "*",
+          "destinationAddressPrefix": "*",
+          "destinationPortRange": "*"
+        }
+      }
+    ],
+    "gatewayManagementRules": [
+      {
+        "name": "allow-management-inbound",
+        "properties": {
+          "protocol": "Tcp",
+          "direction": "Inbound",
+          "access": "Allow",
+          "priority": 4010,
+          "sourceAddressPrefix": "[parameters('gatewayManagementSourceCidr')]",
+          "sourcePortRange": "*",
+          "destinationAddressPrefix": "*",
+          "destinationPortRanges": [
+            "22",
+            "30000-32767"
+          ]
+        }
+      }
+    ],
+    "effectiveGatewaySecurityRules": "[concat(variables('gatewayVnetRules'), if(equals(parameters('gatewayManagementSourceCidr'), ''), createArray(), variables('gatewayManagementRules')))]",
     "gatewaySubnetName": "gateway",
     "governedSubnetName": "governed",
     "workstationSubnets": [
@@ -234,28 +275,14 @@
       }
     },
     {
-      "comments": "The egress gateway subnet's own security group. Azure's default rules are rules INSIDE a group, so a subnet and a NIC with none are not filtered at all -- and the gateway VM Ringleader builds here carries a standalone PUBLIC IP, which without this would put the proxy's listeners and its sshd on the internet. THE ONE RULE IS NOT OPTIONAL, and the defaults are not a substitute for it: AllowVnetInBound at 65000 is source VirtualNetwork to DESTINATION VirtualNetwork, while a steered packet arrives addressed to the PUBLIC host the workstation was reaching -- a UDR next hop does not rewrite the destination -- so it would miss that rule, fall to DenyAllInBound at 65500, and every governed box would lose the internet while the gateway stayed healthy. Allowing the VNet inbound to ANY destination is what Ringleader also writes on the VM's own NIC (azgateway's gatewayNSGRule); this group is the second layer and the two must agree. Outbound is untouched, so the gateway keeps the internet access it exists to police.",
+      "comments": "The egress gateway subnet's own security group. Azure's default rules are rules INSIDE a group, so a subnet and a NIC with none are not filtered at all -- and the gateway VM Ringleader builds here carries a public address whenever EgressGateway.spec.publicAddress asks for one, which without this would put the proxy's listeners and its sshd on the internet. THE FIRST RULE IS NOT OPTIONAL, and the defaults are not a substitute for it: AllowVnetInBound at 65000 is source VirtualNetwork to DESTINATION VirtualNetwork, while a steered packet arrives addressed to the PUBLIC host the workstation was reaching -- a UDR next hop does not rewrite the destination -- so it would miss that rule, fall to DenyAllInBound at 65500, and every governed box would lose the internet while the gateway stayed healthy. Allowing the VNet inbound to ANY destination is what Ringleader also writes on the VM's own NIC; this group is the second layer and the two must agree. THE SECOND RULE, present when gatewayManagementSourceCidr is set, keeps a workstation an egress policy steers reachable: the steering route also carries the reply to a connection the box never opened, so the management connection goes through the gateway VM instead, and for inbound traffic Azure evaluates this subnet's NSG before the NIC's and both must allow. It admits TCP 22 and 30000-32767 from that one CIDR; the NSG on the gateway VM's NIC still decides what reaches the VM. Outbound is untouched, so the gateway keeps the internet access it exists to police.",
       "condition": "[parameters('createGatewaySubnet')]",
       "type": "Microsoft.Network/networkSecurityGroups",
       "apiVersion": "2023-11-01",
       "name": "[variables('gatewayNsgName')]",
       "location": "[parameters('location')]",
       "properties": {
-        "securityRules": [
-          {
-            "name": "allow-vnet-inbound",
-            "properties": {
-              "protocol": "*",
-              "direction": "Inbound",
-              "access": "Allow",
-              "priority": 4000,
-              "sourceAddressPrefix": "VirtualNetwork",
-              "sourcePortRange": "*",
-              "destinationAddressPrefix": "*",
-              "destinationPortRange": "*"
-            }
-          }
-        ]
+        "securityRules": "[variables('effectiveGatewaySecurityRules')]"
       }
     },
     {

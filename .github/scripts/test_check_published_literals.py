@@ -29,7 +29,9 @@ from check_published_literals import (
     AWS_TF,
     GCP_ONBOARD_SH,
     AZURE_ARM,
+    AZURE_SH,
     AZURE_TF,
+    AZURE_VARS,
     GCP_SH,
     GCP_TF,
     GCP_VARS,
@@ -629,6 +631,106 @@ class TheAdmissionFollowsTheInboundSSHRanges(Rejects):
                     'GATEWAY_MANAGEMENT_RANGES="${GATEWAY_MANAGEMENT_RANGES:-$SSH_RANGES}"\n'
                     'GATEWAY_MANAGEMENT_RANGES="${GATEWAY_MANAGEMENT_RANGES:-0.0.0.0/0}"')),
             "expected exactly 1",
+        )
+
+
+class TheAzureManagementRuleCannotDrift(Rejects):
+    """The same envelope on azure, where the landing pad owns the gateway SUBNET's NSG.
+
+    Azure evaluates that NSG before the one Ringleader writes on the gateway VM's NIC, so both routes
+    must open the pinned ports, to the ranges the operator already named, on that group.
+    """
+
+    TF_PORTS = '  gateway_management_ports = ["22", "30000-32767"]'
+    ARM_PORTS = '"destinationPortRanges": [\n            "22",\n            "30000-32767"\n          ]'
+    ARM_PROTOCOL = '"protocol": "Tcp",\n          "direction": "Inbound",\n          "access": "Allow",\n          "priority": 4010,'
+    SH_DEFAULT = 'GATEWAY_MANAGEMENT_SOURCE_CIDR="${GATEWAY_MANAGEMENT_SOURCE_CIDR:-$SSH_SOURCE_CIDR}"'
+
+    def test_the_module_narrows_the_set(self):
+        self.assertRejected(
+            edited((AZURE_TF, self.TF_PORTS, '  gateway_management_ports = ["30000-32767"]')),
+            "inbound management port set",
+        )
+
+    def test_the_template_narrows_the_set(self):
+        self.assertRejected(
+            edited((AZURE_ARM, self.ARM_PORTS, '"destinationPortRanges": [\n            "30000-32767"\n          ]')),
+            "inbound management port set",
+        )
+
+    def test_the_template_admits_udp(self):
+        self.assertRejected(
+            edited((AZURE_ARM, self.ARM_PROTOCOL, self.ARM_PROTOCOL.replace('"Tcp"', '"Udp"'))),
+            "not `Tcp`",
+        )
+
+    def test_the_template_spells_a_port_a_second_way(self):
+        self.assertRejected(
+            edited((AZURE_ARM, self.ARM_PORTS, '"destinationPortRange": "22",\n          ' + self.ARM_PORTS)),
+            "destinationPortRange",
+        )
+
+    def test_the_module_rule_writes_the_ports_out_again(self):
+        self.assertRejected(
+            edited((AZURE_TF, "  destination_port_ranges     = local.gateway_management_ports",
+                    '  destination_port_ranges     = ["22", "30000-32767"]')),
+            "local.gateway_management_ports",
+        )
+
+    def test_the_module_rule_moves_to_the_workstations_nsg(self):
+        self.assertRejected(
+            edited((AZURE_TF,
+                    "  network_security_group_name = azurerm_network_security_group.gateway[0].name\n"
+                    "  priority                    = 4010",
+                    "  network_security_group_name = azurerm_network_security_group.workstations[0].name\n"
+                    "  priority                    = 4010")),
+            "network_security_group_name",
+        )
+
+    def test_the_template_stops_deploying_the_rule(self):
+        self.assertRejected(
+            edited((AZURE_ARM,
+                    "\"effectiveGatewaySecurityRules\": \"[concat(variables('gatewayVnetRules'), if(equals(parameters('gatewayManagementSourceCidr'), ''), createArray(), variables('gatewayManagementRules')))]\"",
+                    "\"effectiveGatewaySecurityRules\": \"[variables('gatewayVnetRules')]\"")),
+            "gatewayManagementRules",
+        )
+
+    def test_the_script_stops_following(self):
+        self.assertRejected(
+            edited((AZURE_SH, self.SH_DEFAULT,
+                    'GATEWAY_MANAGEMENT_SOURCE_CIDR="${GATEWAY_MANAGEMENT_SOURCE_CIDR:-}"')),
+            "not `$SSH_SOURCE_CIDR`",
+        )
+
+    def test_the_script_stops_passing_the_parameter(self):
+        self.assertRejected(
+            edited((AZURE_SH, '                 gatewayManagementSourceCidr="$GATEWAY_MANAGEMENT_SOURCE_CIDR" \\\n', "")),
+            "gatewayManagementSourceCidr",
+        )
+
+    def test_a_for_loop_variable_rebinds_the_script_default(self):
+        self.assertRejected(
+            edited((AZURE_SH, self.SH_DEFAULT,
+                    self.SH_DEFAULT + '\nfor GATEWAY_MANAGEMENT_SOURCE_CIDR in "0.0.0.0/0"; do true; done'))
+        )
+
+    def test_the_module_stops_following(self):
+        self.assertRejected(
+            edited((AZURE_VARS,
+                    'variable "gateway_management_source_ranges" {\n'
+                    "  type        = list(string)\n"
+                    "  default     = null",
+                    'variable "gateway_management_source_ranges" {\n'
+                    "  type        = list(string)\n"
+                    "  default     = []")),
+            "not `null`",
+        )
+
+    def test_the_mirror_local_resolves_somewhere_else(self):
+        self.assertRejected(
+            edited((AZURE_TF, "var.gateway_management_source_ranges == null ? var.ssh_source_ranges :",
+                    "var.gateway_management_source_ranges == null ? var.secondary_ssh_source_ranges :")),
+            "mirrors `var.secondary_ssh_source_ranges`",
         )
 
 

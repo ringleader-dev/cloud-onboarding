@@ -893,11 +893,13 @@ resource "google_compute_firewall" "gateway" {
 # nor your client would accept. The management connection has to TERMINATE at the gateway and be
 # carried to the box from inside the VPC.
 #
-# On AWS and Azure the gateway's inbound firewall is an object Ringleader creates and owns -- a
-# security group, an NSG -- so that admission is Ringleader's to make and no landing-pad change is
-# needed there. GCE has no per-instance firewall object: the gateway's inbound rules are VPC
-# ingress rules in THIS project, and Ringleader creates none (every rule it writes is EGRESS). So
-# on this cloud the landing pad is the only place the admission can live, and this is it.
+# On AWS the gateway's inbound firewall is a security group Ringleader creates and owns, so that
+# admission is Ringleader's to make and no landing-pad change is needed there. On Azure Ringleader
+# writes it in the NSG on the gateway VM's NIC too, but Azure also evaluates the gateway SUBNET's
+# NSG, which is the landing pad's, so the Azure module carries the same admission. GCE has no
+# per-instance firewall object: the gateway's inbound rules are VPC ingress rules in THIS project,
+# and Ringleader creates none (every rule it writes is EGRESS). So on this cloud the landing pad is
+# the only place the admission can live, and this is it.
 #
 # Why it follows rather than asking. These CIDRs get SSH to the appliance itself, so the rule is
 # scoped to the list the operator ALREADY chose for machines in this VPC and never widens past it,

@@ -121,6 +121,7 @@ output "actions_granted" {
     ["ssm:GetParameter / ssm:GetParameters -- AWS's public image-alias parameters only"],
     var.enable_workstation_identities ? ["iam:PassRole -- roles under ${var.workstation_identity_path}, to ec2.amazonaws.com only"] : [],
     var.enable_egress_control ? concat(
+      local.egress_create_actions,
       local.egress_group_actions,
       local.egress_route_actions,
       local.egress_describe_actions,

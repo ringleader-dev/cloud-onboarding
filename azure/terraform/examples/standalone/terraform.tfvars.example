@@ -25,6 +25,12 @@ org_uid               = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
 # Azure an NSG covers the whole subnet, so these ranges are the only narrowing available.
 # secondary_ssh_source_ranges = []
 
+# The rule that keeps a workstation reachable once an egress policy steers it: it admits the
+# management ports on the egress gateway's subnet, and it follows ssh_source_ranges unless you set
+# this. Set [] to close it; a steered workstation is then reachable only from inside the VNet or a
+# network joined to it.
+# gateway_management_source_ranges = []
+
 # Let Ringleader provision a per-user managed identity per workstation and assign roles to it.
 # Adds Microsoft.Authorization/roleAssignments/write, which built-in Contributor does not carry
 # -- still scoped to this one resource group.
@@ -40,8 +46,8 @@ org_uid               = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
 # The subnet (10.70.240.0/24) the DNS / HTTPS proxy VM for hostname-level egress control runs in.
 # Hand gateway_subnet_id back as EgressGateway.spec.subnet -- Ringleader builds no gateway VM
 # until you do, because a proxy placed in a subnet it steers routes its own egress into itself.
-# Azure does not bill for the subnet; the VM Ringleader then builds carries its own standalone
-# public IP, billed separately.
+# Azure does not bill for the subnet, and the VM Ringleader then builds takes no public address of
+# its own unless EgressGateway.spec.publicAddress asks for one.
 # create_gateway_subnet = false
 
 # The subnet the workstations that proxy GOVERNS go in (10.70.224.0/20). It carries the

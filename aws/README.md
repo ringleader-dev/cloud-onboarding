@@ -20,34 +20,39 @@ OIDC provider (or the role).
 
 The permissions policy's **base** is exactly these four statements — no wildcard on any action:
 
-- eleven named read-only actions: `ec2:DescribeInstances`, `DescribeInstanceStatus`,
+- twelve named read-only actions: `ec2:DescribeInstances`, `DescribeInstanceStatus`,
   `DescribeInstanceTypes`, `DescribeImages`, `DescribeSubnets`,
-  `DescribeSecurityGroups`, `DescribeVpcs`, `DescribeVolumes`,
-  `DescribeNetworkInterfaces`, `DescribeTags`, `DescribeAvailabilityZones` — on `*`,
+  `DescribeSecurityGroups`, `DescribeVpcs`, `DescribeVolumes`, `DescribeVolumesModifications`,
+  `DescribeNetworkInterfaces`, `DescribeTags`, `DescribeAvailabilityZones`, all on `*`
   because EC2 `Describe` actions have no resource-level scoping,
-- `ec2:DescribeInstanceAttribute` — the twelfth read, on `*` but **bounded to one region** via
+- `ec2:DescribeInstanceAttribute`, the thirteenth read, on `*` but **bounded to one region** via
   `aws:RequestedRegion` when you set `allowed_regions` / `AllowedRegion`, which is why it is a
   statement of its own. It is the one read that returns **content** rather than shape: with
   `Attribute=userData` it hands back an instance's whole boot payload from outside the box. It is
   granted so that what Ringleader wrote to a workstation it created can be read back the way an
-  attacker would and shown to carry no bearer secret — the check Ringleader's own end-to-end test
-  suite makes against an account onboarded from this module. Within the region bound it reaches
+  attacker would and shown to carry no bearer secret. That is the check Ringleader's own end-to-end
+  test suite makes against an account onboarded from this module. Within the region bound it reaches
   only instances the role already holds `StopInstances` / `ModifyInstanceAttribute` /
   `StartInstances` over, which can **rewrite** the bytes it merely reads, so it widens nothing
   this grant did not already permit. **Leave `allowed_regions` empty and there is no bound**, on
   this read or on the mutating statement below,
 - `ec2:RunInstances` / `TerminateInstances` / `StartInstances` / `StopInstances` /
-  `ModifyInstanceAttribute` / `CreateTags` / `DeleteTags` — optionally bounded to one region
-  via `aws:RequestedRegion`. `ModifyInstanceAttribute` is what a machine **resize** issues on
-  the stopped instance; the same API also sets user-data and IAM has no condition key telling
-  the two apart, but the role already holds `RunInstances`, which can launch an instance with
-  any user-data at all, so it widens nothing this grant did not already permit,
+  `ModifyInstanceAttribute` / `ModifyVolume` / `CreateTags` / `DeleteTags`, optionally bounded to
+  one region via `aws:RequestedRegion`. `ModifyInstanceAttribute` is what a machine **resize**
+  issues on the stopped instance; the same API also sets user-data and IAM has no condition key
+  telling the two apart, but the role already holds `RunInstances`, which can launch an instance
+  with any user-data at all, so it widens nothing this grant did not already permit. `ModifyVolume`
+  grows a workstation's **disk** without replacing it, and EC2 refuses to make a volume smaller. It
+  can also change a volume's type, IOPS, throughput and Multi-Attach setting, and so what the volume
+  costs. Ringleader does not resize disks yet. The grant is here now so that adding disk resizing
+  later does not ask you to apply this again, and `DescribeVolumesModifications` above is the read a
+  resize will need,
 - `ssm:GetParameters` / `GetParameter` on `arn:aws:ssm:*::parameter/aws/service/*` — the
   AWS-owned public AMI parameters.
 
 Three features that are **on by default** add statements beside those four, so a role applied on
-the defaults carries twelve, not four, and both supported paths carry the same twelve. All are one
-variable away from off, and each is enumerated where it is described rather than here:
+the defaults carries thirteen, not four, and both supported paths carry the same thirteen. All are
+one variable away from off, and each is enumerated where it is described rather than here:
 *[egress control](#optional-egress-control)* adds the security-group, subnet and route-table
 writes, two security-group reads, the Elastic-IP actions and
 `ec2:ModifyNetworkInterfaceAttribute`, bounded to your VPC and region; *workstation identities*
@@ -196,13 +201,17 @@ earlier build left unmarked, which is what this action is for. It is granted now
 landing pad is applied once, in your own account: an action added afterwards would cost you a
 second apply.
 
-**Bound the writes to a VPC.** With `egress_vpc_ids` set — or with `create_network = true`,
-where the module uses the VPC it made — the security-group, route-table, subnet and interface
-writes apply only to that VPC. If you bring your own network and name no VPC, the only bound is
-`allowed_regions`, which lets Ringleader manage security groups anywhere in that region. The
-reads and the Elastic IP actions take the region bound alone whatever you do, for the reason
-their rows give: neither can be scoped to a VPC at all. The `egress_scope` output
-tells you which of the three you ended up with, so it is worth reading after an apply.
+**Bound the writes to a VPC.** With `egress_vpc_ids` set, or with `create_network = true` where the
+module uses the VPC it made, the security-group, route-table, subnet and interface writes apply only
+to that VPC. Most of them carry a condition on the VPC. The three creates (`CreateSecurityGroup`,
+`CreateRouteTable`, `CreateSubnet`) name the VPC as a resource instead, in a statement of their own,
+because AWS's service reference lists no VPC condition key for a create and a condition on a missing
+key denies. That naming the VPC keeps a create inside it rests on the service reference too: AWS's
+example policies do not show a create scoped this way. If you bring your own network and name no
+VPC, the only bound is `allowed_regions`, which lets Ringleader manage security groups anywhere in
+that region. The reads and the Elastic IP actions take the region bound alone whatever you do, for
+the reason their rows give: neither can be scoped to a VPC at all. The `egress_scope` output tells
+you which of the three you ended up with, so it is worth reading after an apply.
 
 Ringleader compiles each distinct policy into **one** security group and attaches it to the
 workstations carrying that policy. That is not just tidiness: AWS caps a network interface at

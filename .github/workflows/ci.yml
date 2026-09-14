@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   # The job that reads the shipped artifacts for what they MEAN rather than whether they deploy.
-  # Three guards, all dependency-free, each about a property no other job here can see:
+  # Four guards, all dependency-free, each about a property no other job here can see:
   #
   #   check_trust_pins.py         -- a failure means a shipped artifact would hand one customer's
   #                                  cloud account to the rest of the fleet.
@@ -36,6 +36,9 @@ jobs:
   #   check_route_parity.py       -- a failure means one cloud's two supported paths grant
   #                                  different things, so the customer who took the other route is
   #                                  missing a grant and will find out when a feature 403s.
+  #   check_aws_vpc_condition.py  -- a failure means an AWS statement bounds an action with an
+  #                                  ec2:Vpc condition that action never carries, which reads as
+  #                                  "bounded to your VPC" and refuses the action outright.
   #
   # They share this job because they share a reader (the second imports the first's HCL, YAML and
   # closed-grammar shell parsers) and because the `unittest discover` step below is BLANKET on
@@ -58,6 +61,9 @@ jobs:
 
       - name: Each cloud's two supported paths grant the same thing
         run: python3 .github/scripts/check_route_parity.py
+
+      - name: No AWS statement bounds an action by a key it never carries
+        run: python3 .github/scripts/check_aws_vpc_condition.py
 
       # The guards' own teeth. A guard that has quietly stopped matching the file it reads
       # passes every build until the day it matters, so its failure modes are tested against
