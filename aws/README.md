@@ -42,11 +42,12 @@ The permissions policy's **base** is exactly these four statements — no wildca
   issues on the stopped instance; the same API also sets user-data and IAM has no condition key
   telling the two apart, but the role already holds `RunInstances`, which can launch an instance
   with any user-data at all, so it widens nothing this grant did not already permit. `ModifyVolume`
-  grows a workstation's **disk** without replacing it, and EC2 refuses to make a volume smaller. It
-  can also change a volume's type, IOPS, throughput and Multi-Attach setting, and so what the volume
-  costs. Ringleader does not resize disks yet. The grant is here now so that adding disk resizing
-  later does not ask you to apply this again, and `DescribeVolumesModifications` above is the read a
-  resize will need,
+  grows a workstation's **root volume** without replacing it, and EC2 refuses to make a volume
+  smaller. It can also change a volume's type, IOPS, throughput and Multi-Attach setting, and so
+  what the volume costs. Ringleader calls it when you raise a workstation's `rootVolumeGiB`, and
+  without it EC2 refuses the grow. Ringleader does not call `DescribeVolumesModifications` yet. It
+  reports a grow's state, including `completed`, and it is granted now so that using it later does
+  not ask you to apply this again,
 - `ssm:GetParameters` / `GetParameter` on `arn:aws:ssm:*::parameter/aws/service/*` — the
   AWS-owned public AMI parameters.
 

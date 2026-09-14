@@ -101,3 +101,20 @@ run "the_one_default_that_costs_money_is_on_deliberately" {
     error_message = "ssh_source_ranges has a non-empty default. Opening TCP 22 is not a decision this module may make for an operator: 0.0.0.0/0 exposes every workstation, and any narrower guess locks them out of boxes that come up healthy and unreachable."
   }
 }
+
+# Growing a root volume, and the read that reports a grow's state, asserted on the output a customer
+# reads to audit what the role holds. Both actions reach it through the same lists the policy is
+# built from, so an entry dropped from either list shows up here.
+run "the_default_role_can_grow_a_root_volume_and_read_its_state" {
+  command = plan
+
+  assert {
+    condition     = contains(output.actions_granted, "ec2:ModifyVolume")
+    error_message = "actions_granted does not list ec2:ModifyVolume on the defaults, so raising a workstation's rootVolumeGiB is refused, and the only way to a larger root volume is recreating the workstation at that size."
+  }
+
+  assert {
+    condition     = contains(output.actions_granted, "ec2:DescribeVolumesModifications")
+    error_message = "actions_granted does not list ec2:DescribeVolumesModifications on the defaults, so a later Ringleader that waits for a grow to reach completed would ask every customer to apply this module again."
+  }
+}

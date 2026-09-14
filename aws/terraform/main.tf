@@ -86,17 +86,18 @@ locals {
   # config stream, not through this API. The role already holds RunInstances, which can launch an
   # instance with any user-data at all, so the action widens nothing this grant did not permit.
   #
-  # ModifyVolume grows a workstation's DISK without replacing the machine. EC2 can usually apply it
-  # to a volume in use without stopping the instance, and it refuses to make a volume smaller. The
-  # same call can also change a volume's type, IOPS, throughput and Multi-Attach setting, and with
-  # them what the volume costs. RunInstances can already launch a volume of any type, IOPS or
-  # throughput, and the role holds no AttachVolume, so a Multi-Attach volume cannot be attached to a
-  # second instance. It takes the same region bound as the actions around it.
+  # ModifyVolume grows a workstation's ROOT VOLUME without replacing the machine. EC2 can usually
+  # apply it to a volume in use without stopping the instance, and it refuses to make a volume
+  # smaller. The same call can also change a volume's type, IOPS, throughput and Multi-Attach
+  # setting, and with them what the volume costs. RunInstances can already launch a volume of any
+  # type, IOPS or throughput, and the role holds no AttachVolume, so a Multi-Attach volume cannot be
+  # attached to a second instance. It takes the same region bound as the actions around it.
   #
-  # Ringleader does not resize a disk yet. The grant is here now because a landing pad is applied
+  # Ringleader calls ModifyVolume when you raise a workstation's rootVolumeGiB, and without it EC2
+  # refuses that grow. Ringleader does not call DescribeVolumesModifications yet. It is listed in
+  # describe_actions above and reports a modification's state, and EC2 accepts no second change to a
+  # volume until the first reaches completed. It is granted now because a landing pad is applied
   # once, in your own account, and an action added later would ask you to apply it again.
-  # DescribeVolumesModifications, in describe_actions above, is the read a resize will need: EC2
-  # accepts no second change to a volume until the first reports completed.
   lifecycle_actions = [
     "ec2:RunInstances",
     "ec2:TerminateInstances",
