@@ -112,19 +112,26 @@ On Azure a workstation gets **no public IP unless you ask for one**
    default outbound access is being retired, so a private VM with nothing in front of it
    cannot reach the Ringleader control plane. The landing pad (`create_network = true`) gives
    it a NAT gateway, fixing egress without a public IP.
-2. **Egress alone still leaves nobody able to SSH in.** The landing pad attaches an NSG to
-   every subnet it creates, and an NSG with no rules of yours still carries Azure's defaults —
-   `AllowVnetInBound`, then `DenyAllInBound` — so nothing outside the VNet reaches the box.
-   (Those defaults live *inside* a group: a subnet with **no** NSG is not closed, it is
-   unfiltered, which is why the module never leaves one bare.) To use the workstation:
+2. **Ringleader admits SSH to its own workstations.** The landing pad attaches an NSG to every
+   subnet it creates, and an NSG with no rules of yours still carries Azure's defaults,
+   `AllowVnetInBound` and then `DenyAllInBound`, so nothing outside the VNet reaches a VM on it.
+   Ringleader adds one rule to that NSG admitting TCP 22 and 2222 from any address to the
+   workstations it creates, and to no other VM. A workstation with a public IP is then reachable
+   from the internet on those ports, unless an egress policy steers it. One without a public IP is
+   reachable from anywhere that can route to the VNet. See
+   [Two NSGs, at two layers](#two-nsgs-at-two-layers--and-which-one-is-yours) for the rule itself.
+
+`ssh_source_ranges` adds a rule of your own on TCP 22, for the CIDRs your engineers connect from:
 
 ```hcl
 create_network    = true
-ssh_source_ranges = ["203.0.113.0/24"]   # the CIDRs your engineers connect from
+ssh_source_ranges = ["203.0.113.0/24"]
 ```
 
-Leave `ssh_source_ranges` empty **only** if you reach the VNet privately (VPN /
-ExpressRoute / peering).
+Your rule covers every VM on the subnet, not only Ringleader's. It also keeps a workstation
+reachable from those CIDRs when Ringleader cannot write its own rule, in which case the workstation
+reports `SSHAdmissionMissing`. Leave it empty and Ringleader's rule is the only way in from outside
+the VNet.
 
 ### A second SSH port — opened to the same people as 22
 
@@ -143,11 +150,12 @@ every VM on the workstations subnet. The GCP module aims the same rule at a netw
 source ranges are the only narrowing available; give the workstations that need the port a subnet
 of their own if that is too broad.
 
-Leave `secondary_ssh_source_ranges` empty — the default — and **no rule is created**; your VNet
-admits exactly what it admits today. Ringleader tells you whether the workstations you plan to run
-need this port. You never supply the port number: the module carries it, so it cannot drift from
-the port Ringleader dials. On the ARM path it is `SECONDARY_SSH_SOURCE_CIDR` — see
-[`arm/README.md`](arm/README.md#the-optional-network-landing-pad).
+Leave `secondary_ssh_source_ranges` unset, the default, and it follows `ssh_source_ranges`: with
+that empty too, **no rule is created**. Ringleader's own rule already admits the port to the
+workstations it creates, so yours matters only for other VMs on the subnet, or for when Ringleader
+cannot write its rule. You never supply the port number: the module carries it, so it cannot drift
+from the port Ringleader dials. On the ARM path it is `SECONDARY_SSH_SOURCE_CIDR`, as
+[`arm/README.md`](arm/README.md#the-optional-network-landing-pad) describes.
 
 ## Optional: workstations that run AS an identity
 
@@ -167,8 +175,11 @@ to an allowlist you declare in the workstation manifest — a set of IP ranges a
 enforced by network security groups that Ringleader creates and keeps in step with the
 manifest.
 
-It is **on by default**, and granting it restricts nothing on its own: until you declare an
-egress policy on a workstation, everything behaves exactly as it does today. To opt out:
+It is **on by default**. Granting it restricts no outbound traffic until you declare an egress
+policy on a workstation. Ringleader also uses it to write the rules that admit SSH to the
+workstations it creates. On a workstation with no policy, those rules narrow inbound traffic from
+outside the VNet to TCP 22 and 2222, as
+[Two NSGs, at two layers](#two-nsgs-at-two-layers--and-which-one-is-yours) describes. To opt out:
 
 ```hcl
 enable_egress_control = false
@@ -210,36 +221,42 @@ genuinely per workstation.
 
 ### Two NSGs, at two layers — and which one is yours
 
-A workstation with a policy carries **two** network security groups, and they are not
-interchangeable:
+Ringleader creates each workstation with a network security group on its NIC, so a workstation on
+one of this module's subnets carries **two** of them, and they are not interchangeable:
 
 | layer | object | written by | decides |
 |---|---|---|---|
-| subnet | `ringleader-workstations-nsg`, from this module | **you**, plus one rule of Ringleader's | inbound — who may reach the workstation |
-| NIC | one NSG per distinct egress policy | **Ringleader** | outbound — where the workstation may connect |
+| subnet | `ringleader-workstations-nsg`, from this module | **you**, plus one rule of Ringleader's | inbound: who may reach the workstation |
+| NIC, with a policy | one NSG per distinct egress policy | **Ringleader** | outbound: where the workstation may connect |
+| NIC, without a policy | one NSG of Ringleader's, shared by those workstations | **Ringleader** | inbound from outside the VNet: only TCP 22 and 2222 |
 
 Azure evaluates both and **both must allow**. Four consequences, all worth having before the
 first policy:
 
-- **Keep your inbound rules on the subnet NSG.** The group Ringleader attaches to the NIC carries
-  one deliberately neutral inbound allow. A fresh NSG ends in `DenyAllInBound`, so an
-  outbound-only group on a NIC that had none would cut SSH to the workstation's public address —
-  and the box would come up, fail to be reachable, and never say why. That neutral rule restores
-  exactly what the NIC had before it carried an NSG at all, leaving your subnet NSG the authority.
-  It cannot widen the workstation past what that subnet already permits, because both layers still
-  have to agree.
+- **Keep your inbound rules on the subnet NSG, and know what the NIC layer adds.** A new NSG ends
+  in `DenyAllInBound`, so a NIC NSG with no inbound allow would cut SSH from outside the VNet, and
+  the workstation would come up unreachable without saying why. Every NIC NSG Ringleader writes
+  therefore carries an inbound allow. On a workstation with an egress policy it admits all inbound
+  traffic, so the subnet NSG alone decides who gets in. On a workstation with no policy it admits
+  only TCP 22 and 2222, and the group has no outbound rule. Such a workstation takes no other port
+  from outside the VNet, even one your subnet NSG opens. Neither group admits anything the subnet
+  NSG refuses, because both layers have to agree.
 - **A NIC NSG of your own is replaced, not merged.** A NIC carries at most one NSG. If you supply
   the interface yourself (`providerConfig.azure.networkInterfaceId`) and narrowed inbound *there*,
-  declaring `spec.egress` overwrites that group and the subnet's rules become the whole story —
-  which **widens** inbound. Move those rules onto the subnet NSG first. Ringleader adds rules
-  there, but never edits or deletes one you wrote.
-- **Leave priorities 4090 to 4096 free in the subnet NSG.** Ringleader will add one inbound allow
-  rule of its own in that range: the SSH ports, aimed at the private addresses of the workstations
-  it runs, so a workstation is reachable without you widening the group by hand. The rule names
-  those addresses, so a VM in the subnet that Ringleader did not create stays as closed as your
-  own rules leave it. The rule ships in Ringleader rather than in this module, and the range is
-  reserved now because you apply this pad once: a rule of yours already sitting in it stops
-  Ringleader writing its own, and the workstation then reports that it has no way in.
+  Ringleader replaces that group when it creates the workstation, whether or not the workstation
+  declares `spec.egress`. With a policy, the replacement admits all inbound, so the subnet's rules
+  decide on their own, which **widens** inbound. Without one, it admits only TCP 22 and 2222 from
+  outside the VNet. Move those rules onto the subnet NSG first. Ringleader adds a rule there, but
+  never edits or deletes one you wrote.
+- **Leave priorities 4090 to 4096 free in the subnet NSG.** Ringleader adds one inbound allow rule
+  of its own there, at the lowest free priority in that range, so its workstations are reachable
+  without you widening the group. The rule admits TCP 22 and 2222 from any address. Its
+  destination is an application security group that Ringleader creates in your resource group and
+  puts each of its workstations' NICs in. A VM in the subnet that Ringleader did not create is
+  therefore as closed as your own rules leave it. The workstation reports `SSHAdmissionMissing`
+  when Ringleader cannot write the rule. That happens, for example, when every priority in the
+  range holds a rule of yours, or when the subnet's NSG is in a resource group the role does not
+  cover. The workstation is then reachable only if your own rules admit it.
 - **Do not add an outbound `Deny` to the subnet NSG.** It cannot make a policy tighter — the NIC
   NSG already denies everything the policy does not list — but it can make one *break*, by
   blocking a destination the policy allows. The failure looks like Ringleader ignoring your

@@ -13,10 +13,11 @@ org_uid               = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
 # only if you already have a subnet with egress for these VMs.
 # create_network = false
 
-# WHO CAN SSH IN -- the one thing that is NOT on by default, and cannot be. Ringleader has no
-# bastion: `rl shell`, tmux, port-forwards and VS Code Web all dial the workstation on TCP 22.
-# With this empty, workstations come up and report Ready but nobody can open them -- correct
-# only if you reach the VNet privately (VPN / ExpressRoute / peering).
+# WHO ELSE CAN SSH IN. Ringleader has no bastion: `rl shell`, tmux, port-forwards and VS Code Web
+# all dial the workstation on TCP 22. Ringleader adds its own NSG rule admitting TCP 22 and 2222
+# from any address to the workstations it creates. These ranges add a rule of yours on 22, for
+# every VM on the workstations and governed subnets, which also keeps a workstation reachable from
+# them when Ringleader cannot write its rule.
 # ssh_source_ranges = ["203.0.113.0/24"]   # the CIDRs your engineers connect from
 
 # The secondary SSH port follows ssh_source_ranges unless you set this. Some Ringleader
@@ -37,10 +38,11 @@ org_uid               = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
 # enable_workstation_identities = false
 
 # Let Ringleader manage the NSGs an egress policy compiles to, and the route tables and subnets
-# that steer traffic at the DNS / HTTPS proxy. Adds sixteen actions to the custom role, still
-# scoped to this resource group. It restricts nothing until you declare an egress policy on a
-# workstation. Note the NSGs attach to the NIC, so unlike the inbound rules above they really
-# are per workstation.
+# that steer traffic at the DNS / HTTPS proxy. Adds twenty-three actions to the custom role, still
+# scoped to this resource group. It restricts no outbound traffic until you declare an egress
+# policy on a workstation. Ringleader also uses it to write its SSH rules, which narrow inbound
+# from outside the VNet to TCP 22 and 2222 on a workstation with no policy. The NSGs attach to the
+# NIC, so unlike the inbound rules above they really are per workstation.
 # enable_egress_control = false
 
 # The subnet (10.70.240.0/24) the DNS / HTTPS proxy VM for hostname-level egress control runs in.

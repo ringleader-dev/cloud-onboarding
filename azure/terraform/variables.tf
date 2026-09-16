@@ -156,9 +156,11 @@ variable "enable_egress_control" {
     of the workstations carrying that policy, so a fleet sharing a policy costs one group.
     That matters here: Azure caps an NSG at 1,000 rules and will not raise it.
 
-    Granting it does not restrict anything on its own: until you declare an egress policy on
-    a workstation, nothing changes. It is on by default so that declaring one later does not
-    need a second onboarding pass.
+    Granting it restricts no outbound traffic until you declare an egress policy on a
+    workstation. Ringleader also uses it to write the rules that admit SSH to the workstations it
+    creates. On a workstation with no policy, those rules narrow inbound traffic from outside the
+    VNet to TCP 22 and 2222. It is on by default so that declaring a policy later does not need a
+    second onboarding pass.
   EOT
 }
 
@@ -306,15 +308,15 @@ variable "governed_subnet_prefix" {
   }
 }
 
-# --- Network landing pad, on by default (egress out; inbound only via ssh_source_ranges) ---
+# --- Network landing pad, on by default (egress out; SSH in via your rule and Ringleader's) ---
 
 variable "create_network" {
   type        = bool
   default     = true
   description = <<-EOT
     Create a minimal vnet + subnet + NAT gateway + NSG for workstation NICs (egress out;
-    inbound only via ssh_source_ranges). On by default; set false and supply your own subnet
-    instead.
+    inbound only through ssh_source_ranges and the one SSH rule Ringleader adds). On by
+    default; set false and supply your own subnet instead.
 
     On Azure a workstation has no public IP unless you ask for one, so without a NAT gateway
     it has no egress and never comes up -- which is why this landing pad is the default here.
@@ -327,15 +329,15 @@ variable "ssh_source_ranges" {
   type        = list(string)
   default     = []
   description = <<-EOT
-    CIDRs allowed to reach workstations on TCP 22, when create_network is set. Empty (the default)
-    creates the NSG but NO inbound rule, which leaves the workstation unreachable from outside
-    the VNet.
+    CIDRs allowed to reach every VM on the workstations and governed subnets on TCP 22, when
+    create_network is set. Empty (the default) creates the NSG with NO inbound rule of yours.
 
     Ringleader has no bastion and no SSH tunnel: `rl shell`, `rl tmux`, port-forwards and
-    VS Code Web all dial the workstation on 22. So with no rule, workstations come up and
-    report Ready but nobody can get into them -- correct ONLY if you reach the VNet
-    privately (VPN / ExpressRoute / peering) from wherever you run `rl`. Otherwise list
-    the CIDRs your engineers connect from.
+    VS Code Web all dial the workstation on 22. Ringleader adds its own rule to this NSG, at a
+    priority between 4090 and 4096, admitting TCP 22 and 2222 from any address to the
+    workstations it creates and to no other VM. List CIDRs here to reach the other VMs on those
+    subnets, or to keep your engineers able to reach a workstation when Ringleader cannot write
+    its rule. Such a workstation reports SSHAdmissionMissing.
   EOT
 }
 
@@ -352,7 +354,8 @@ variable "secondary_ssh_source_ranges" {
 
     Some Ringleader workstation types run their own SSH daemon on that port inside the VM,
     beside the VM's own sshd on 22, and `rl shell` dials it instead of 22 for those. Others
-    never use it, and for those the rule is harmless.
+    never use it, and for those the rule is harmless. Ringleader's own rule already admits the
+    port to the workstations it creates, as ssh_source_ranges describes.
 
     These ranges are the only narrowing available on Azure: an NSG attaches to the subnet and
     Azure has no per-VM tag to match, so the rule admits the port to every VM on this subnet.

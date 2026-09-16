@@ -270,7 +270,7 @@ locals {
 
   # The VPCs the egress permissions are bounded to. When this module created the network we
   # use that VPC; otherwise you name your own in egress_vpc_ids. Empty means the permissions
-  # are bounded by region alone -- see the variable's description.
+  # are bounded only by allowed_regions, if set -- see the variable's description.
   egress_vpc_ids = length(var.egress_vpc_ids) > 0 ? var.egress_vpc_ids : (
     var.create_network ? [aws_vpc.workstations[0].id] : []
   )
@@ -491,8 +491,9 @@ data "aws_iam_policy_document" "permissions" {
   # AWS caps an ENI at 5 security groups and a region at 2,500 groups.
   #
   # Bounded to the VPCs in egress_vpc_ids where one is known (see that variable), so these
-  # permissions cannot touch a security group elsewhere in the account. With no VPC known,
-  # the region condition is the only bound and the module says so at apply time.
+  # permissions cannot touch a security group elsewhere in the account. The region condition
+  # applies as well when allowed_regions is set, and with no VPC known it is the only bound; the
+  # module says so at apply time.
   dynamic "statement" {
     for_each = var.enable_egress_control ? [1] : []
     content {

@@ -204,15 +204,17 @@ second apply.
 
 **Bound the writes to a VPC.** With `egress_vpc_ids` set, or with `create_network = true` where the
 module uses the VPC it made, the security-group, route-table, subnet and interface writes apply only
-to that VPC. Most of them carry a condition on the VPC. The three creates (`CreateSecurityGroup`,
-`CreateRouteTable`, `CreateSubnet`) name the VPC as a resource instead, in a statement of their own,
-because AWS's service reference lists no VPC condition key for a create and a condition on a missing
-key denies. That naming the VPC keeps a create inside it rests on the service reference too: AWS's
-example policies do not show a create scoped this way. If you bring your own network and name no
-VPC, the only bound is `allowed_regions`, which lets Ringleader manage security groups anywhere in
-that region. The reads and the Elastic IP actions take the region bound alone whatever you do, for
-the reason their rows give: neither can be scoped to a VPC at all. The `egress_scope` output tells
-you which of the three you ended up with, so it is worth reading after an apply.
+to that VPC, and to `allowed_regions` as well when you set it. Most of them carry a condition on the
+VPC. The three creates (`CreateSecurityGroup`, `CreateRouteTable`, `CreateSubnet`) name the VPC as a
+resource instead, in a statement of their own, because AWS's service reference lists no VPC
+condition key for a create and a condition on a missing key denies. That naming the VPC keeps a
+create inside it rests on the service reference too: AWS's example policies do not show a create
+scoped this way. If you bring your own network and name no VPC, the only bound is `allowed_regions`,
+which lets Ringleader manage security groups anywhere in those regions. With `allowed_regions` empty
+too, they are bounded only by the account. The reads and the Elastic IP actions take only the region
+bound, when you set one, for the reason their rows give: neither can be scoped to a VPC at all. On
+the Terraform route, the `egress_scope` output tells you which of the three you ended up with, so it
+is worth reading after an apply.
 
 Ringleader compiles each distinct policy into **one** security group and attaches it to the
 workstations carrying that policy. That is not just tidiness: AWS caps a network interface at

@@ -20,7 +20,13 @@ cloud's two paths are actually kept in step:
   * **aws** -- two independent implementations (Terraform and CloudFormation), so every IAM
     statement's action set is compared, keyed by its `Sid`. A statement present on one path and
     absent on the other is the failure, and it is reported as such rather than as a difference in
-    some list.
+    some list. Each statement's CONDITION KEYS are compared too, as the operator and key of each
+    one (`StringLike` on `ec2:Vpc`). Every key must be emitted exactly when one customer input has
+    one value, the SAME input on both routes, and all of them must be able to apply at once. IAM
+    ANDs every condition in a statement, and Terraform writes each as a block of its own, so a
+    fully configured Terraform role carries every bound. A template that picks one bound with
+    `!If` and puts the other in its false branch names the same keys and never applies both
+    together.
   * **azure** -- ONE implementation: the Terraform module deploys `../arm/azuredeploy.json`
     verbatim, so the action list cannot drift. That property is what is checked -- that the
     module still deploys that file, and still passes every parameter the template declares. An
@@ -28,11 +34,12 @@ cloud's two paths are actually kept in step:
     into the stored deployment while the file leaves it unset, and `terraform plan` then reports
     a change forever.
 
-What this guard does NOT compare is resource bounds -- an ARN pattern, an IAM condition, a
-`--condition` flag. Those are written in three different languages that cannot be compared as
-text, and a guard that pretended otherwise would be reporting on its own parser. What it
-guarantees is that the two paths grant THE SAME ACTIONS; the bounds are the reviewer's job and
-the module tests'.
+What this guard does NOT compare ACROSS the two routes is the VALUE of a bound -- an ARN pattern,
+the regions or VPCs an IAM condition names, a gcp `--condition` flag. Those are written in
+languages that cannot be compared as text, and a guard that pretended otherwise would be reporting
+on its own parser. What it guarantees is that the two paths grant THE SAME ACTIONS, and on aws
+that each statement names the same condition keys, each emitted under the same input on both. What
+each bound admits is the reviewer's job and the module tests'.
 
 Every reader fails LOUDLY when its anchor is gone, the standing rule for the guards here: a
 guard that has quietly stopped reading anything passes every build until the day it matters.
@@ -496,6 +503,384 @@ def aws_cloudformation_statements(source: str, path: str) -> dict[str, list[str]
     return out
 
 
+# --- AWS conditions ---------------------------------------------------------------------
+#
+# A statement's conditions are read as the set of (operator, key) pairs it carries, once for every
+# combination of the switches that decide which of them are emitted. Three things are then asked:
+#
+#   * which pairs appear in ANY combination. The two routes must agree on this.
+#   * whether each pair is emitted exactly when ONE switch has ONE value, whatever the others do,
+#     and whether that switch is the same customer input on both routes (SWITCHES, below). A pair
+#     that also depends on a second switch, or follows the wrong one, is a bound the customer set
+#     and does not get in some configuration, such as a region bound emitted only when a VPC is
+#     known.
+#   * whether some single combination carries all of them. The pairs in one statement are ANDed,
+#     and a bound only ever emitted instead of another is one no customer gets alongside it.
+#
+# On CloudFormation a fourth is asked: whether a condition's value stays the same when a switch that
+# decides whether a condition is emitted changes (`cloudformation_condition_values`).
+#
+# A switch is an opaque name: a CloudFormation condition, or the text of a Terraform `for_each`
+# gate. Two different names are taken to vary independently. A combination the template cannot
+# really reach, because two DIFFERENT switches are correlated, can hide a failure of the check that
+# all pairs apply at once, and nothing here reads what those switches mean.
+
+MAX_SWITCHES = 8
+
+Pairs = frozenset  # of (operator, key)
+Combination = tuple  # (switch values as a dict, the Pairs emitted under them)
+
+
+def _combinations(switches: list[str], path: str, sid: str) -> list[dict[str, bool]]:
+    if len(switches) > MAX_SWITCHES:
+        raise GuardError(
+            f"{path}: statement `{sid}`'s conditions depend on {len(switches)} switches.\n\n"
+            f"  This guard reads every combination of those switches and refuses more than {MAX_SWITCHES}.\n"
+            "  No reviewer can hold more in their head either. Split the statement."
+        )
+    out = [{}]
+    for name in switches:
+        out = [{**env, name: value} for env in out for value in (True, False)]
+    return out
+
+
+def _condition_problem(path: str, sid: str, what: str) -> GuardError:
+    return GuardError(
+        f"{path}: statement `{sid}`'s Condition {what}\n\n"
+        "  This guard compares each statement's conditions across the two AWS routes. A shape it\n"
+        "  cannot read is a bound nothing compares, so rewrite it in the shape the other statements\n"
+        "  use, or extend this guard's parser to read the new one."
+    )
+
+
+TF_CONDITION_RE = re.compile(r'(\bdynamic[ \t]+"condition"|(?<![\w"])condition)[ \t]*\{')
+TF_GATE_RE = re.compile(r"^(?P<gate>.+?)\s*\?\s*(?P<then>\[\s*1?\s*\])\s*:\s*(?P<else>\[\s*1?\s*\])$")
+
+
+def aws_terraform_conditions(source: str, path: str) -> dict[str, list[Combination]]:
+    """Every statement in the permissions document, as sid -> each combination and its pairs.
+
+    A plain `condition` block is always there. A `dynamic "condition"` is read from a `for_each` of
+    the form `<gate> ? [1] : []`, or `<gate> ? [] : [1]` for its negation, where a leading `!` on the
+    gate flips it too. Any other `for_each` is refused rather than guessed at.
+    """
+    src = strip_hcl_comments(source)
+    m = re.search(r'data\s+"aws_iam_policy_document"\s+"permissions"\s*\{', src)
+    if m is None:
+        raise GuardError(f"{path}: no `data \"aws_iam_policy_document\" \"permissions\"` block.")
+    body = brace_block(src[m.end() - 1 :], "the permissions policy document")
+    starts = list(re.finditer(r'^[ \t]*sid[ \t]*=[ \t]*"([^"]+)"', body, re.M))
+    out: dict[str, list[Combination]] = {}
+    for n, sm in enumerate(starts):
+        sid = sm.group(1)
+        chunk = body[sm.end() : starts[n + 1].start() if n + 1 < len(starts) else len(body)]
+        # (gate or None, emitted when the gate is this value, operator, key)
+        found: list[tuple[str | None, bool, str, str]] = []
+        for cm in TF_CONDITION_RE.finditer(chunk):
+            block = brace_block(chunk[cm.end() - 1 :], f"a condition of statement {sid}")
+            test = re.search(r'^[ \t]*test[ \t]*=[ \t]*"([^"]+)"', block, re.M)
+            variable = re.search(r'^[ \t]*variable[ \t]*=[ \t]*"([^"]+)"', block, re.M)
+            if test is None or variable is None:
+                raise _condition_problem(path, sid, "has a block without a literal `test` and `variable`.")
+            gate, when = None, True
+            if cm.group(1).startswith("dynamic"):
+                fe = re.search(r"^[ \t]*for_each[ \t]*=[ \t]*(.+?)[ \t]*$", block, re.M)
+                gm = TF_GATE_RE.match(fe.group(1)) if fe else None
+                if gm is None or {gm.group("then").replace(" ", ""), gm.group("else").replace(" ", "")} != {"[1]", "[]"}:
+                    raise _condition_problem(
+                        path, sid, "has a `dynamic \"condition\"` whose `for_each` is not `<gate> ? [1] : []`."
+                    )
+                gate, when = gm.group("gate").strip(), gm.group("then").replace(" ", "") == "[1]"
+                while gate.startswith("!"):
+                    gate, when = gate[1:].strip(), not when
+            found.append((gate, when, test.group(1), variable.group(1)))
+        switches = sorted({g for g, _, _, _ in found if g is not None})
+        out[sid] = [
+            (env, frozenset((op, key) for g, when, op, key in found if g is None or env[g] == when))
+            for env in _combinations(switches, path, sid)
+        ]
+    if not out:
+        raise GuardError(f"{path}: the permissions document declares no `sid`s.")
+    return out
+
+
+# A tiny reader for the block YAML the template's conditions are written in: mappings, sequences,
+# `!If` over a three-item sequence, `!Ref AWS::NoValue`, and single-line scalars. Anything else in a
+# Condition -- a flow `!If [a, b, c]`, a multi-line scalar -- is refused, because PyYAML is not a
+# dependency here and a half-read condition is worse than none.
+
+NO_VALUE = object()
+YAML_KEY_RE = re.compile(r'^(?:"(?P<quoted>[^"]+)"|(?P<plain>[A-Za-z_][A-Za-z0-9_:./-]*?))[ \t]*:(?:[ \t]+(?P<value>.*))?$')
+
+
+class _YamlReader:
+    def __init__(self, lines: list[tuple[int, str]], path: str, sid: str):
+        self.lines, self.path, self.sid = lines, path, sid
+
+    def fail(self, what: str) -> GuardError:
+        return _condition_problem(self.path, self.sid, what)
+
+    def node(self, i: int) -> tuple[object, int]:
+        indent, text = self.lines[i]
+        if text == "-" or text.startswith("- "):
+            items = []
+            while i < len(self.lines) and self.lines[i][0] == indent and (
+                self.lines[i][1] == "-" or self.lines[i][1].startswith("- ")
+            ):
+                rest = self.lines[i][1][1:].lstrip(" ")
+                col = indent + len(self.lines[i][1]) - len(rest)
+                if YAML_KEY_RE.match(rest):
+                    # `- key: value` opens a mapping whose keys sit at the column `key` starts at.
+                    self.lines[i] = (col, rest)
+                    item, i = self.node(i)
+                else:
+                    item, i = self.value(rest, i + 1, indent)
+                items.append(item)
+            return items, i
+        if YAML_KEY_RE.match(text):
+            mapping: dict[str, object] = {}
+            while i < len(self.lines) and self.lines[i][0] == indent:
+                km = YAML_KEY_RE.match(self.lines[i][1])
+                if km is None:
+                    raise self.fail(f"has a line this reader cannot place: `{self.lines[i][1]}`.")
+                key = km.group("quoted") or km.group("plain")
+                mapping[key], i = self.value(km.group("value") or "", i + 1, indent)
+            return mapping, i
+        return self.value(text, i + 1, indent)
+
+    def value(self, text: str, i: int, owner: int) -> tuple[object, int]:
+        """The value written after `key:` or `- `, plus any block below it deeper than `owner`."""
+        text = text.strip()
+        below = i < len(self.lines) and self.lines[i][0] > owner
+        if text == "":
+            if not below:
+                raise self.fail("has a key with no value.")
+            return self.node(i)
+        if text == "!If":
+            if not below:
+                raise self.fail("has an `!If` with nothing under it.")
+            branches, i = self.node(i)
+            if not isinstance(branches, list) or len(branches) != 3 or not isinstance(branches[0], str):
+                raise self.fail("has an `!If` that is not a condition name and two branches.")
+            return ("if", branches[0], branches[1], branches[2]), i
+        if below:
+            raise self.fail(f"has `{text}` with a block under it, which this reader does not follow.")
+        if text.startswith("!If"):
+            raise self.fail("uses the flow form `!If [...]`. Write it as a block sequence.")
+        if text == "!Ref AWS::NoValue":
+            return NO_VALUE, i
+        return text, i
+
+
+def _yaml_switches(node: object) -> set[str]:
+    if isinstance(node, tuple):
+        return {node[1]} | _yaml_switches(node[2]) | _yaml_switches(node[3])
+    if isinstance(node, dict):
+        return set().union(*(_yaml_switches(v) for v in node.values()))
+    if isinstance(node, list):
+        return set().union(*(_yaml_switches(v) for v in node))
+    return set()
+
+
+def _yaml_resolve(node: object, env: dict[str, bool]) -> object:
+    """The node as CloudFormation renders it under `env`: each `!If` taken, each NoValue dropped."""
+    if isinstance(node, tuple):
+        return _yaml_resolve(node[2] if env[node[1]] else node[3], env)
+    if isinstance(node, dict):
+        resolved = ((k, _yaml_resolve(v, env)) for k, v in node.items())
+        return {k: v for k, v in resolved if v is not NO_VALUE}
+    if isinstance(node, list):
+        return [v for v in (_yaml_resolve(item, env) for item in node) if v is not NO_VALUE]
+    return node
+
+
+def cloudformation_condition_renders(source: str, path: str) -> dict[str, list[tuple[dict, dict]]]:
+    """Every IAM statement in the template, as sid -> each combination and the Condition it renders."""
+    lines = [line for line in strip_yaml_comments(source).split("\n") if line.strip()]
+    out: dict[str, list[tuple[dict, dict]]] = {}
+    for i, line in enumerate(lines):
+        m = SID_RE.match(line)
+        if m is None:
+            continue
+        sid = m.group(3)
+        col = len(m.group(1)) + (len(m.group(2)) if m.group(2) else 0)
+        subtree: list[tuple[int, str]] | None = None
+        for j in range(i + 1, len(lines)):
+            indent = len(lines[j]) - len(lines[j].lstrip(" "))
+            if indent < col or (indent == col and lines[j].lstrip().startswith("-")):
+                break
+            key = lines[j].strip()
+            if indent == col and (key == "Condition:" or key.startswith("Condition: ")):
+                subtree = [(col, key)]
+                for k in range(j + 1, len(lines)):
+                    deeper = len(lines[k]) - len(lines[k].lstrip(" "))
+                    if deeper <= col:
+                        break
+                    subtree.append((deeper, lines[k].strip()))
+                break
+        if subtree is None:
+            out[sid] = [({}, {})]
+            continue
+        reader = _YamlReader(subtree, path, sid)
+        tree, end = reader.node(0)
+        if end != len(subtree):
+            raise reader.fail(f"was only partly read, up to `{subtree[end][1]}`.")
+        condition = tree["Condition"]
+        switches = sorted(_yaml_switches(condition))
+        renders: list[tuple[dict, dict]] = []
+        for env in _combinations(switches, path, sid):
+            rendered = _yaml_resolve(condition, env)
+            if rendered is NO_VALUE:
+                renders.append((env, {}))
+                continue
+            if not isinstance(rendered, dict) or not all(isinstance(v, dict) for v in rendered.values()):
+                raise reader.fail("does not render to a mapping of operators to keys.")
+            renders.append((env, rendered))
+        out[sid] = renders
+    if not out:
+        raise GuardError(f"{path}: no `Sid:` lines at all, so this guard is reading nothing.")
+    return out
+
+
+def aws_cloudformation_conditions(source: str, path: str) -> dict[str, list[Combination]]:
+    """Every IAM statement in the template, as sid -> each combination and its pairs."""
+    return {
+        sid: [(env, frozenset((op, key) for op, keys in rendered.items() for key in keys)) for env, rendered in renders]
+        for sid, renders in cloudformation_condition_renders(source, path).items()
+    }
+
+
+def cloudformation_condition_values(source: str, path: str) -> list[str]:
+    """Each condition's VALUE must not change with a switch that decides whether a condition is emitted.
+
+    Giving each bound its own switch without nesting `AWS::NoValue` inside a condition operator
+    means writing one bound out once per branch of the other's switch. Those copies are the same
+    value written twice, and nothing else compares them: a copy edited on one branch alone ships a
+    bound that differs by whether an unrelated parameter is set. A switch that decides only a
+    value, such as which VPC ARN to name, may change it freely.
+    """
+    problems: list[str] = []
+    for sid, renders in cloudformation_condition_renders(source, path).items():
+        combos = [(env, frozenset((op, key) for op, keys in r.items() for key in keys)) for env, r in renders]
+        every = frozenset().union(*(pairs for _, pairs in combos))
+        gates = {c[0] for c in (_controlling_switch(pair, combos) for pair in every) if c and c != ALWAYS}
+        for op, key in sorted(every):
+            seen: dict[tuple, set[str]] = {}
+            for env, rendered in renders:
+                if key in rendered.get(op, {}):
+                    rest = tuple(sorted((n, v) for n, v in env.items() if n not in gates))
+                    seen.setdefault(rest, set()).add(json.dumps(rendered[op][key], sort_keys=True))
+            if any(len(values) > 1 for values in seen.values()):
+                problems.append(
+                    f"aws: statement `{sid}` in {path} writes `{op}` on `{key}` with a different value\n"
+                    f"  depending on {', '.join(f'`{g}`' for g in sorted(gates))}, each of which decides whether a\n"
+                    "  condition is emitted.\n\n"
+                    "  That is one bound written out once per branch, and the copies have drifted. A customer\n"
+                    "  gets a different bound depending on a parameter that has nothing to do with it. Make\n"
+                    "  every copy of this condition identical."
+                )
+    return problems
+
+
+def _fmt_pairs(pairs) -> str:
+    return ", ".join(f"{op} {key}" for op, key in sorted(pairs)) or "none"
+
+
+# The switches that decide whether a condition is emitted at all, as (Terraform gate, CloudFormation
+# condition): the same customer input, spelled once per route. A switch that controls a condition and
+# is missing here fails the build, because this table is the only thing that says the two routes
+# gate a bound on the same input. A switch that only chooses a condition's VALUE, such as which VPC
+# ARN to name, never controls one and needs no entry. Each pair must be true in the same case on
+# both routes.
+SWITCHES = (
+    ("local.region_condition", "HasRegionCondition"),
+    ("length(local.egress_vpc_arns) > 0", "HasAnyEgressVpc"),
+)
+ALWAYS = ("always", True)
+
+
+def _controlling_switch(pair: tuple[str, str], combos: list[Combination]) -> tuple[str, bool] | None:
+    """The (switch, value) under which `pair` is emitted, ALWAYS if it always is, else None."""
+    emitted = [pair in pairs for _, pairs in combos]
+    if all(emitted):
+        return ALWAYS
+    for name in combos[0][0].keys():
+        for value in (True, False):
+            if emitted == [env[name] == value for env, _ in combos]:
+                return name, value
+    return None
+
+
+ALL_AT_ONCE_FIX = {
+    AWS_TF: "Give each condition its own `dynamic \"condition\"` block, gated only on its own input.",
+    AWS_CFN: "Give each condition its own `!If`. Do not put one condition in the other's false branch.",
+}
+
+
+def compare_aws_conditions(
+    tf: dict[str, list[Combination]], cfn: dict[str, list[Combination]], sids: set[str]
+) -> list[str]:
+    problems: list[str] = []
+    for sid in sorted(sids):
+        tf_all = frozenset().union(*(pairs for _, pairs in tf[sid]))
+        cfn_all = frozenset().union(*(pairs for _, pairs in cfn[sid]))
+        if tf_all != cfn_all:
+            problems.append(
+                f"aws: statement `{sid}` is bounded by different conditions on the two paths.\n\n"
+                f"    {AWS_TF}: {_fmt_pairs(tf_all)}\n"
+                f"    {AWS_CFN}: {_fmt_pairs(cfn_all)}\n\n"
+                "  The same actions under a different bound are a different grant. A customer who set\n"
+                "  the same parameters on the other route gets a role that is wider, or one that refuses\n"
+                "  what this one allows."
+            )
+        control = {AWS_TF: {}, AWS_CFN: {}}
+        for path, all_pairs, combos in ((AWS_TF, tf_all, tf[sid]), (AWS_CFN, cfn_all, cfn[sid])):
+            control[path] = {pair: _controlling_switch(pair, combos) for pair in all_pairs}
+            tangled = sorted(pair for pair, switch in control[path].items() if switch is None)
+            if tangled:
+                problems.append(
+                    f"aws: statement `{sid}` in {path} emits a condition under more than one switch.\n\n"
+                    f"    {_fmt_pairs(tangled)}\n\n"
+                    "  Each condition must follow exactly one input the customer sets, whatever the other\n"
+                    "  inputs are. One that also depends on a second input is a bound the customer asked for\n"
+                    "  and does not get in some configuration, while the policy still reads as bounded.\n"
+                    f"  {ALL_AT_ONCE_FIX[path]}"
+                )
+            if all_pairs and all_pairs not in [pairs for _, pairs in combos]:
+                problems.append(
+                    f"aws: statement `{sid}` in {path} never carries all of its conditions at once.\n\n"
+                    f"    it names: {_fmt_pairs(all_pairs)}\n"
+                    f"    the most any one combination of its switches emits: "
+                    f"{_fmt_pairs(max((pairs for _, pairs in combos), key=len))}\n\n"
+                    "  IAM ANDs the conditions in a statement, so every bound a customer asked for belongs\n"
+                    "  on it together. Emitting one INSTEAD of another drops a bound the customer set,\n"
+                    f"  and the policy still reads as bounded. {ALL_AT_ONCE_FIX[path]}"
+                )
+        to_cfn = dict(SWITCHES)
+        for pair in sorted(tf_all & cfn_all):
+            tf_switch, cfn_switch = control[AWS_TF][pair], control[AWS_CFN][pair]
+            if tf_switch is None or cfn_switch is None:
+                continue
+            known = {ALWAYS[0], *to_cfn}, {ALWAYS[0], *to_cfn.values()}
+            if tf_switch[0] not in known[0] or cfn_switch[0] not in known[1]:
+                raise GuardError(
+                    f"aws: statement `{sid}` emits {_fmt_pairs([pair])} under a switch that `SWITCHES` does not name\n"
+                    f"  (terraform `{tf_switch[0]}`, cloudformation `{cfn_switch[0]}`).\n\n"
+                    "  That table is how this guard knows the two routes gate a bound on the same input. Add\n"
+                    "  the pair of switches to it, spelled as each route spells it."
+                )
+            expected = ALWAYS if tf_switch == ALWAYS else (to_cfn[tf_switch[0]], tf_switch[1])
+            if cfn_switch != expected:
+                problems.append(
+                    f"aws: statement `{sid}` emits {_fmt_pairs([pair])} under different inputs on the two paths.\n\n"
+                    f"    {AWS_TF}: when `{tf_switch[0]}` is {tf_switch[1]}\n"
+                    f"    {AWS_CFN}: when `{cfn_switch[0]}` is {cfn_switch[1]}\n\n"
+                    "  A customer who set the same parameters on the other route gets this bound in a\n"
+                    "  different configuration, or not at all. Gate it on the input SWITCHES pairs it with."
+                )
+    return problems
+
+
 # --------------------------------------------------------------------------------------
 # The comparisons
 # --------------------------------------------------------------------------------------
@@ -663,6 +1048,17 @@ def check_aws(srcs: dict[str, str]) -> list[str]:
         )
     for sid in sorted(set(tf) & set(cfn)):
         problems += _diff(f"statement `{sid}`", grant, tf[sid], cfn[sid])
+
+    tf_conditions = aws_terraform_conditions(srcs[AWS_TF], AWS_TF)
+    cfn_conditions = aws_cloudformation_conditions(srcs[AWS_CFN], AWS_CFN)
+    for path, readers in ((AWS_TF, (tf, tf_conditions)), (AWS_CFN, (cfn, cfn_conditions))):
+        if set(readers[0]) != set(readers[1]) - {trust}:
+            raise GuardError(
+                f"{path}: the action and condition readers disagree on which statements exist "
+                f"({sorted(set(readers[0]) ^ (set(readers[1]) - {trust}))}). One of them no longer matches the file."
+            )
+    problems += compare_aws_conditions(tf_conditions, cfn_conditions, set(tf) & set(cfn))
+    problems += cloudformation_condition_values(srcs[AWS_CFN], AWS_CFN)
     return problems
 
 
@@ -755,7 +1151,7 @@ def main(root: Path = REPO_ROOT) -> int:
         return 1
     print("Route parity intact:")
     print("  ok  gcp     terraform custom roles == gcloud custom roles")
-    print("  ok  aws     terraform statements == cloudformation statements")
+    print("  ok  aws     terraform statements == cloudformation statements, actions and condition keys")
     print("  ok  azure   one action list, deployed by both paths, every parameter passed")
     return 0
 

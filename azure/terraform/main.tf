@@ -128,7 +128,7 @@ resource "azurerm_resource_group_template_deployment" "role" {
   })
 }
 
-# --- Network landing pad, on by default (egress out; inbound only via ssh_source_ranges) ---
+# --- Network landing pad, on by default (egress out; SSH in via your rule and Ringleader's) ---
 #
 # One region's worth. An Azure VNet is regional, so a second region means a second VNet
 # joined by global VNet peering -- which is non-transitive and cannot join overlapping
@@ -333,27 +333,28 @@ resource "azurerm_subnet_network_security_group_association" "gateway" {
 # ssh rule is added to it rather than to bare metal.
 # Ringleader's setup traffic needs no rule at all: a workstation only needs egress to reach the
 # control plane, which the NAT gateway below provides. But `rl shell`, `rl tmux`, port-forwards
-# and VS Code Web all dial the workstation on TCP 22 directly -- there is no bastion, proxy or
-# SSH tunnel -- so without a rule the workstation comes up healthy, reports Ready, and nobody
-# can get into it.
+# and VS Code Web all dial the workstation on TCP 22 directly, with no bastion, proxy or SSH
+# tunnel. Ringleader admits that itself, with the rule described below.
 #
-# Leave ssh_source_ranges empty and only the NSG (with Azure's defaults) is created. Choose
-# that only if you reach the VNet privately (VPN / ExpressRoute / peering) from wherever you
-# run `rl`.
+# Leave ssh_source_ranges empty and only the NSG (with Azure's defaults) is created, so
+# Ringleader's rule is the only way in from outside the VNet. List ranges to reach other VMs on
+# the subnet, or to keep a workstation reachable from them when Ringleader cannot write its rule.
 #
-# THIS GROUP IS THE SUBNET LAYER, and a workstation with an egress policy carries a SECOND one.
-# Azure evaluates the subnet NSG and the NIC NSG and both must allow. Ringleader compiles a
-# policy into a NIC-level NSG, so the two layers divide cleanly: this one decides who may REACH
-# the workstation, and Ringleader's decides where the workstation may CONNECT. Two rules follow.
+# THIS GROUP IS THE SUBNET LAYER, and Ringleader creates each workstation with a SECOND one on its
+# NIC. Azure evaluates the subnet NSG and the NIC NSG and both must allow. For a workstation with an
+# egress policy the layers divide cleanly: this one decides who may REACH it, and the NSG
+# Ringleader compiles from the policy decides where it may CONNECT. Two rules follow.
 #
-# Keep inbound narrowing HERE rather than on a NIC. A NIC carries at most one NSG, so declaring
-# spec.egress on a box whose interface you supplied yourself
-# (providerConfig.azure.networkInterfaceId) REPLACES whatever group was on it -- and Ringleader's
-# carries a deliberately neutral inbound allow, because a fresh NSG ends in DenyAllInBound and an
-# outbound-only group on a NIC that had none would cut SSH to the box's public address. Neutral
-# means this subnet's rules become the whole story, which WIDENS inbound if that NIC group was
-# narrowing anything. Ringleader will add an inbound rule of its own in this group, at a priority
-# between 4090 and 4096, and never edits or deletes one declared here -- each rule below is its
+# Keep inbound narrowing HERE rather than on a NIC. A NIC carries at most one NSG, so on a box whose
+# interface you supplied yourself (providerConfig.azure.networkInterfaceId), Ringleader REPLACES
+# whatever group was on it, with or without spec.egress. A new NSG ends in DenyAllInBound, so a
+# group with no inbound allow would cut SSH from outside the VNet. Every NIC NSG Ringleader writes
+# therefore carries one. For a box with a policy it admits all inbound, which WIDENS inbound if the
+# replaced group was narrowing anything. For a box without a policy it admits only TCP 22 and 2222
+# from outside the VNet, so that box takes no other port from there, whatever this group opens.
+# Ringleader adds one inbound rule of its own in this group, at the lowest free priority
+# between 4090 and 4096: TCP 22 and 2222 from any address, to an application security group holding
+# its workstations' NICs. It never edits or deletes a rule declared here, and each rule below is its
 # own resource, so an apply leaves Ringleader's in place and Ringleader leaves these in place.
 #
 # And do not add an OUTBOUND Deny here. It cannot tighten a policy -- the NIC NSG already denies

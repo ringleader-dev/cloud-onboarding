@@ -61,8 +61,10 @@ Env vars for it: `NAME_PREFIX` (`ringleader`), `VNET_CIDR` and
 [`../README.md`](../README.md#a-second-ssh-port--opened-to-the-same-people-as-22) describes), and
 `GATEWAY_MANAGEMENT_SOURCE_CIDR` (mirrors `SSH_SOURCE_CIDR`, and `none` closes it, as described
 below).
-`SSH_SOURCE_CIDR` empty means the NSG is created with **no inbound rule**, which is
-correct only if you reach the VNet privately.
+`SSH_SOURCE_CIDR` empty means the NSG is created with **no inbound rule of yours**. Ringleader
+then adds its own, admitting TCP 22 and 2222 from any address to the workstations it creates. Set
+`SSH_SOURCE_CIDR` to reach other VMs on the subnet, or to keep your CIDR able to reach a
+workstation when Ringleader cannot write that rule.
 
 `CREATE_GATEWAY_SUBNET` is on by default (`GATEWAY_SUBNET_CIDR` overrides its range; unset, it
 derives the 241st `/24` of the VNet, `10.70.240.0/24` at index `0`). It reserves the subnet the
@@ -114,24 +116,25 @@ write and delete so Ringleader may only put blobs in containers you made.
 See [`../README.md`](../README.md#optional-egress-control) and
 [the full list of defaults](../../README.md#what-is-on-by-default-and-how-to-turn-it-off).
 
-The NSG this template creates is the **subnet** layer, and its rules are yours. A workstation that
-declares `spec.egress` gets a second NSG on its **NIC**, written by Ringleader; Azure evaluates
-both and both must allow, so this one decides who may reach the workstation and Ringleader's
-decides where the workstation may connect. Keep inbound narrowing here rather than on a NIC, and
-do not add an outbound `Deny` here — it cannot tighten a policy and it can break one. See
+The NSG this template creates is the **subnet** layer, and its rules are yours, plus one of
+Ringleader's. Ringleader also creates each workstation with an NSG on its **NIC**. Azure evaluates
+both and both must allow. With an egress policy, the NIC NSG decides where the workstation may
+connect and this one decides who may reach it. Without a policy, the NIC NSG admits only TCP 22
+and 2222 from outside the VNet. Keep inbound narrowing here rather than on a NIC, and do not add an
+outbound `Deny` here: it cannot tighten a policy and it can break one. See
 [`../README.md`](../README.md#two-nsgs-at-two-layers--and-which-one-is-yours).
 
-**Leave priorities 4090 to 4096 free in both groups.** Ringleader will add one inbound allow rule
-of its own in that range, admitting the SSH ports to the workstations it runs and the management
-ports to the gateway VM, and it never edits or deletes a rule this template created. That is why
-every rule here is deployed as its own `securityRules` child resource, and why `deploy.sh` passes
-`workstationsNsgExists` and `gatewayNsgExists`: deploying a group sets its **whole** rule list, so
-a group redeployed over one that already exists would delete Ringleader's rule and leave the
-workstations behind it unreachable until Ringleader's next pass. The other side of that shape is
-that a deployment never deletes a rule, so clearing `SSH_SOURCE_CIDR`,
-`SECONDARY_SSH_SOURCE_CIDR` or `GATEWAY_MANAGEMENT_SOURCE_CIDR` closes its rule through
-`deploy.sh` rather than through the template. Deploying the template by hand with a cleared CIDR
-leaves that rule as it was.
+**Leave priorities 4090 to 4096 free in both groups.** In the workstations group, Ringleader adds
+one inbound allow rule in that range, admitting the SSH ports to the workstations it creates. In
+the gateway group it will add one admitting the management ports to the gateway VM. Ringleader
+never edits or deletes a rule this template created. Every rule here is deployed as its own
+`securityRules` child resource, and `deploy.sh` passes `workstationsNsgExists` and
+`gatewayNsgExists`, for one reason: deploying a group sets its **whole** rule list. A group
+redeployed over one that already exists would delete Ringleader's rule and leave the workstations
+behind it unreachable until Ringleader's next pass. The other side of that shape is that a
+deployment never deletes a rule, so clearing `SSH_SOURCE_CIDR`, `SECONDARY_SSH_SOURCE_CIDR` or
+`GATEWAY_MANAGEMENT_SOURCE_CIDR` closes its rule through `deploy.sh` rather than through the
+template. Deploying the template by hand with a cleared CIDR leaves that rule as it was.
 
 **Why a second template rather than a `deployNetwork` flag on the first.**
 `azuredeploy.json` is also deployed by the [Terraform module](../terraform/),
