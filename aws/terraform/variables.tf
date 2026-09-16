@@ -129,8 +129,10 @@ It grants two sets of writes, both bounded to the VPCs in egress_vpc_ids and to
     tightly it is bounded.
 
     Granting it does not restrict anything on its own: until you declare an egress policy on
-    a workstation, nothing changes. It is on by default so that declaring one later does not
-    need a second onboarding pass.
+    a workstation, the places it can connect to do not change. The same security-group actions
+    let Ringleader create its own group admitting TCP 22 and 2222 from any address to the
+    workstations it creates. See ssh_source_ranges. It is on by default so that declaring a
+    policy later does not need a second onboarding pass.
   EOT
 }
 
@@ -314,13 +316,15 @@ variable "ssh_source_ranges" {
   default     = []
   description = <<-EOT
     CIDRs allowed to reach workstations on TCP 22, when create_network is set. Empty (the
-    default) opens no inbound rule.
+    default) creates no inbound rule of your own.
 
     Ringleader has no bastion and no SSH tunnel: `rl shell`, `rl tmux`, port-forwards and
-    VS Code Web all dial the workstation on 22. So with no rule, workstations come up and
-    report Ready but nobody can get into them -- correct only if you reach the subnet
-    privately (VPN / Direct Connect / peering) from wherever you run `rl`. Otherwise list the
-    CIDRs your engineers connect from. 0.0.0.0/0 is accepted but is a decision, not a default.
+    VS Code Web all dial the workstation on 22. Ringleader attaches its own security group to
+    the workstations it creates, admitting TCP 22 and 2222 from any address.
+    enable_egress_control is what lets Ringleader create that group. List CIDRs here to reach
+    the other instances in the workstation security groups, or to keep your engineers able to
+    reach a workstation when Ringleader cannot create its group. Such a workstation reports
+    SSHAdmissionMissing. 0.0.0.0/0 is accepted but is a decision, not a default.
   EOT
 }
 
@@ -333,7 +337,8 @@ variable "secondary_ssh_source_ranges" {
 
     Unset -- the default -- mirrors ssh_source_ranges, on the reasoning that if you opened 22
     to your engineers you almost certainly want 2222 open to the same people. Set it to []
-    to close the port explicitly, or to a narrower list to open it to fewer.
+    to create no rule for the port, or to a narrower list to open it to fewer. Ringleader's own
+    group admits 2222 either way. See ssh_source_ranges.
 
     Some Ringleader workstation types run their own SSH daemon on that port inside the
     instance, beside the instance's own sshd on 22, and `rl shell` dials it instead of 22 for

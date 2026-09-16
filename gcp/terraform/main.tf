@@ -9,8 +9,8 @@
 #     the service account.
 #
 # Plus, all on by default and each one a variable you can set to false:
-#   - a VPC + subnet + Cloud NAT landing pad (egress out; inbound SSH only from the
-#     CIDRs you name),
+#   - a VPC + subnet + Cloud NAT landing pad (egress out; inbound SSH from the CIDRs you
+#     name, beside the rule Ringleader writes for its own workstations),
 #   - a reserved, empty range beside the workstations subnet (the proxy VM runs in theirs),
 #   - egress control, which lets Ringleader manage the firewall rules that restrict
 #     where your workstations can connect, and
@@ -521,7 +521,7 @@ resource "google_service_account_iam_member" "workload_identity_user" {
   member             = "principal://iam.googleapis.com/${google_iam_workload_identity_pool.ringleader.name}/subject/${local.subject}"
 }
 
-# --- Network landing pad, on by default (egress out; inbound only via ssh_source_ranges) ---
+# --- Network landing pad, on by default (egress out; inbound SSH from ssh_source_ranges) ---
 #
 # A GCP VPC is a GLOBAL resource whose subnets are regional, and instances in any region
 # reach each other on internal addresses with no peering. That makes multi-region cheap
@@ -706,13 +706,14 @@ resource "google_compute_router_nat" "workstations" {
 # Ringleader's setup traffic is fine with that: a workstation only needs egress to reach the
 # control plane, which Cloud NAT above provides. But `rl shell`, `rl tmux`, port-forwards and
 # VS Code Web all dial the workstation on TCP 22 directly -- there is no bastion, proxy or SSH
-# tunnel -- so with no rule here the workstation comes up healthy, reports Ready, and nobody
-# can get into it.
+# tunnel -- so a workstation no rule admits comes up healthy, reports Ready, and cannot be
+# opened.
 #
-# Leave ssh_source_ranges empty and no rule is created. Choose that only if you reach the
-# subnet privately (VPN / Interconnect / VPC peering) from wherever you run `rl`. Otherwise
-# list the public CIDRs your engineers connect from. 0.0.0.0/0 is accepted but is a decision,
-# not a default.
+# Ringleader writes its own ingress rule, admitting TCP 22 and 2222 from any address to a
+# network tag it adds to the workstations it creates, under enable_egress_control. This rule is
+# yours. It reaches the VMs carrying workstation_network_tag, and it keeps a workstation reachable
+# from your CIDRs when Ringleader cannot write its own rule. Leave ssh_source_ranges empty and no
+# rule of your own is created. 0.0.0.0/0 is accepted but is a decision, not a default.
 resource "google_compute_firewall" "ssh" {
   count     = var.create_network && length(var.ssh_source_ranges) > 0 ? 1 : 0
   project   = var.project_id
@@ -737,7 +738,7 @@ locals {
   secondary_ssh_port = 2222
 
   # Unset mirrors ssh_source_ranges: if you opened 22 to your engineers you almost certainly
-  # want 2222 open to the same people. An explicit [] closes the port.
+  # want 2222 open to the same people. An explicit [] creates no rule for it.
   secondary_ssh_ranges = var.secondary_ssh_source_ranges == null ? var.ssh_source_ranges : var.secondary_ssh_source_ranges
 
   # The network tag Ringleader puts on the egress gateway VM it builds in your project. Fixed by
@@ -898,7 +899,7 @@ resource "google_compute_firewall" "gateway" {
 # writes it in the NSG on the gateway VM's NIC too, but Azure also evaluates the gateway SUBNET's
 # NSG, which is the landing pad's, so the Azure module carries the same admission. GCE has no
 # per-instance firewall object: the gateway's inbound rules are VPC ingress rules in THIS project,
-# and Ringleader creates none (every rule it writes is EGRESS). So on this cloud the landing pad is
+# and Ringleader writes none for the gateway. So on this cloud the landing pad is
 # the only place the admission can live, and this is it.
 #
 # Why it follows rather than asking. These CIDRs get SSH to the appliance itself, so the rule is

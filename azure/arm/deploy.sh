@@ -44,7 +44,7 @@
 #   SECONDARY_SSH_SOURCE_CIDR  one CIDR allowed inbound on the
 #                secondary SSH port, for workstation types that
 #                run their own SSH daemon inside the VM. "none"
-#                closes it                     (default: same as SSH_SOURCE_CIDR)
+#                creates no rule for it        (default: same as SSH_SOURCE_CIDR)
 #   GATEWAY_MANAGEMENT_SOURCE_CIDR  one CIDR allowed through the
 #                egress gateway subnet's NSG on its management
 #                ports, so a workstation an egress policy steers
@@ -100,7 +100,7 @@ if [ "$CREATE_NETWORK" = "true" ] && [ -z "$VNET_CIDR" ] && [ -z "$REGION_INDEX"
 fi
 SSH_SOURCE_CIDR="${SSH_SOURCE_CIDR:-}"
 # 2222 follows 22 unless you say otherwise: if you opened one to your engineers you almost
-# certainly want the other open to the same people. "none" closes it.
+# certainly want the other open to the same people. "none" creates no rule for it.
 SECONDARY_SSH_SOURCE_CIDR="${SECONDARY_SSH_SOURCE_CIDR:-$SSH_SOURCE_CIDR}"
 if [ "$SECONDARY_SSH_SOURCE_CIDR" = "none" ]; then
   SECONDARY_SSH_SOURCE_CIDR=""

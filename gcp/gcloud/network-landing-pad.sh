@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # Optional: create a minimal network landing pad for Ringleader workstation NICs -- a custom
-# VPC, one subnet, Cloud NAT for egress, and (only if you ask for it) one inbound-SSH rule.
+# VPC, one subnet, Cloud NAT for egress, and (only if you ask for it) one inbound-SSH rule of
+# yours. Ringleader writes its own SSH rule for the workstations it creates; see REACHABILITY.
 # Idempotent-ish (create calls error if resources already exist; re-run only against a clean
 # project).
 #
@@ -9,11 +10,11 @@
 #   REGION       region for the subnet/NAT           (default: us-central1)
 #   CIDR         subnet primary range                (default: 10.80.0.0/20)
 #   SSH_RANGES   comma-separated CIDRs allowed to reach workstations on TCP 22
-#                (default: empty -- NO inbound rule is created)
+#                (default: empty -- NO inbound rule of your own is created)
 #   SSH_TAG      network tag the rule targets        (default: ringleader-workstation)
 #   SECONDARY_SSH_RANGES
 #                comma-separated CIDRs allowed to reach the SECONDARY SSH port
-#                (default: empty -- NO rule is created)
+#                (default: follows SSH_RANGES; "none" creates no rule)
 #   SECONDARY_SSH_TAG
 #                network tag that rule targets        (default: ringleader-secondary-ssh)
 #   GATEWAY_MANAGEMENT_RANGES
@@ -48,11 +49,14 @@
 # Coming up only needs EGRESS: a workstation dials the Ringleader control plane out, and
 # Cloud NAT below provides that. But `rl shell`, `rl tmux`, port-forwards and VS Code Web all dial
 # the workstation on TCP 22 -- Ringleader ships no bastion, no proxy and no SSH tunnel. A
-# custom VPC has no firewall rules and GCP denies ingress by default, so WITHOUT
-# SSH_RANGES your workstations will come up, report Ready, and be openable by nobody.
+# custom VPC has no firewall rules and GCP denies ingress by default.
 #
-# Leave SSH_RANGES empty only if you reach this subnet privately (VPN / Interconnect / peering)
-# from wherever you run `rl`. Otherwise set it to the CIDRs your engineers connect from:
+# Ringleader writes its own ingress rule, admitting TCP 22 and 2222 from any address to a
+# network tag it adds to the workstations it creates. onboard.sh's egress-control grant is
+# what lets it write that rule. SSH_RANGES adds a rule of your own beside it. Your rule reaches
+# the VMs carrying SSH_TAG, and it keeps a workstation reachable from your CIDRs when
+# Ringleader cannot write its own rule. Such a workstation reports SSHAdmissionMissing. Set it
+# to the CIDRs your engineers connect from:
 #
 #   SSH_RANGES=203.0.113.0/24 PROJECT=... ./network-landing-pad.sh
 #
@@ -79,8 +83,8 @@
 # It cannot be fixed inside the box -- a guest routing table does not participate in VPC routing,
 # which is the same property that stops a governed box's root defeating the chokepoint. The
 # management connection has to TERMINATE at the gateway and reach the box from inside the VPC, and
-# on GCP the gateway's inbound firewall is a VPC rule in your project: Ringleader writes only EGRESS
-# rules, and GCE has no per-instance firewall object it could own instead.
+# on GCP the gateway's inbound firewall is a VPC rule in your project: Ringleader writes no ingress
+# rule for the gateway, and GCE has no per-instance firewall object it could own instead.
 #
 # So this rule FOLLOWS SSH_RANGES, and you need set nothing extra:
 #
@@ -124,7 +128,7 @@ CIDR="${CIDR:-10.80.0.0/20}"
 SSH_RANGES="${SSH_RANGES:-}"
 SSH_TAG="${SSH_TAG:-ringleader-workstation}"
 # 2222 follows 22 unless you say otherwise: if you opened one to your engineers you almost
-# certainly want the other open to the same people. "none" closes it.
+# certainly want the other open to the same people. "none" creates no rule for it.
 SECONDARY_SSH_RANGES="${SECONDARY_SSH_RANGES:-$SSH_RANGES}"
 if [ "$SECONDARY_SSH_RANGES" = "none" ]; then
   SECONDARY_SSH_RANGES=""
@@ -201,10 +205,11 @@ if [[ -n "$SSH_RANGES" ]]; then
     --source-ranges "$SSH_RANGES" --target-tags "$SSH_TAG"
   echo ">> inbound SSH allowed from ${SSH_RANGES} to VMs tagged ${SSH_TAG}"
 else
-  echo ">> NOTE: no inbound rule created (SSH_RANGES is empty)."
-  echo "   Workstations here will come up but you will NOT be able to 'rl shell' into them"
-  echo "   unless you reach this subnet privately (VPN / Interconnect / peering)."
-  echo "   To allow SSH: SSH_RANGES=<your-cidr> ./network-landing-pad.sh"
+  echo ">> NOTE: no inbound rule of your own created (SSH_RANGES is empty)."
+  echo "   Ringleader writes its own rule admitting TCP 22 and 2222 from any address to the"
+  echo "   workstations it creates. A workstation it cannot write that rule for reports"
+  echo "   SSHAdmissionMissing, and can be opened only if a rule of your own admits it."
+  echo "   To add your own: SSH_RANGES=<your-cidr> ./network-landing-pad.sh"
 fi
 
 if [[ -n "$SECONDARY_SSH_RANGES" ]]; then

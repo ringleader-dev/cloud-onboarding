@@ -9,9 +9,12 @@ org_uid = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
 # Region for the landing-pad network and your workstations.
 region = "us-east-1"
 
-# WHO CAN SSH IN -- the one thing that is NOT on by default, and cannot be. Empty opens
-# nothing (private reach only). Example: your office / VPN egress. 0.0.0.0/0 is accepted but
-# is a decision, never one this module makes for you.
+# WHO CAN SSH IN -- your own rule is the one thing that is NOT on by default, and cannot be.
+# Empty creates no rule of your own. Ringleader still attaches a security group of its own that
+# admits TCP 22 and 2222 from any address to its workstations; see "Reaching your workstations"
+# in aws/README.md.
+# Example: your office / VPN egress. 0.0.0.0/0 is accepted but is a decision, never one this
+# module makes for you.
 ssh_source_ranges = []
 
 # ---------------------------------------------------------------------------------------
@@ -55,7 +58,8 @@ ssh_source_ranges = []
 
 # Let Ringleader manage the security groups that restrict where workstations may connect.
 # Bounded to the VPC this module creates; read the egress_scope output after applying to
-# confirm. It restricts nothing until you declare an egress policy on a workstation.
+# confirm. It restricts nothing until you declare an egress policy on a workstation. It is
+# also what lets Ringleader create the security group that admits SSH to its workstations.
 # enable_egress_control = false
 
 # Let Ringleader attach an instance profile to a workstation, so it runs as an IAM role.

@@ -105,8 +105,19 @@ and VS Code Web all dial the workstation on **TCP 22**. Bringing a workstation u
 only *egress*, so one can finish setting up, report `Ready`, and still be unreachable.
 
 On GCP a workstation gets an **external IP by default** (opt out per workstation with
-`providerConfig.gcp.assignPublicIp: false`) — but a custom VPC has **no firewall rules**
-and GCP denies ingress by default, so it stays unreachable until you allow 22:
+`providerConfig.gcp.assignPublicIp: false`). A custom VPC has **no firewall rules** and GCP
+denies ingress by default, so a workstation is reachable only where a firewall rule allows it.
+
+**Ringleader admits SSH to its own workstations.** It adds a network tag of its own to every
+workstation it creates. It then writes one VPC firewall rule in the workstation's network, admitting
+TCP 22 and 2222 from any address to VMs carrying that tag. A workstation with an external IP is
+reachable on those ports from the internet. One without is reachable from anywhere that can route to
+the VPC. A VM Ringleader did not create does not carry the tag unless
+you add it, so the rule does not reach it. The `enable_egress_control` grant is what lets
+Ringleader write the rule. An ingress deny rule of your own with a priority number of `900` or
+lower takes precedence over it, and so does a deny in a hierarchical firewall policy.
+
+`ssh_source_ranges` adds a rule of your own on TCP 22, for the CIDRs your engineers connect from:
 
 ```hcl
 create_network    = true
@@ -114,11 +125,14 @@ ssh_source_ranges = ["203.0.113.0/24"]   # the CIDRs your engineers connect from
 ```
 
 That creates one rule (`ringleader-allow-ssh`) targeting the `ringleader-workstation`
-network tag, so it applies to your workstations and nothing else. Put the same tag on
-the workstations (`providerConfig.gcp.networkTags: [ringleader-workstation]`).
+network tag, so it applies to the VMs carrying that tag and nothing else. Ringleader puts the tag
+on a workstation that declares no `networkTags`. A workstation that declares its own list needs the
+tag in it (`providerConfig.gcp.networkTags: [ringleader-workstation]`).
 
-Leave `ssh_source_ranges` empty **only** if you reach the subnet privately (VPN /
-Interconnect / peering).
+Your rule keeps a workstation reachable from those CIDRs when Ringleader cannot write its own
+rule, in which case the workstation reports `SSHAdmissionMissing`. That happens, for example, when
+egress control is off. Leave `ssh_source_ranges` empty and Ringleader's rule is the only one
+admitting SSH from outside the workstation subnets, unless a firewall rule of your own does.
 
 ### A second SSH port — opened to the same people as 22
 
@@ -143,10 +157,10 @@ providerConfig:
 
 Replacing rather than adding would take TCP 22 away with it.
 
-Leave `secondary_ssh_source_ranges` empty — the default — and **no rule is created**; your project
-admits exactly what it admits today. Ringleader tells you whether the workstations you plan to run
-need this port. You never supply the port number: the module carries it, so it cannot drift from
-the port Ringleader dials.
+Leave `secondary_ssh_source_ranges` unset and it follows `ssh_source_ranges`, which is empty by
+default, so **no rule of your own is created**. Ringleader's own rule admits 2222 to its workstations
+either way. Ringleader tells you whether the workstations you plan to run need this port. You never
+supply the port number: the module carries it, so it cannot drift from the port Ringleader dials.
 
 ## Optional: let Ringleader create the per-user identities
 
@@ -180,7 +194,9 @@ to an allowlist you declare in the workstation manifest — a set of IP ranges a
 enforced by VPC firewall rules that Ringleader creates and keeps in step with the manifest.
 
 It is **on by default**, and granting it restricts nothing on its own: until you declare an
-egress policy on a workstation, everything behaves exactly as it does today. To opt out:
+egress policy on a workstation, the places it can connect to do not change. The same grant
+lets Ringleader write the firewall rule that admits SSH to its workstations, described in
+[Reaching your workstations](#reaching-your-workstations). To opt out:
 
 ```hcl
 enable_egress_control = false
@@ -193,7 +209,7 @@ What that grants is a **custom project role** with ten permissions and nothing e
 
 | | |
 |---|---|
-| `compute.firewalls.create` / `delete` / `get` / `list` / `update` | create and maintain the firewall rules that carry each policy |
+| `compute.firewalls.create` / `delete` / `get` / `list` / `update` | create and maintain the firewall rules that carry each policy, and the rule that admits SSH to Ringleader's workstations |
 | `compute.routes.create` / `delete` / `get` / `list` | the static route that steers a workstation's traffic at the egress gateway, when a policy names hostnames rather than address ranges |
 | `compute.networks.updatePolicy` | creating that route additionally requires it — the one that is easy to leave out and hard to diagnose |
 
@@ -341,8 +357,8 @@ connection has to **terminate at the gateway** and reach the box from inside the
 security group that Ringleader creates and owns. Azure sits in between. Ringleader writes the rule
 in the NSG on the gateway VM's NIC, and the Azure landing pad adds the matching rule to the gateway
 subnet's NSG, which Azure evaluates first. **On GCP it is yours**, because GCE has no per-instance
-firewall object: the gateway's inbound rules are VPC ingress rules in this project, and every rule
-Ringleader writes here is `EGRESS`.
+firewall object: the gateway's inbound rules are VPC ingress rules in this project, and Ringleader
+writes no ingress rule for the gateway.
 
 **So this landing pad adds the rule for you, and it follows `ssh_source_ranges`.** Set those and
 you are done — one rule, `ringleader-allow-gateway-management`, targeting the

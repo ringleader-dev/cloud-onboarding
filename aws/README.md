@@ -142,23 +142,41 @@ pad's range, and the plan fails rather than guessing if they disagree. See
 | | needs | provided by |
 |---|---|---|
 | **Bringing the workstation up** | **egress** from the VM to the Ringleader control plane | a public IP + internet gateway (the default), or a NAT gateway |
-| **Using the workstation** (`rl shell`, `rl tmux`, port-forwards, VS Code Web) | **inbound TCP 22**, from wherever you run `rl` | a security-group rule (`ssh_source_ranges` / `SshSourceCidr`) — or private connectivity |
-| **Using a workstation type that runs its own SSH daemon** | additionally, **inbound on a secondary SSH port** | a rule that follows `ssh_source_ranges` unless you override it (`secondary_ssh_source_ranges` / `SecondarySshSourceCidr`) |
+| **Using the workstation** (`rl shell`, `rl tmux`, port-forwards, VS Code Web) | **inbound TCP 22**, from wherever you run `rl` | Ringleader's security group, a rule of your own (`ssh_source_ranges` / `SshSourceCidr`), or private connectivity |
+| **Using a workstation type that runs its own SSH daemon** | additionally, **inbound on a secondary SSH port** | Ringleader's security group, or a rule of your own that follows `ssh_source_ranges` unless you override it (`secondary_ssh_source_ranges` / `SecondarySshSourceCidr`) |
 
 A workstation gets a **public IP by default** (`providerConfig.aws.assignPublicIp`), so
-the internet gateway alone gives it egress — no NAT gateway, no hourly bill. Set
+the internet gateway alone gives it egress, with no NAT gateway and no hourly bill. Set
 `assignPublicIp: false` for a private workstation, and create the NAT gateway
 (`create_nat_gateway`) so it still has egress. Ringleader ships **no bastion and no SSH
-tunnel**: a workstation with no inbound path finishes setting up and reports
-Ready, but nobody can open it.
+tunnel**, so `rl shell` needs a security group rule that admits TCP 22 to the workstation.
+Ringleader puts one in place itself, and you can add a rule of your own.
+
+**Ringleader admits SSH to its own workstations.** It creates a security group of its own in the
+workstation's VPC and attaches it beside the groups the workstation already carries. That group
+admits TCP 22 and 2222 from any address and has no egress rule. EC2 combines the rules of every
+group on a network interface, so the group opens those two ports on Ringleader's workstations and
+changes nothing else. A workstation with a public IP is reachable on those ports from the internet.
+One without a public IP is reachable from anywhere that can route to the VPC. The `enable_egress_control`
+grant is what lets Ringleader create the group.
+
+`ssh_source_ranges` (`SSH_SOURCE_CIDR` for `deploy.sh`) adds a rule of your own on TCP 22, to the
+two workstation security groups the landing pad creates (see
+[Which security group a workstation gets](#which-security-group-a-workstation-gets)). Your rule
+covers every instance in those groups, not only Ringleader's workstations. It also keeps a workstation reachable
+from those CIDRs when Ringleader cannot create its security group, in which case the workstation
+reports `SSHAdmissionMissing`. That happens, for example, when egress control is off, or when the
+workstation is in a VPC the grant does not cover. Leave `ssh_source_ranges` empty and Ringleader's
+security group is the only one admitting SSH, unless a security group of your own does.
 
 **The secondary SSH port follows port 22.** Some Ringleader workstation types run their own SSH
 daemon on a second port inside the instance, while the instance's own sshd keeps 22, and
-`rl shell` dials that port for such a workstation; others never use it, and for those the rule is
+`rl shell` dials that port for such a workstation. Others never use it, and for those the rule is
 harmless. So rather than making you find out which kind you are running, both paths mirror
-whatever you set for 22 — `secondary_ssh_source_ranges` (Terraform) and
-`SECONDARY_SSH_SOURCE_CIDR` (`deploy.sh`) override it, and `[]` / `none` closes it. Open nothing
-for 22 and nothing opens for 2222. You never supply the port number: both paths carry it.
+whatever you set for 22. `secondary_ssh_source_ranges` (Terraform) and
+`SECONDARY_SSH_SOURCE_CIDR` (`deploy.sh`) override it, and `[]` or `none` creates no rule of your
+own for the port. Open nothing for 22 and the landing pad opens nothing for 2222 either, while
+Ringleader's security group still admits both. You never supply the port number: both paths carry it.
 
 ## Optional: egress control
 
@@ -167,7 +185,9 @@ to an allowlist you declare in the workstation manifest — a set of IP ranges a
 enforced by security groups that Ringleader creates and keeps in step with the manifest.
 
 It is **on by default**, and granting it restricts nothing on its own: until you declare an
-egress policy on a workstation, everything behaves exactly as it does today.
+egress policy on a workstation, the places it can connect to do not change. The same grant
+lets Ringleader create the security group that admits SSH to its workstations, described in
+[Reaching your workstations](#reaching-your-workstations).
 
 ```hcl
 egress_vpc_ids = []   # empty uses the VPC this module creates
@@ -241,6 +261,11 @@ a group somebody forgot to finish.
 
 Both are needed. Strip the egress rule from the first group instead and every workstation
 *without* a policy loses the egress it needs to come up at all.
+
+Ringleader's security group, from [Reaching your workstations](#reaching-your-workstations), goes
+on a workstation beside whichever of the two it carries, and uses one of the five groups a network
+interface can carry by default. That group
+has no egress rule either, so it does not widen a policy.
 
 **Ringleader fails loudly rather than quietly.** Launch a workstation that declares
 `spec.egress` while it carries a group permitting egress and Ringleader **refuses to create

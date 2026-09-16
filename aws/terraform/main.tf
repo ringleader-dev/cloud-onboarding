@@ -301,7 +301,7 @@ locals {
   secondary_ssh_port = 2222
 
   # Unset mirrors ssh_source_ranges: if you opened 22 to your engineers you almost certainly
-  # want 2222 open to the same people. An explicit [] closes the port.
+  # want 2222 open to the same people. An explicit [] creates no rule for it.
   secondary_ssh_ranges = var.secondary_ssh_source_ranges == null ? var.ssh_source_ranges : var.secondary_ssh_source_ranges
 
   # The inbound rules BOTH workstation security groups carry, written once. The two groups below
@@ -790,8 +790,9 @@ resource "aws_route_table_association" "workstations" {
 
 # Inbound SSH -- the difference between a workstation that comes up and one you can use.
 # Egress is open (a workstation needs it to come up); ingress is 22 from ssh_source_ranges,
-# plus the opt-in secondary port, and nothing at all while both lists are empty (reach the
-# workstation privately, or over a public IP whose CIDR you list).
+# plus the opt-in secondary port, and nothing at all while both lists are empty. Ringleader
+# attaches a group of its own beside this one, admitting 22 and 2222 from any address, so an
+# empty list here does not leave its workstations closed.
 #
 # This is the group for a workstation that declares NO egress policy, and the only one until
 # egress control shipped. A workstation that declares one wants the inbound-only group below
