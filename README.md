@@ -84,11 +84,11 @@ get a workstation that looks healthy but nobody can use:
 | | needs | provided by |
 |---|---|---|
 | **Bringing the workstation up** (it finishing setup and reporting `Ready`) | **egress** from the VM to the Ringleader control plane | Cloud NAT / NAT gateway — or a public IP |
-| **Using the workstation** (`rl shell`, `rl tmux`, port-forwards, VS Code Web) | **inbound TCP 22** to the VM, from wherever you run `rl` | a firewall/NSG rule you choose — or private connectivity |
+| **Using the workstation** (`rl shell`, `rl tmux`, port-forwards, VS Code Web) | **inbound TCP 22** to the VM, from wherever you run `rl` | Ringleader's own rule for its workstations, a firewall or NSG rule of your own, or private connectivity |
 
 Ringleader ships **no bastion, no proxy, and no SSH tunnel**. `rl shell` dials the
-address the VM publishes on port 22, so a workstation with no inbound path finishes
-setting up, reports `Ready`, and still cannot be opened. For your own rule on port 22 you have two
+address the VM publishes on port 22, so a workstation needs a rule admitting that port.
+Ringleader puts its own rule in place, described below. For your own rule on port 22 you have two
 supported choices:
 
 - **Public + restricted** — set `ssh_source_ranges` to the CIDRs your engineers connect
@@ -96,10 +96,14 @@ supported choices:
 - **Private only** — leave `ssh_source_ranges` empty and reach the subnet over VPN /
   Interconnect / ExpressRoute / peering. The workstation still comes up on egress alone.
 
-Separately, Ringleader admits TCP 22 and 2222 from any address to the workstations it creates,
-with a firewall rule of its own that the `enable_egress_control` grant lets it write. So an empty
+Ringleader admits TCP 22 and 2222 from any address to the workstations it creates, with a firewall
+rule of its own that the `enable_egress_control` grant lets it write. So an empty
 `ssh_source_ranges` does not leave those workstations closed. One with a public IP is reachable on
-those ports from the internet, so give a workstation you want private no public IP. On Azure, see [Reaching your workstations](azure/README.md#reaching-your-workstations).
+those ports from the internet, so give a workstation you want private no public IP. Your own rule
+keeps a workstation reachable from your CIDRs when Ringleader cannot put its rule in place, in
+which case the workstation reports `SSHAdmissionMissing`. Each cloud's README says what the rule is there:
+[AWS](aws/README.md#reaching-your-workstations), [GCP](gcp/README.md#reaching-your-workstations),
+[Azure](azure/README.md#reaching-your-workstations).
 
 The clouds differ in their default: **GCP** gives every workstation an external IP
 unless you opt out; **Azure** gives none unless you opt in (so it needs the NAT gateway
@@ -114,10 +118,10 @@ you are running, every module **follows whatever you set for port 22**:
 
 | Path | Set | Default |
 |---|---|---|
-| Terraform (all three clouds) | `secondary_ssh_source_ranges` | unset — mirrors `ssh_source_ranges`; `[]` closes it |
-| `gcp/gcloud/network-landing-pad.sh` | `SECONDARY_SSH_RANGES` | mirrors `SSH_RANGES`; `none` closes it |
-| `aws/cloudformation/deploy.sh` | `SECONDARY_SSH_SOURCE_CIDR` | mirrors `SSH_SOURCE_CIDR`; `none` closes it |
-| `azure/arm/deploy.sh` | `SECONDARY_SSH_SOURCE_CIDR` | mirrors `SSH_SOURCE_CIDR`; `none` closes it |
+| Terraform (all three clouds) | `secondary_ssh_source_ranges` | unset, which mirrors `ssh_source_ranges`. `[]` creates no rule |
+| `gcp/gcloud/network-landing-pad.sh` | `SECONDARY_SSH_RANGES` | mirrors `SSH_RANGES`. `none` creates no rule |
+| `aws/cloudformation/deploy.sh` | `SECONDARY_SSH_SOURCE_CIDR` | mirrors `SSH_SOURCE_CIDR`. `none` creates no rule |
+| `azure/arm/deploy.sh` | `SECONDARY_SSH_SOURCE_CIDR` | mirrors `SSH_SOURCE_CIDR`. `none` creates no rule |
 
 One more thing follows port 22, on GCP and Azure: the rule admitting you to the **egress gateway
 VM**. Without it, a workstation an egress policy steers keeps its egress and stops answering on its
@@ -126,8 +130,9 @@ it `GATEWAY_MANAGEMENT_RANGES`, and the Azure `deploy.sh` calls it `GATEWAY_MANA
 All of them mirror the ranges above, and `[]` and `none` close them. AWS needs no equivalent,
 because there the gateway's inbound firewall is a security group Ringleader creates and owns.
 
-Open nothing for 22 and nothing opens for 2222 either. **You never supply the port number** —
-each asset carries it, so it cannot drift from the port Ringleader actually dials.
+Open nothing for 22 and these modules open nothing for 2222 either, while Ringleader's own rule
+still admits both ports to its workstations. **You never supply the port number:** each asset
+carries it, so it cannot drift from the port Ringleader actually dials.
 
 The clouds differ in how narrowly the rule can be aimed. **GCP** scopes it to its own network tag
 (`ringleader-secondary-ssh`), so it reaches only the workstations you tag with it. **AWS** puts it

@@ -100,8 +100,10 @@ variable "enable_egress_control" {
     administration on top. See the note beside the role in main.tf.
 
     Granting it does not restrict anything on its own: until you declare an egress policy on
-    a workstation, nothing changes. It is on by default so that declaring one later does not
-    need a second onboarding pass.
+    a workstation, the places it can connect to do not change. compute.firewalls.* also lets
+    Ringleader write the rule that admits TCP 22 and 2222 from any address to the workstations
+    it creates. See ssh_source_ranges. It is on by default so that declaring a policy later
+    does not need a second onboarding pass.
   EOT
 }
 
@@ -208,14 +210,14 @@ variable "egress_role_id" {
   }
 }
 
-# --- Network landing pad, on by default (egress out; inbound only via ssh_source_ranges) ---
+# --- Network landing pad, on by default (egress out; inbound SSH from ssh_source_ranges) ---
 
 variable "create_network" {
   type        = bool
   default     = true
   description = <<-EOT
-    Create a minimal VPC + subnet + Cloud NAT for workstation NICs (egress out; inbound only
-    via ssh_source_ranges). On by default; set false and supply your own subnet instead.
+    Create a minimal VPC + subnet + Cloud NAT for workstation NICs (egress out; inbound SSH
+    from ssh_source_ranges). On by default; set false and supply your own subnet instead.
 
     Worth knowing: Cloud NAT bills per hour and per GB, so this default starts a small meter
     even before you run a workstation. Set it false if you already have a subnet for these
@@ -228,13 +230,15 @@ variable "ssh_source_ranges" {
   default     = []
   description = <<-EOT
     CIDRs allowed to reach workstations on TCP 22, when create_network is set. Empty (the
-    default) creates no inbound rule.
+    default) creates no inbound rule of your own.
 
     Ringleader has no bastion and no SSH tunnel: `rl shell`, `rl tmux`, port-forwards and
-    VS Code Web all dial the workstation on 22. So with no rule, workstations come up and
-    report Ready but nobody can get into them -- correct only if you reach the subnet
-    privately (VPN / Interconnect / peering) from wherever you run `rl`. Otherwise list the
-    CIDRs your engineers connect from.
+    VS Code Web all dial the workstation on 22. Ringleader writes its own firewall rule,
+    admitting TCP 22 and 2222 from any address to a network tag it adds to the workstations it
+    creates. enable_egress_control is what lets Ringleader write that rule. List CIDRs here to
+    reach the other VMs carrying workstation_network_tag, or to keep your engineers able to
+    reach a workstation when Ringleader cannot write its rule. Such a workstation reports
+    SSHAdmissionMissing.
   EOT
 }
 
@@ -253,7 +257,8 @@ variable "secondary_ssh_source_ranges" {
 
     Unset -- the default -- mirrors ssh_source_ranges, on the reasoning that if you opened 22
     to your engineers you almost certainly want 2222 open to the same people. Set it to []
-    to close the port explicitly, or to a narrower list to open it to fewer.
+    to create no rule for the port, or to a narrower list to open it to fewer. Ringleader's own
+    rule admits 2222 to its workstations either way. See ssh_source_ranges.
 
     Some Ringleader workstation types run their own SSH daemon on that port inside the VM,
     beside the VM's own sshd on 22, and `rl shell` dials it instead of 22 for those. Others

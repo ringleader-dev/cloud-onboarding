@@ -350,7 +350,7 @@ variable "secondary_ssh_source_ranges" {
 
     Unset -- the default -- mirrors ssh_source_ranges, on the reasoning that if you opened 22
     to your engineers you almost certainly want 2222 open to the same people. Set it to []
-    to close the port explicitly, or to a narrower list to open it to fewer.
+    to create no rule for the port, or to a narrower list to open it to fewer.
 
     Some Ringleader workstation types run their own SSH daemon on that port inside the VM,
     beside the VM's own sshd on 22, and `rl shell` dials it instead of 22 for those. Others

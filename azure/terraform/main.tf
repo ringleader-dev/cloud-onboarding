@@ -391,7 +391,7 @@ locals {
   secondary_ssh_port = 2222
 
   # Unset mirrors ssh_source_ranges: if you opened 22 to your engineers you almost certainly
-  # want 2222 open to the same people. An explicit [] closes the port.
+  # want 2222 open to the same people. An explicit [] creates no rule for it.
   secondary_ssh_ranges = var.secondary_ssh_source_ranges == null ? var.ssh_source_ranges : var.secondary_ssh_source_ranges
 }
 

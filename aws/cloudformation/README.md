@@ -33,9 +33,11 @@ Env vars: `ISSUER_URL`, `ORG_UID` (required); `REGION_INDEX` (required with a ne
 `SECONDARY_SSH_SOURCE_CIDR` **follows `SSH_SOURCE_CIDR`** unless you set it: it opens a second
 SSH port on the workstations security group, which some Ringleader workstation types run their
 own SSH daemon on while the instance's own sshd keeps 22, and which is harmless for the types
-that do not. Set it to `none` to close the port, or to a different CIDR to open it more
-narrowly. Open nothing for 22 and nothing opens for 2222. You never supply the port number —
-the template carries it.
+that do not. Set it to `none` to create no rule for the port, or to a different CIDR to open it
+more narrowly. Open nothing for 22 and the template opens nothing for 2222 either, while
+Ringleader's security group still admits both ports to its workstations.
+[Reaching your workstations](../README.md#reaching-your-workstations) says how. You never supply
+the port number: the template carries it.
 
 ## The one placeholder
 

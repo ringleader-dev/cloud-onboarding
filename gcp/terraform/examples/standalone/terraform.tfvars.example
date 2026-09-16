@@ -22,10 +22,11 @@ network_cidr = "10.80.0.0/16"
 # these VMs. Cloud NAT bills per hour and per GB.
 # create_network = false
 
-# WHO CAN SSH IN -- the one thing that is NOT on by default, and cannot be. Ringleader has no
-# bastion: `rl shell`, tmux, port-forwards and VS Code Web all dial the workstation on TCP 22.
-# With this empty, workstations come up and report Ready but nobody can open them -- correct
-# only if you reach the subnet privately (VPN / Interconnect / peering).
+# WHO CAN SSH IN -- your own rule is the one thing that is NOT on by default, and cannot be.
+# Ringleader has no bastion: `rl shell`, tmux, port-forwards and VS Code Web all dial the
+# workstation on TCP 22. With this empty no rule of your own is created. Ringleader still writes
+# its own rule admitting TCP 22 and 2222 from any address to its workstations; see "Reaching
+# your workstations" in gcp/README.md.
 # ssh_source_ranges = ["203.0.113.0/24"]   # the CIDRs your engineers connect from
 
 # The secondary SSH port follows ssh_source_ranges unless you set this. Some Ringleader
@@ -61,7 +62,8 @@ network_cidr = "10.80.0.0/16"
 # route that steers a workstation's traffic at the DNS / HTTPS proxy. Grants a custom role with
 # compute.firewalls.*, compute.routes.* and compute.networks.updatePolicy -- ten permissions
 # -- and nothing else. It restricts
-# nothing until you declare an egress policy on a workstation. GCP's own FQDN filtering is a
+# nothing until you declare an egress policy on a workstation. It is also what lets Ringleader
+# write the firewall rule that admits SSH to its workstations. GCP's own FQDN filtering is a
 # separate, documented opt-in; see gcp/README.md.
 # enable_egress_control = false
 

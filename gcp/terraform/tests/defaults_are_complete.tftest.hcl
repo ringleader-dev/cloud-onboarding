@@ -144,7 +144,7 @@ run "the_admission_is_the_rule_it_promises" {
 
   assert {
     condition     = google_compute_firewall.gateway_management[0].direction == "INGRESS"
-    error_message = "the inbound-management rule is not INGRESS. Ringleader writes only EGRESS rules on GCE, which is the whole reason this admission has to live in the landing pad."
+    error_message = "the inbound-management rule is not INGRESS. Ringleader writes no ingress rule for the gateway on GCE, which is the whole reason this admission has to live in the landing pad."
   }
 
   assert {

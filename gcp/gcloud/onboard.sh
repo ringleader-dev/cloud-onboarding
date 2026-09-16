@@ -181,7 +181,8 @@ fi
 # Lets Ringleader restrict where your workstations may connect -- an allowlist declared in
 # the workstation manifest, enforced by VPC firewall rules Ringleader creates and keeps up
 # to date. It restricts nothing on its own: until you declare an egress policy, workstations
-# reach whatever your network routes, exactly as they do today.
+# reach whatever your network routes. The same firewall permissions let Ringleader write the
+# ingress rule that admits TCP 22 and 2222 from any address to the workstations it creates.
 #
 # Ringleader compiles each distinct policy into ONE firewall rule and targets it with a
 # network tag, so a fleet sharing a policy costs one rule rather than one per workstation.

@@ -24,12 +24,12 @@
 #   STACK_NAME   CloudFormation stack name                     (default: ringleader-onboarding)
 #   ROLE_NAME    IAM role name Ringleader assumes              (default: ringleader-workstations)
 #   CREATE_NETWORK  true|false: create a landing-pad network   (default: true)
-#   SSH_SOURCE_CIDR a single CIDR allowed to SSH (network on)  (default: empty = no inbound)
+#   SSH_SOURCE_CIDR a single CIDR allowed to SSH (network on)  (default: empty = no rule of your own)
 #   SECONDARY_SSH_SOURCE_CIDR
 #                a single CIDR allowed to reach the secondary SSH
 #                port, for workstation types that run their own SSH
-#                daemon inside the instance. "none" closes it
-#                                              (default: same as SSH_SOURCE_CIDR)
+#                daemon inside the instance. "none" creates no
+#                rule for it                   (default: same as SSH_SOURCE_CIDR)
 #   ALLOWED_REGION  bound the role to one region (optional)    (default: $REGION)
 #   EGRESS_CONTROL  true|false: let Ringleader manage the security
 #                groups that restrict where workstations connect (default: true)
@@ -75,7 +75,7 @@ ROLE_NAME="${ROLE_NAME:-ringleader-workstations}"
 CREATE_NETWORK="${CREATE_NETWORK:-true}"
 SSH_SOURCE_CIDR="${SSH_SOURCE_CIDR:-}"
 # 2222 follows 22 unless you say otherwise: if you opened one to your engineers you almost
-# certainly want the other open to the same people. "none" closes it.
+# certainly want the other open to the same people. "none" creates no rule for it.
 SECONDARY_SSH_SOURCE_CIDR="${SECONDARY_SSH_SOURCE_CIDR:-$SSH_SOURCE_CIDR}"
 if [ "$SECONDARY_SSH_SOURCE_CIDR" = "none" ]; then
   SECONDARY_SSH_SOURCE_CIDR=""

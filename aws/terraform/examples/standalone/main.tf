@@ -35,7 +35,7 @@ variable "ssh_source_ranges" {
   default = []
 }
 
-# Unset mirrors ssh_source_ranges; [] closes the second SSH port.
+# Unset mirrors ssh_source_ranges; [] creates no rule for the second SSH port.
 variable "secondary_ssh_source_ranges" {
   type    = list(string)
   default = null

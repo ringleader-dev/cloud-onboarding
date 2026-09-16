@@ -57,7 +57,7 @@ one's range in silence. See [`../README.md`](../README.md#a-second-region-name-i
 Env vars for it: `NAME_PREFIX` (`ringleader`), `VNET_CIDR` and
 `SUBNET_CIDR` (both empty: overrides, derived from `REGION_INDEX` when unset),
 `SSH_SOURCE_CIDR` (empty),
-`SECONDARY_SSH_SOURCE_CIDR` (mirrors `SSH_SOURCE_CIDR`, and `none` closes it, as
+`SECONDARY_SSH_SOURCE_CIDR` (mirrors `SSH_SOURCE_CIDR`, and `none` creates no rule for it, as
 [`../README.md`](../README.md#a-second-ssh-port--opened-to-the-same-people-as-22) describes), and
 `GATEWAY_MANAGEMENT_SOURCE_CIDR` (mirrors `SSH_SOURCE_CIDR`, and `none` closes it, as described
 below).

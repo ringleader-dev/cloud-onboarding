@@ -114,21 +114,26 @@ Parameters:
     Type: String
     Default: ""
     Description: >-
-      A single CIDR allowed to SSH to workstations (when CreateNetwork=true). Empty opens
-      no inbound rule (private reach only). rl shell/tmux/port-forwards all dial the
-      workstation on 22 directly -- there is no bastion.
+      A single CIDR allowed to SSH to workstations (when CreateNetwork=true). Empty creates
+      no inbound rule of your own. rl shell/tmux/port-forwards all dial the workstation on 22
+      directly, and there is no bastion. Ringleader attaches its own security group to the
+      workstations it creates, admitting TCP 22 and 2222 from any address. EnableEgressControl
+      is what lets Ringleader create that group. Set this to reach other instances, or to keep
+      your engineers able to reach a workstation when Ringleader cannot create its group. Such
+      a workstation reports SSHAdmissionMissing.
 
   SecondarySshSourceCidr:
     Type: String
     Default: ""
     Description: >-
       A single CIDR allowed to reach the secondary SSH port (TCP 2222) on the workstations
-      security group. Empty opens no rule. deploy.sh defaults it to SshSourceCidr, so the two
-      ports open to the same people unless you say otherwise; set SECONDARY_SSH_SOURCE_CIDR to
-      "none" there to close it, or pass this parameter directly when deploying by hand. Some
-      Ringleader workstation types run their own SSH daemon on that port inside the instance,
-      beside the instance's own sshd on 22, and rl shell dials it instead of 22 for those;
-      others never use it, and for those the rule is harmless.
+      security group. Empty creates no rule of your own. deploy.sh defaults it to SshSourceCidr,
+      so the two ports open to the same people unless you say otherwise. Set
+      SECONDARY_SSH_SOURCE_CIDR to "none" there to create no rule for it, or pass this parameter
+      directly when deploying by hand. Ringleader's own security group admits the port either
+      way. Some Ringleader workstation types run their own SSH daemon on that port inside the
+      instance, beside the instance's own sshd on 22, and rl shell dials it instead of 22 for
+      those. Others never use it, and for those the rule is harmless.
 
   EnableWorkstationIdentities:
     Type: String
@@ -184,8 +189,10 @@ Parameters:
       nine route-table and subnet writes and ec2:ModifyNetworkInterfaceAttribute, all bounded
       to EgressVpcId (and to AllowedRegion, if set), plus five Elastic IP actions and two
       reads that take the region bound alone -- an Elastic IP belongs to no VPC, and EC2
-      Describe actions support no resource-level scoping. Granting it restricts nothing on its own --
-      until you declare an egress policy on a workstation, nothing changes.
+      Describe actions support no resource-level scoping. Granting it restricts nothing on its own:
+      until you declare an egress policy on a workstation, the places it can connect to do not
+      change. The same security-group actions let Ringleader create the group that admits SSH to
+      its workstations (see SshSourceCidr).
 
   EgressVpcId:
     Type: String
