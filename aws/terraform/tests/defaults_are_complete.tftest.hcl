@@ -102,6 +102,34 @@ run "the_one_default_that_costs_money_is_on_deliberately" {
   }
 }
 
+# An empty range list must CLOSE both workstation groups rather than stop managing them.
+#
+# The provider reads `ingress` in attributes-as-blocks mode, where a configuration carrying no block
+# at all means "Terraform does not manage ingress" rather than "there is no ingress". So a `dynamic`
+# block that produces nothing leaves whatever a previous apply opened in place: a customer who
+# cleared ssh_source_ranges to close TCP 22 would keep it open, on every workstation, with a green
+# plan and nothing to read. The groups therefore ASSIGN their rule list, which states the empty one
+# too, and this asserts that they still do.
+run "an_empty_range_list_closes_both_workstation_groups" {
+  command = plan
+
+  variables {
+    create_network              = true
+    ssh_source_ranges           = []
+    secondary_ssh_source_ranges = []
+  }
+
+  assert {
+    condition     = length(aws_security_group.workstations[0].ingress) == 0
+    error_message = "The workstations group does not state an empty ingress list when ssh_source_ranges is empty. If this became a `dynamic` block again, the provider stops managing ingress and a rule an earlier apply opened stays open."
+  }
+
+  assert {
+    condition     = length(aws_security_group.workstations_inbound_only[0].ingress) == 0
+    error_message = "The inbound-only group does not state an empty ingress list when ssh_source_ranges is empty. The two groups are deliberately identical on ingress, so they close together or a workstation is reachable depending on which id was handed back."
+  }
+}
+
 # Growing a root volume, and the read that reports a grow's state, asserted on the output a customer
 # reads to audit what the role holds. Both actions reach it through the same lists the policy is
 # built from, so an entry dropped from either list shows up here.
