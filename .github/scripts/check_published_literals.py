@@ -401,61 +401,65 @@ def cfn_managed_bucket_prefix(source: str, path: str) -> str:
     return distinct[0]
 
 
+ARM_SECURITY_RULE = "Microsoft.Network/networkSecurityGroups/securityRules"
+ARM_SECONDARY_SSH_RULE = "[concat(variables('nsgName'), '/AllowRingleaderSecondarySSHInbound')]"
+ARM_MANAGEMENT_RULE = "[concat(variables('gatewayNsgName'), '/allow-management-inbound')]"
+
+
+def arm_child_rule(doc: dict, path: str, name: str, what: str) -> dict:
+    """The properties of one security rule the ARM template deploys as a CHILD resource.
+
+    Every rule in that template is a child resource rather than an entry in a group's
+    `securityRules` list, because deploying the list sets the WHOLE list and would delete the rule
+    Ringleader writes in the same group. So this reads the resources, not the variables.
+    """
+    rules = [
+        r for r in doc.get("resources", [])
+        if r.get("type") == ARM_SECURITY_RULE and r.get("name") == name
+    ]
+    if len(rules) != 1:
+        raise GuardError(
+            f"{path}: found {len(rules)} `{ARM_SECURITY_RULE}` resources named `{name}`, expected 1.\n\n"
+            f"  That is {what}. If it was renamed, or folded back into a group's `securityRules` list,\n"
+            "  move this guard with it -- and know that a `securityRules` list deletes the rule\n"
+            "  Ringleader writes in the same group on every re-run."
+        )
+    return rules[0].get("properties", {})
+
+
 def arm_secondary_ssh_port(source: str, path: str) -> str:
-    """The `destinationPortRange` of the ARM template's secondary-SSH security rules."""
-    doc = json.loads(source)
-    rules = doc.get("variables", {}).get("secondarySshRules")
-    if not rules:
-        raise GuardError(
-            f"{path}: no `variables.secondarySshRules`.\n\n"
-            "  That array is the secondary-SSH rule this template deploys. If it was renamed or\n"
-            "  folded into another variable, move this guard with it."
-        )
-    ports = sorted({r.get("properties", {}).get("destinationPortRange") for r in rules})
-    if len(ports) != 1 or ports[0] is None:
-        raise GuardError(
-            f"{path}: `secondarySshRules` opens {ports}, which is not one port."
-        )
-    return str(ports[0])
+    """The `destinationPortRange` of the ARM template's secondary-SSH security rule."""
+    props = arm_child_rule(json.loads(source), path, ARM_SECONDARY_SSH_RULE, "the secondary-SSH rule")
+    port = props.get("destinationPortRange")
+    if not isinstance(port, str):
+        raise GuardError(f"{path}: the secondary-SSH rule opens {port!r}, which is not one port.")
+    return port
 
 
 def arm_gateway_management_ports(source: str, path: str) -> str:
-    """The port set of the ARM template's gateway-management rules, normalised like the HCL list.
+    """The port set of the ARM template's gateway-management rule, normalised like the HCL list.
 
-    Every rule must be TCP and spell its ports ONCE, as `destinationPortRanges`. ARM accepts a
+    The rule must be TCP and spell its ports ONCE, as `destinationPortRanges`. ARM accepts a
     singular `destinationPortRange` beside the list, and a second spelling is a port set this guard
     would not compare -- so it is refused rather than read.
     """
-    doc = json.loads(source)
-    rules = doc.get("variables", {}).get("gatewayManagementRules")
-    if not rules:
+    props = arm_child_rule(json.loads(source), path, ARM_MANAGEMENT_RULE, "the gateway-management rule")
+    if props.get("protocol") != "Tcp":
         raise GuardError(
-            f"{path}: no `variables.gatewayManagementRules`.\n\n"
-            "  That array is the rule admitting management traffic through the gateway subnet's NSG.\n"
-            "  If it was renamed or folded into another variable, move this guard with it."
+            f"{path}: the gateway-management rule admits protocol `{props.get('protocol')}`, not `Tcp`.\n\n"
+            "  The Terraform module and the gcp routes admit TCP alone, so this route would grant\n"
+            "  something the others do not, on a pad nobody can narrow again once it is applied."
         )
-    sets = set()
-    for rule in rules:
-        props = rule.get("properties", {})
-        if props.get("protocol") != "Tcp":
-            raise GuardError(
-                f"{path}: a `gatewayManagementRules` rule admits protocol `{props.get('protocol')}`, not `Tcp`.\n\n"
-                "  The Terraform module and the gcp routes admit TCP alone, so this route would grant\n"
-                "  something the others do not, on a pad nobody can narrow again once it is applied."
-            )
-        if "destinationPortRange" in props:
-            raise GuardError(
-                f"{path}: a `gatewayManagementRules` rule sets `destinationPortRange` as well as\n"
-                "  `destinationPortRanges`. That is a second spelling of the port set, free to drift from\n"
-                "  the one this guard compares."
-            )
-        ports = props.get("destinationPortRanges")
-        if not isinstance(ports, list) or not all(isinstance(x, str) for x in ports):
-            raise GuardError(f"{path}: a `gatewayManagementRules` rule has no `destinationPortRanges` list.")
-        sets.add(",".join(ports))
-    if len(sets) != 1:
-        raise GuardError(f"{path}: `gatewayManagementRules` open different port sets: {sorted(sets)}.")
-    return sets.pop()
+    if "destinationPortRange" in props:
+        raise GuardError(
+            f"{path}: the gateway-management rule sets `destinationPortRange` as well as\n"
+            "  `destinationPortRanges`. That is a second spelling of the port set, free to drift from\n"
+            "  the one this guard compares."
+        )
+    ports = props.get("destinationPortRanges")
+    if not isinstance(ports, list) or not all(isinstance(x, str) for x in ports):
+        raise GuardError(f"{path}: the gateway-management rule has no `destinationPortRanges` list.")
+    return ",".join(ports)
 
 
 # --------------------------------------------------------------------------------------
@@ -513,7 +517,7 @@ LITERALS = [
             Site(AWS_TF, "local.secondary_ssh_port", hcl_local("secondary_ssh_port")),
             Site(AWS_CFN, "the SecondarySshSourceCidr ingress rules", cfn_secondary_ssh_ports),
             Site(AZURE_TF, "local.secondary_ssh_port", hcl_local("secondary_ssh_port")),
-            Site(AZURE_ARM, "variables.secondarySshRules", arm_secondary_ssh_port),
+            Site(AZURE_ARM, "the AllowRingleaderSecondarySSHInbound rule", arm_secondary_ssh_port),
             Site(GCP_TF, "local.secondary_ssh_port", hcl_local("secondary_ssh_port")),
             Site(GCP_SH, "SECONDARY_SSH_PORT", shell_literal("SECONDARY_SSH_PORT")),
         ],
@@ -566,7 +570,7 @@ LITERALS = [
             Site(GCP_TF, "local.gateway_management_ports", hcl_local_port_set("gateway_management_ports")),
             Site(GCP_SH, "GATEWAY_MANAGEMENT_RULES", shell_gcloud_rules("GATEWAY_MANAGEMENT_RULES")),
             Site(AZURE_TF, "local.gateway_management_ports", hcl_local_port_set("gateway_management_ports")),
-            Site(AZURE_ARM, "variables.gatewayManagementRules", arm_gateway_management_ports),
+            Site(AZURE_ARM, "the allow-management-inbound rule", arm_gateway_management_ports),
         ],
     ),
     Literal(
@@ -925,35 +929,15 @@ def check_azure_management_wiring(sources: dict[str, str]) -> list[str]:
             )
 
     doc = json.loads(sources[AZURE_ARM])
-    nsgs = [
-        r for r in doc.get("resources", [])
-        if r.get("type") == "Microsoft.Network/networkSecurityGroups"
-        and r.get("name") == "[variables('gatewayNsgName')]"
-    ]
-    if len(nsgs) != 1:
-        raise GuardError(
-            f"{AZURE_ARM}: found {len(nsgs)} gateway NSG resources named `[variables('gatewayNsgName')]`,\n"
-            "  expected 1. If it was renamed, move this guard with it."
-        )
-    if nsgs[0].get("properties", {}).get("securityRules") != "[variables('effectiveGatewaySecurityRules')]":
+    prefix = arm_child_rule(doc, AZURE_ARM, ARM_MANAGEMENT_RULE, "the gateway-management rule").get(
+        "sourceAddressPrefix"
+    )
+    if prefix != "[parameters('gatewayManagementSourceCidr')]":
         failures.append(
-            f"{AZURE_ARM}: the gateway NSG does not deploy `variables('effectiveGatewaySecurityRules')`, so\n"
-            "  the management rule pinned above is a rule this template never creates."
+            f"{AZURE_ARM}: the gateway-management rule admits `{prefix}`, not\n"
+            "  `[parameters('gatewayManagementSourceCidr')]`, so it no longer follows what deploy.sh passes."
         )
-    variables = doc.get("variables", {})
-    effective = variables.get("effectiveGatewaySecurityRules", "")
-    if "variables('gatewayManagementRules')" not in effective or "variables('gatewayVnetRules')" not in effective:
-        failures.append(
-            f"{AZURE_ARM}: `effectiveGatewaySecurityRules` is `{effective}`, which does not deploy both\n"
-            "  `gatewayVnetRules` and `gatewayManagementRules`."
-        )
-    for rule in variables.get("gatewayManagementRules", []):
-        prefix = rule.get("properties", {}).get("sourceAddressPrefix")
-        if prefix != "[parameters('gatewayManagementSourceCidr')]":
-            failures.append(
-                f"{AZURE_ARM}: a `gatewayManagementRules` rule admits `{prefix}`, not\n"
-                "  `[parameters('gatewayManagementSourceCidr')]`, so it no longer follows what deploy.sh passes."
-            )
+    failures += _arm_groups_keep_foreign_rules(doc, sources[AZURE_SH])
 
     sh = strip_shell_comments(sources[AZURE_SH])
     if not re.search(r'\bgatewayManagementSourceCidr="\$GATEWAY_MANAGEMENT_SOURCE_CIDR"', sh):
@@ -961,6 +945,61 @@ def check_azure_management_wiring(sources: dict[str, str]) -> list[str]:
             f"{AZURE_SH}: does not pass `gatewayManagementSourceCidr=\"$GATEWAY_MANAGEMENT_SOURCE_CIDR\"` to the\n"
             "  network template, so the default this guard checks above reaches no rule at all."
         )
+    return failures
+
+
+def _arm_groups_keep_foreign_rules(doc: dict, deploy_sh: str) -> list[str]:
+    """The ARM route must leave a rule it did not declare in place.
+
+    Ringleader writes its own inbound rules inside these two groups: one admitting SSH to the
+    workstations it runs, one admitting the management band to the gateway VM. Two shapes take them
+    away again, and both deploy cleanly, so neither is visible in review:
+
+      * a `securityRules` list on the group, which a deployment sets as a WHOLE; and
+      * redeploying the group at all, which resets a property the template leaves out.
+
+    So the rules are child resources, and `deploy.sh` deploys each group only when it is absent. It
+    can only do that if it looks the group up under the name the template builds, which is why the
+    names are compared here rather than trusted to stay in step.
+    """
+    failures = []
+    sh = strip_shell_comments(deploy_sh)
+    for name, suffix, param in (
+        ("[variables('nsgName')]", "-workstations-nsg", "workstationsNsgExists"),
+        ("[variables('gatewayNsgName')]", "-gateway-nsg", "gatewayNsgExists"),
+    ):
+        groups = [
+            r for r in doc.get("resources", [])
+            if r.get("type") == "Microsoft.Network/networkSecurityGroups" and r.get("name") == name
+        ]
+        if len(groups) != 1:
+            raise GuardError(
+                f"{AZURE_ARM}: found {len(groups)} network security groups named `{name}`, expected 1.\n"
+                "  If it was renamed, move this guard with it."
+            )
+        if "securityRules" in groups[0].get("properties", {}):
+            failures.append(
+                f"{AZURE_ARM}: `{name}` declares a `securityRules` list. A deployment sets that list as a\n"
+                "  whole, so every re-run would delete the rule Ringleader writes in this group and leave\n"
+                "  the workstations behind it unreachable until Ringleader's next pass. Declare each rule\n"
+                f"  as a `{ARM_SECURITY_RULE}` child resource instead."
+            )
+        if f"not(parameters('{param}'))" not in json.dumps(groups[0].get("condition", "")):
+            failures.append(
+                f"{AZURE_ARM}: `{name}` is deployed without asking `{param}`, so a re-run redeploys a group\n"
+                "  that already exists and resets its rules to the ones declared here."
+            )
+        if f'{param}="$' not in sh:
+            failures.append(
+                f"{AZURE_SH}: does not pass `{param}` to the network template, so the template cannot tell a\n"
+                "  first deployment from a re-run and every re-run resets that group's rules."
+            )
+        if f'"${{NAME_PREFIX}}{suffix}"' not in sh:
+            failures.append(
+                f"{AZURE_SH}: does not name `${{NAME_PREFIX}}{suffix}`, which is what `{name}` builds. It looks\n"
+                f"  the group up under that name to decide `{param}`; under any other name it finds nothing,\n"
+                "  redeploys the group, and deletes Ringleader's rule on every run."
+            )
     return failures
 
 

@@ -99,6 +99,20 @@
       "metadata": {
         "description": "Optional override for the governed subnet. Empty derives the 15th /20 of the VNet range (10.70.224.0/20 at index 0), immediately below the gateway /24 at the top of the VNet, so the two egress-control ranges stay together and the workstations prefix is free to grow. Set it only to override, and then it must sit inside the VNet range."
       }
+    },
+    "workstationsNsgExists": {
+      "type": "Bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "False, the default, creates the workstations network security group. True leaves the group that is already there alone and deploys only its rules. Deploying a network security group sets its whole rule list, so redeploying a group that already exists deletes every rule added since, including the inbound rule Ringleader adds to admit its own workstations at a priority between 4090 and 4096. deploy.sh looks the group up and passes this for you. Each rule below is its own child resource either way, so changing sshSourceCidr and re-running still lands."
+      }
+    },
+    "gatewayNsgExists": {
+      "type": "Bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "The same switch for the egress gateway subnet's network security group, and for the same reason: true deploys that group's rules without redeploying the group, so a rule added since stays. There are two switches because the groups can be created at different times: createGatewaySubnet may be set true after a first deployment. Ignored when createGatewaySubnet is false."
+      }
     }
   },
   "variables": {
@@ -124,71 +138,6 @@
     "natName": "[concat(parameters('namePrefix'), '-nat')]",
     "natPipName": "[concat(parameters('namePrefix'), '-nat-pip')]",
     "subnetName": "workstations",
-    "sshRules": [
-      {
-        "name": "AllowRingleaderSSHInbound",
-        "properties": {
-          "priority": 1000,
-          "direction": "Inbound",
-          "access": "Allow",
-          "protocol": "Tcp",
-          "sourcePortRange": "*",
-          "destinationPortRange": "22",
-          "sourceAddressPrefix": "[parameters('sshSourceCidr')]",
-          "destinationAddressPrefix": "*"
-        }
-      }
-    ],
-    "secondarySshRules": [
-      {
-        "name": "AllowRingleaderSecondarySSHInbound",
-        "properties": {
-          "priority": 1010,
-          "direction": "Inbound",
-          "access": "Allow",
-          "protocol": "Tcp",
-          "sourcePortRange": "*",
-          "destinationPortRange": "2222",
-          "sourceAddressPrefix": "[parameters('secondarySshSourceCidr')]",
-          "destinationAddressPrefix": "*"
-        }
-      }
-    ],
-    "effectiveSecurityRules": "[concat(if(equals(parameters('sshSourceCidr'), ''), createArray(), variables('sshRules')), if(equals(parameters('secondarySshSourceCidr'), ''), createArray(), variables('secondarySshRules')))]",
-    "gatewayVnetRules": [
-      {
-        "name": "allow-vnet-inbound",
-        "properties": {
-          "protocol": "*",
-          "direction": "Inbound",
-          "access": "Allow",
-          "priority": 4000,
-          "sourceAddressPrefix": "VirtualNetwork",
-          "sourcePortRange": "*",
-          "destinationAddressPrefix": "*",
-          "destinationPortRange": "*"
-        }
-      }
-    ],
-    "gatewayManagementRules": [
-      {
-        "name": "allow-management-inbound",
-        "properties": {
-          "protocol": "Tcp",
-          "direction": "Inbound",
-          "access": "Allow",
-          "priority": 4010,
-          "sourceAddressPrefix": "[parameters('gatewayManagementSourceCidr')]",
-          "sourcePortRange": "*",
-          "destinationAddressPrefix": "*",
-          "destinationPortRanges": [
-            "22",
-            "30000-32767"
-          ]
-        }
-      }
-    ],
-    "effectiveGatewaySecurityRules": "[concat(variables('gatewayVnetRules'), if(equals(parameters('gatewayManagementSourceCidr'), ''), createArray(), variables('gatewayManagementRules')))]",
     "gatewaySubnetName": "gateway",
     "governedSubnetName": "governed",
     "workstationSubnets": [
@@ -266,23 +215,101 @@
       }
     },
     {
+      "comments": "The workstations subnet's security group, and the governed subnet's. Its rules are child resources below rather than a securityRules list here, because a list is deployed as a WHOLE: setting it deletes every rule this template does not name, and Ringleader writes one of its own in this group to admit its workstations, at a priority between 4090 and 4096. Leave that range free. A child resource adds and updates only itself, so re-running this template leaves Ringleader's rule in place -- as long as the group itself is not redeployed, which is what workstationsNsgExists is for.",
+      "condition": "[not(parameters('workstationsNsgExists'))]",
       "type": "Microsoft.Network/networkSecurityGroups",
       "apiVersion": "2023-11-01",
       "name": "[variables('nsgName')]",
-      "location": "[parameters('location')]",
+      "location": "[parameters('location')]"
+    },
+    {
+      "comments": "A deployment adds and updates rules, it never deletes one, so clearing sshSourceCidr leaves this rule where it is. deploy.sh deletes it for you when you clear the CIDR, and the same holds for every conditional rule below.",
+      "condition": "[not(equals(parameters('sshSourceCidr'), ''))]",
+      "type": "Microsoft.Network/networkSecurityGroups/securityRules",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('nsgName'), '/AllowRingleaderSSHInbound')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+      ],
       "properties": {
-        "securityRules": "[variables('effectiveSecurityRules')]"
+        "priority": 1000,
+        "direction": "Inbound",
+        "access": "Allow",
+        "protocol": "Tcp",
+        "sourcePortRange": "*",
+        "destinationPortRange": "22",
+        "sourceAddressPrefix": "[parameters('sshSourceCidr')]",
+        "destinationAddressPrefix": "*"
       }
     },
     {
-      "comments": "The egress gateway subnet's own security group. Azure's default rules are rules INSIDE a group, so a subnet and a NIC with none are not filtered at all -- and the gateway VM Ringleader builds here carries a public address whenever EgressGateway.spec.publicAddress asks for one, which without this would put the proxy's listeners and its sshd on the internet. THE FIRST RULE IS NOT OPTIONAL, and the defaults are not a substitute for it: AllowVnetInBound at 65000 is source VirtualNetwork to DESTINATION VirtualNetwork, while a steered packet arrives addressed to the PUBLIC host the workstation was reaching -- a UDR next hop does not rewrite the destination -- so it would miss that rule, fall to DenyAllInBound at 65500, and every governed box would lose the internet while the gateway stayed healthy. Allowing the VNet inbound to ANY destination is what Ringleader also writes on the VM's own NIC; this group is the second layer and the two must agree. THE SECOND RULE, present when gatewayManagementSourceCidr is set, keeps a workstation an egress policy steers reachable: the steering route also carries the reply to a connection the box never opened, so the management connection goes through the gateway VM instead, and for inbound traffic Azure evaluates this subnet's NSG before the NIC's and both must allow. It admits TCP 22 and 30000-32767 from that one CIDR; the NSG on the gateway VM's NIC still decides what reaches the VM. Outbound is untouched, so the gateway keeps the internet access it exists to police.",
-      "condition": "[parameters('createGatewaySubnet')]",
+      "condition": "[not(equals(parameters('secondarySshSourceCidr'), ''))]",
+      "type": "Microsoft.Network/networkSecurityGroups/securityRules",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('nsgName'), '/AllowRingleaderSecondarySSHInbound')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+      ],
+      "properties": {
+        "priority": 1010,
+        "direction": "Inbound",
+        "access": "Allow",
+        "protocol": "Tcp",
+        "sourcePortRange": "*",
+        "destinationPortRange": "2222",
+        "sourceAddressPrefix": "[parameters('secondarySshSourceCidr')]",
+        "destinationAddressPrefix": "*"
+      }
+    },
+    {
+      "comments": "The egress gateway subnet's own security group. Azure's default rules are rules INSIDE a group, so a subnet and a NIC with none are not filtered at all -- and the gateway VM Ringleader builds here carries a public address whenever EgressGateway.spec.publicAddress asks for one, which without this would put the proxy's listeners and its sshd on the internet. Its rules are child resources for the reason the workstations group's are: this group holds a rule of Ringleader's too, admitting the management band to the gateway VM, and a securityRules list here would delete it on every re-run.",
+      "condition": "[and(parameters('createGatewaySubnet'), not(parameters('gatewayNsgExists')))]",
       "type": "Microsoft.Network/networkSecurityGroups",
       "apiVersion": "2023-11-01",
       "name": "[variables('gatewayNsgName')]",
-      "location": "[parameters('location')]",
+      "location": "[parameters('location')]"
+    },
+    {
+      "comments": "THIS RULE IS NOT OPTIONAL, and Azure's defaults are not a substitute for it: AllowVnetInBound at 65000 is source VirtualNetwork to DESTINATION VirtualNetwork, while a steered packet arrives addressed to the PUBLIC host the workstation was reaching -- a UDR next hop does not rewrite the destination -- so it would miss that rule, fall to DenyAllInBound at 65500, and every governed box would lose the internet while the gateway stayed healthy. Allowing the VNet inbound to ANY destination is what Ringleader also writes on the VM's own NIC; this group is the second layer and the two must agree.",
+      "condition": "[parameters('createGatewaySubnet')]",
+      "type": "Microsoft.Network/networkSecurityGroups/securityRules",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('gatewayNsgName'), '/allow-vnet-inbound')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('gatewayNsgName'))]"
+      ],
       "properties": {
-        "securityRules": "[variables('effectiveGatewaySecurityRules')]"
+        "protocol": "*",
+        "direction": "Inbound",
+        "access": "Allow",
+        "priority": 4000,
+        "sourceAddressPrefix": "VirtualNetwork",
+        "sourcePortRange": "*",
+        "destinationAddressPrefix": "*",
+        "destinationPortRange": "*"
+      }
+    },
+    {
+      "comments": "Present when gatewayManagementSourceCidr is set, this rule keeps a workstation an egress policy steers reachable: the steering route also carries the reply to a connection the box never opened, so the management connection goes through the gateway VM instead, and for inbound traffic Azure evaluates this subnet's NSG before the NIC's and both must allow. It admits TCP 22 and 30000-32767 from that one CIDR; the NSG on the gateway VM's NIC still decides what reaches the VM. Outbound is untouched, so the gateway keeps the internet access it exists to police.",
+      "condition": "[and(parameters('createGatewaySubnet'), not(equals(parameters('gatewayManagementSourceCidr'), '')))]",
+      "type": "Microsoft.Network/networkSecurityGroups/securityRules",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('gatewayNsgName'), '/allow-management-inbound')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('gatewayNsgName'))]"
+      ],
+      "properties": {
+        "protocol": "Tcp",
+        "direction": "Inbound",
+        "access": "Allow",
+        "priority": 4010,
+        "sourceAddressPrefix": "[parameters('gatewayManagementSourceCidr')]",
+        "sourcePortRange": "*",
+        "destinationAddressPrefix": "*",
+        "destinationPortRanges": [
+          "22",
+          "30000-32767"
+        ]
       }
     },
     {

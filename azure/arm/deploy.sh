@@ -206,6 +206,39 @@ if [ "$CREATE_NETWORK" = "true" ]; then
   echo ">>   inbound 22:   ${SSH_SOURCE_CIDR:-<none>}"
   echo ">>   secondary:    ${SECONDARY_SSH_SOURCE_CIDR:-<none>}"
   echo ">>   gateway mgmt: ${GATEWAY_MANAGEMENT_SOURCE_CIDR:-<none>}"
+  WORKSTATIONS_NSG="${NAME_PREFIX}-workstations-nsg"
+  GATEWAY_NSG="${NAME_PREFIX}-gateway-nsg"
+
+  # Deploying a network security group sets its WHOLE rule list, so re-running this on a group that
+  # already exists deletes every rule added since -- including the inbound rule Ringleader writes in
+  # it to admit its own workstations. So each group is deployed only when it is absent. Its rules
+  # are child resources, which add and update just themselves, so a changed CIDR above still lands
+  # on a group this run leaves alone.
+  WORKSTATIONS_NSG_EXISTS=false
+  if [ -n "$(az network nsg show -g "$RG" -n "$WORKSTATIONS_NSG" --query id -o tsv 2>/dev/null)" ]; then
+    WORKSTATIONS_NSG_EXISTS=true
+  fi
+  GATEWAY_NSG_EXISTS=false
+  if [ -n "$(az network nsg show -g "$RG" -n "$GATEWAY_NSG" --query id -o tsv 2>/dev/null)" ]; then
+    GATEWAY_NSG_EXISTS=true
+  fi
+
+  # The other half of that shape: a deployment adds and updates rules, it never deletes one. So
+  # clearing a CIDR closes its rule here rather than in the template. Deleting a rule that is not
+  # there succeeds, which is what makes this safe to run on every pass.
+  if [ "$WORKSTATIONS_NSG_EXISTS" = "true" ] && [ -z "$SSH_SOURCE_CIDR" ]; then
+    echo ">>   closing AllowRingleaderSSHInbound"
+    az network nsg rule delete -g "$RG" --nsg-name "$WORKSTATIONS_NSG" -n AllowRingleaderSSHInbound
+  fi
+  if [ "$WORKSTATIONS_NSG_EXISTS" = "true" ] && [ -z "$SECONDARY_SSH_SOURCE_CIDR" ]; then
+    echo ">>   closing AllowRingleaderSecondarySSHInbound"
+    az network nsg rule delete -g "$RG" --nsg-name "$WORKSTATIONS_NSG" -n AllowRingleaderSecondarySSHInbound
+  fi
+  if [ "$GATEWAY_NSG_EXISTS" = "true" ] && [ -z "$GATEWAY_MANAGEMENT_SOURCE_CIDR" ]; then
+    echo ">>   closing allow-management-inbound"
+    az network nsg rule delete -g "$RG" --nsg-name "$GATEWAY_NSG" -n allow-management-inbound
+  fi
+
   NETWORK_OUTPUTS="$(az deployment group create \
     --resource-group "$RG" \
     --name ringleader-onboarding-network \
@@ -223,6 +256,8 @@ if [ "$CREATE_NETWORK" = "true" ]; then
                  gatewaySubnetCidr="$GATEWAY_SUBNET_CIDR" \
                  createGovernedSubnet="$CREATE_GOVERNED_SUBNET" \
                  governedSubnetCidr="$GOVERNED_SUBNET_CIDR" \
+                 workstationsNsgExists="$WORKSTATIONS_NSG_EXISTS" \
+                 gatewayNsgExists="$GATEWAY_NSG_EXISTS" \
     --query '[properties.outputs.subnetId.value, properties.outputs.governedSubnetId.value, properties.outputs.gatewaySubnetId.value]' -o tsv)"
   SUBNET_ID="$(echo "$NETWORK_OUTPUTS" | sed -n 1p)"
   GOVERNED_SUBNET_ID="$(echo "$NETWORK_OUTPUTS" | sed -n 2p)"

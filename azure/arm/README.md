@@ -114,12 +114,24 @@ write and delete so Ringleader may only put blobs in containers you made.
 See [`../README.md`](../README.md#optional-egress-control) and
 [the full list of defaults](../../README.md#what-is-on-by-default-and-how-to-turn-it-off).
 
-The NSG this template creates is the **subnet** layer, and it stays yours. A workstation that
+The NSG this template creates is the **subnet** layer, and its rules are yours. A workstation that
 declares `spec.egress` gets a second NSG on its **NIC**, written by Ringleader; Azure evaluates
 both and both must allow, so this one decides who may reach the workstation and Ringleader's
 decides where the workstation may connect. Keep inbound narrowing here rather than on a NIC, and
 do not add an outbound `Deny` here — it cannot tighten a policy and it can break one. See
 [`../README.md`](../README.md#two-nsgs-at-two-layers--and-which-one-is-yours).
+
+**Leave priorities 4090 to 4096 free in both groups.** Ringleader will add one inbound allow rule
+of its own in that range, admitting the SSH ports to the workstations it runs and the management
+ports to the gateway VM, and it never edits or deletes a rule this template created. That is why
+every rule here is deployed as its own `securityRules` child resource, and why `deploy.sh` passes
+`workstationsNsgExists` and `gatewayNsgExists`: deploying a group sets its **whole** rule list, so
+a group redeployed over one that already exists would delete Ringleader's rule and leave the
+workstations behind it unreachable until Ringleader's next pass. The other side of that shape is
+that a deployment never deletes a rule, so clearing `SSH_SOURCE_CIDR`,
+`SECONDARY_SSH_SOURCE_CIDR` or `GATEWAY_MANAGEMENT_SOURCE_CIDR` closes its rule through
+`deploy.sh` rather than through the template. Deploying the template by hand with a cleared CIDR
+leaves that rule as it was.
 
 **Why a second template rather than a `deployNetwork` flag on the first.**
 `azuredeploy.json` is also deployed by the [Terraform module](../terraform/),

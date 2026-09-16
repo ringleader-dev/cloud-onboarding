@@ -326,10 +326,12 @@ Two properties of this subnet are deliberate, and both will surprise you if you 
   in here before the proxy exists has no egress at all and will not converge.** That is the
   fail-safe direction rather than a bug: a governed box reaches the internet through its proxy or
   not at all.
-- **It hands out no public IPs**, and you should create governed workstations with
-  `providerConfig.aws.assignPublicIp: false`. Once steering lands, `0.0.0.0/0` points at the
-  proxy's interface — which is also the reply path for anything dialling the box from outside the
-  VPC. Reach a governed workstation on its private address (VPN, peering or Direct Connect).
+- **It hands out no public IPs**, and `providerConfig.aws.assignPublicIp: false` is the posture
+  this subnet is built for. An address buys a governed workstation nothing. Once steering lands,
+  `0.0.0.0/0` points at the proxy's interface, which is also the reply path for anything dialling
+  the workstation from outside the VPC. Two ways in remain: the proxy forwards a port per governed
+  workstation when the `EgressGateway` asks for it (`spec.inboundManagement`), and the private
+  address answers over VPN, peering or Direct Connect.
 
 It shares the workstations subnet's availability zone, for the reason the proxy's own subnet does:
 AWS charges cross-AZ traffic in both directions, and every packet a governed box sends crosses to
