@@ -818,16 +818,25 @@ resource "aws_security_group" "workstations" {
   # such a workstation. Others never use it, and for those the rule is harmless -- which is why
   # it follows ssh_source_ranges rather than making you find out which kind you are running.
   # Set secondary_ssh_source_ranges = [] to close it.
-  dynamic "ingress" {
-    for_each = local.workstation_ingress
-    content {
-      description = ingress.value.description
-      from_port   = ingress.value.port
-      to_port     = ingress.value.port
-      protocol    = "tcp"
-      cidr_blocks = ingress.value.cidr_blocks
-    }
-  }
+  # Assigned rather than written as `dynamic "ingress"` blocks, and that is load-bearing. The
+  # provider reads ingress in attributes-as-blocks mode, where a configuration carrying NO block
+  # means "Terraform does not manage ingress" rather than "there is no ingress" -- so a dynamic
+  # block that produces nothing leaves whatever a previous apply opened in place, and clearing
+  # ssh_source_ranges would silently keep the port open. An assignment always states the whole
+  # list, including the empty one, so an empty list closes the group. Ringleader adds its own
+  # rules in a group of its own, never in this one, so being authoritative here takes nothing
+  # from it.
+  ingress = [for r in local.workstation_ingress : {
+    description      = r.description
+    from_port        = r.port
+    to_port          = r.port
+    protocol         = "tcp"
+    cidr_blocks      = r.cidr_blocks
+    ipv6_cidr_blocks = []
+    prefix_list_ids  = []
+    security_groups  = []
+    self             = false
+  }]
 
   tags = merge(var.tags, { Name = "ringleader-workstations" })
 }
@@ -867,16 +876,25 @@ resource "aws_security_group" "workstations_inbound_only" {
 
   # Deliberately no `egress` block. See above.
 
-  dynamic "ingress" {
-    for_each = local.workstation_ingress
-    content {
-      description = ingress.value.description
-      from_port   = ingress.value.port
-      to_port     = ingress.value.port
-      protocol    = "tcp"
-      cidr_blocks = ingress.value.cidr_blocks
-    }
-  }
+  # Assigned rather than written as `dynamic "ingress"` blocks, and that is load-bearing. The
+  # provider reads ingress in attributes-as-blocks mode, where a configuration carrying NO block
+  # means "Terraform does not manage ingress" rather than "there is no ingress" -- so a dynamic
+  # block that produces nothing leaves whatever a previous apply opened in place, and clearing
+  # ssh_source_ranges would silently keep the port open. An assignment always states the whole
+  # list, including the empty one, so an empty list closes the group. Ringleader adds its own
+  # rules in a group of its own, never in this one, so being authoritative here takes nothing
+  # from it.
+  ingress = [for r in local.workstation_ingress : {
+    description      = r.description
+    from_port        = r.port
+    to_port          = r.port
+    protocol         = "tcp"
+    cidr_blocks      = r.cidr_blocks
+    ipv6_cidr_blocks = []
+    prefix_list_ids  = []
+    security_groups  = []
+    self             = false
+  }]
 
   tags = merge(var.tags, { Name = "ringleader-workstations-inbound-only" })
 }
