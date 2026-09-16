@@ -192,9 +192,11 @@ Parameters:
     Default: ""
     Description: >-
       VPC the egress permissions are confined to. Leave empty when CreateNetwork=true and
-      the VPC this stack creates is used. If you bring your own network, name it here --
-      otherwise the permissions are bounded by region alone and reach every security group
-      in it.
+      the VPC this stack creates is used. If you bring your own network, name its VPC here.
+      If you also set AllowedRegion, name a VPC in that region: both bounds apply, so a write
+      to a VPC in any other region is refused. Left empty with your own network, the
+      permissions are bounded only by AllowedRegion and reach every security group in that
+      region. With AllowedRegion empty too, they are bounded only by the account.
 
   CreateNatGateway:
     Type: String
@@ -448,8 +450,9 @@ Resources:
               # has to admit workstation traffic. The third of them marks the rule admitting
               # inbound management traffic to that VM as Ringleader's own.
               #
-              # Bounded by VPC where one is known, since a VPC sits in exactly one region and is
-              # the tighter of the two bounds; by AllowedRegion otherwise.
+              # Bounded to the VPC when one is known, and to AllowedRegion when that is set. With
+              # both, the statement carries both conditions, and IAM applies the statement only
+              # when every condition in it holds.
               - !If
                 - WantEgressControl
                 - Sid: EgressSecurityGroups
@@ -491,11 +494,20 @@ Resources:
                   Resource: "*"
                   Condition: !If
                     - HasAnyEgressVpc
-                    - StringLike:
-                        "ec2:Vpc": !If
-                          - HasEgressVpc
-                          - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:vpc/${EgressVpcId}"
-                          - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:vpc/${Vpc}"
+                    - !If
+                      - HasRegionCondition
+                      - StringLike:
+                          "ec2:Vpc": !If
+                            - HasEgressVpc
+                            - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:vpc/${EgressVpcId}"
+                            - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:vpc/${Vpc}"
+                        StringEquals:
+                          "aws:RequestedRegion": !Ref AllowedRegion
+                      - StringLike:
+                          "ec2:Vpc": !If
+                            - HasEgressVpc
+                            - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:vpc/${EgressVpcId}"
+                            - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:vpc/${Vpc}"
                     - !If
                       - HasRegionCondition
                       - StringEquals:
@@ -597,11 +609,20 @@ Resources:
                   Resource: "*"
                   Condition: !If
                     - HasAnyEgressVpc
-                    - StringLike:
-                        "ec2:Vpc": !If
-                          - HasEgressVpc
-                          - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:vpc/${EgressVpcId}"
-                          - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:vpc/${Vpc}"
+                    - !If
+                      - HasRegionCondition
+                      - StringLike:
+                          "ec2:Vpc": !If
+                            - HasEgressVpc
+                            - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:vpc/${EgressVpcId}"
+                            - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:vpc/${Vpc}"
+                        StringEquals:
+                          "aws:RequestedRegion": !Ref AllowedRegion
+                      - StringLike:
+                          "ec2:Vpc": !If
+                            - HasEgressVpc
+                            - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:vpc/${EgressVpcId}"
+                            - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:vpc/${Vpc}"
                     - !If
                       - HasRegionCondition
                       - StringEquals:

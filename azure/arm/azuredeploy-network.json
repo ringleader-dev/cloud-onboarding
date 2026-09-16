@@ -55,14 +55,14 @@
       "type": "String",
       "defaultValue": "",
       "metadata": {
-        "description": "A single CIDR allowed inbound on TCP 22. Empty (the default) adds NO inbound rule, which leaves workstations unreachable from outside the VNet -- correct only if you reach it privately (VPN / ExpressRoute / peering). Ringleader ships no bastion and no SSH tunnel: rl shell, tmux, port-forwards and VS Code Web all dial the workstation on 22."
+        "description": "A single CIDR allowed inbound on TCP 22, to every VM on the workstations and governed subnets. Empty (the default) adds no rule of yours. Ringleader ships no bastion and no SSH tunnel: rl shell, tmux, port-forwards and VS Code Web all dial the workstation on 22. Ringleader adds its own rule admitting TCP 22 and 2222 from any address to the workstations it creates. Set this to reach other VMs, or to keep your CIDR working when Ringleader cannot write that rule."
       }
     },
     "secondarySshSourceCidr": {
       "type": "String",
       "defaultValue": "",
       "metadata": {
-        "description": "Optional, and empty opens nothing. A single CIDR allowed inbound on the secondary SSH port (TCP 2222). Some Ringleader workstation types run their own SSH daemon on that port inside the VM, beside the VM's own sshd on 22, and rl shell dials it instead of 22 for those; others never use it. An NSG covers the whole subnet, so this admits the port to every VM on it."
+        "description": "Optional, and empty opens nothing. A single CIDR allowed inbound on the secondary SSH port (TCP 2222). Some Ringleader workstation types run their own SSH daemon on that port inside the VM, beside the VM's own sshd on 22, and rl shell dials it instead of 22 for those; others never use it. Ringleader's own rule already admits the port to the workstations it creates. An NSG covers the whole subnet, so this admits the port to every VM on it."
       }
     },
     "gatewayManagementSourceCidr": {
@@ -262,7 +262,7 @@
       }
     },
     {
-      "comments": "The egress gateway subnet's own security group. Azure's default rules are rules INSIDE a group, so a subnet and a NIC with none are not filtered at all -- and the gateway VM Ringleader builds here carries a public address whenever EgressGateway.spec.publicAddress asks for one, which without this would put the proxy's listeners and its sshd on the internet. Its rules are child resources for the reason the workstations group's are: this group holds a rule of Ringleader's too, admitting the management band to the gateway VM, and a securityRules list here would delete it on every re-run.",
+      "comments": "The egress gateway subnet's own security group. Azure's default rules are rules INSIDE a group, and a Standard public IP, which the gateway VM carries whenever EgressGateway.spec.publicAddress asks for one, is closed to inbound traffic unless an NSG allows it. This group holds those allows, so the gateway VM takes at most what the rules below admit. Its rules are child resources for the reason the workstations group's are: Ringleader will add a rule of its own here too, admitting the management band to the gateway VM, and a securityRules list here would delete it on every re-run.",
       "condition": "[and(parameters('createGatewaySubnet'), not(parameters('gatewayNsgExists')))]",
       "type": "Microsoft.Network/networkSecurityGroups",
       "apiVersion": "2023-11-01",

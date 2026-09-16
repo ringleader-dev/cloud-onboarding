@@ -88,12 +88,18 @@ get a workstation that looks healthy but nobody can use:
 
 Ringleader ships **no bastion, no proxy, and no SSH tunnel**. `rl shell` dials the
 address the VM publishes on port 22, so a workstation with no inbound path finishes
-setting up, reports `Ready`, and still cannot be opened. You have two supported choices:
+setting up, reports `Ready`, and still cannot be opened. For your own rule on port 22 you have two
+supported choices:
 
 - **Public + restricted** — set `ssh_source_ranges` to the CIDRs your engineers connect
   from. The module opens 22 to those ranges only.
 - **Private only** — leave `ssh_source_ranges` empty and reach the subnet over VPN /
   Interconnect / ExpressRoute / peering. The workstation still comes up on egress alone.
+
+Separately, Ringleader admits TCP 22 and 2222 from any address to the workstations it creates,
+with a firewall rule of its own that the `enable_egress_control` grant lets it write. So an empty
+`ssh_source_ranges` does not leave those workstations closed. One with a public IP is reachable on
+those ports from the internet, so give a workstation you want private no public IP. On Azure, see [Reaching your workstations](azure/README.md#reaching-your-workstations).
 
 The clouds differ in their default: **GCP** gives every workstation an external IP
 unless you opt out; **Azure** gives none unless you opt in (so it needs the NAT gateway
@@ -138,8 +144,11 @@ security groups on AWS, VPC firewall rules on GCP, network security groups on Az
 
 Enforcing it means Ringleader has to be able to **create and maintain those firewall
 objects**, which is more than the read-only network access the base onboarding used to grant.
-That grant is now part of the default (`enable_egress_control`); it **restricts nothing on its
-own**, because until you declare an egress policy on a workstation, nothing changes.
+That grant is now part of the default (`enable_egress_control`). It **restricts no outbound
+traffic on its own**: until you declare an egress policy on a workstation, where a workstation may
+connect does not change. Ringleader also uses it to write the rules that admit SSH to its
+workstations. On Azure those rules narrow inbound traffic from outside the VNet to a workstation
+with no policy; see [Azure](azure/README.md#two-nsgs-at-two-layers--and-which-one-is-yours).
 
 Each cloud's README lists the precise actions it adds, and every module prints them back as an
 output so you can check what you granted rather than take it on trust.
@@ -292,10 +301,12 @@ traffic: $0.045/hour plus **$0.045/GB processed**, whether or not anything uses 
 if every workstation gets a public IP — the default — which the internet gateway already serves
 for free.
 
-Inbound SSH is the one thing that is **not** on by default and cannot be: `ssh_source_ranges`
-is empty until you name the CIDRs your engineers connect from. There is no safe default for
-"who may reach your machines", and `0.0.0.0/0` is a decision, never one this module makes for
-you. The secondary SSH port then follows whatever you set for 22.
+Your own inbound SSH rule is the one thing that is **not** on by default and cannot be:
+`ssh_source_ranges` is empty until you name the CIDRs your engineers connect from. There is no
+safe default for "who may reach your machines", and `0.0.0.0/0` is a decision this module never
+makes for you. The secondary SSH port then follows whatever you set for 22. Ringleader's own SSH
+rule is separate from this module, as [Reaching your workstations](#reaching-your-workstations)
+says.
 
 ### Already onboarded on the old defaults?
 

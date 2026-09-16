@@ -189,9 +189,11 @@ variable "egress_vpc_ids" {
     security-group actions then apply only to groups in these VPCs.
 
     Leave it empty and this module uses the VPC it created (create_network = true). If you
-    bring your own network and leave this empty too, the permissions are bounded by region
-    alone, which lets Ringleader manage security groups anywhere in that region -- so name
-    your VPC here if you brought one.
+    bring your own network, name its VPC here. If you also set allowed_regions, name VPCs in
+    those regions: both bounds apply, so a write to a VPC in any other region is refused. Left
+    empty with your own network, the permissions are bounded only by allowed_regions, which
+    lets Ringleader manage security groups anywhere in those regions. With allowed_regions
+    empty too, they are bounded only by the account.
   EOT
 }
 

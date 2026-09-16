@@ -37,7 +37,9 @@ from check_route_parity import (
     GCP_TF,
     PATHS,
     REPO_ROOT,
+    aws_cloudformation_conditions,
     aws_cloudformation_statements,
+    aws_terraform_conditions,
     aws_terraform_statements,
     check_all,
     gcloud_role_permission_vars,
@@ -284,6 +286,212 @@ class AnAwsStatementCannotBeAddedToOneRouteOnly(Rejects):
             edited((AWS_TF, 'sid       = "ArtifactStorageBucketProvisioning"',
                     'sid       = "ArtifactStorageBucketProvisioningV2"')),
             "ArtifactStorageBucketProvisioning",
+        )
+
+
+REGION = ("StringEquals", "aws:RequestedRegion")
+VPC = ("StringLike", "ec2:Vpc")
+
+# The interface statement on each route, from its action into its conditions. Both egress write
+# statements carry the same bounds, so an anchor that did not start at the action would match twice.
+CFN_VPC_BOUND = """\
+                          "ec2:Vpc": !If
+                            - HasEgressVpc
+                            - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:vpc/${EgressVpcId}"
+                            - !Sub "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:vpc/${Vpc}"
+"""
+CFN_BOTH_BOUNDS = """\
+                    - !If
+                      - HasRegionCondition
+                      - StringLike:
+""" + CFN_VPC_BOUND + """\
+                        StringEquals:
+                          "aws:RequestedRegion": !Ref AllowedRegion
+                      - StringLike:
+""" + CFN_VPC_BOUND
+CFN_REGION_ONLY = """\
+                    - !If
+                      - HasRegionCondition
+                      - StringEquals:
+                          "aws:RequestedRegion": !Ref AllowedRegion
+                      - !Ref AWS::NoValue
+"""
+CFN_ATTACH_BOUNDS = """\
+                  Action: "ec2:ModifyNetworkInterfaceAttribute"
+                  Resource: "*"
+                  Condition: !If
+                    - HasAnyEgressVpc
+""" + CFN_BOTH_BOUNDS + CFN_REGION_ONLY
+TF_ATTACH_BOUNDS = """\
+      actions   = ["ec2:ModifyNetworkInterfaceAttribute"]
+      resources = ["*"]
+
+      dynamic "condition" {
+        for_each = local.region_condition ? [1] : []
+        content {
+          test     = "StringEquals"
+          variable = "aws:RequestedRegion"
+          values   = var.allowed_regions
+        }
+      }
+
+      dynamic "condition" {
+        for_each = length(local.egress_vpc_arns) > 0 ? [1] : []
+"""
+
+
+class AnAwsStatementIsBoundedAlikeOnBothRoutes(Rejects):
+    def test_the_readers_see_both_bounds_together(self):
+        # Each route's reader must find both bounds together, in one combination. A reader that found
+        # nothing would pass every rule below.
+        srcs = read_sources(REPO_ROOT)
+        for conditions in (
+            aws_terraform_conditions(srcs[AWS_TF], AWS_TF),
+            aws_cloudformation_conditions(srcs[AWS_CFN], AWS_CFN),
+        ):
+            pairs = {sid: [p for _, p in combos] for sid, combos in conditions.items()}
+            for sid in ("EgressSecurityGroups", "EgressAttachToInstances"):
+                self.assertIn(frozenset({REGION, VPC}), pairs[sid], sid)
+            self.assertIn(frozenset({REGION}), pairs["Ec2Lifecycle"])
+            self.assertEqual(
+                pairs["PassWorkstationInstanceProfileRole"],
+                [frozenset({("StringEquals", "iam:PassedToService")})],
+            )
+
+    def test_cloudformation_emits_the_region_bound_only_in_place_of_the_vpc_bound(self):
+        # The shape this rule exists for. Both keys are still named, so a comparison of keys alone
+        # passes, and a stack with a VPC never gets the region bound its AllowedRegion asked for.
+        problems = self.assertRejected(
+            edited((AWS_CFN, CFN_ATTACH_BOUNDS, CFN_ATTACH_BOUNDS.replace(
+                CFN_BOTH_BOUNDS, "                    - StringLike:\n" + CFN_VPC_BOUND.replace("    ", "  ", 1),
+            ))),
+            "`EgressAttachToInstances` in aws/cloudformation/ringleader-onboarding.yaml never carries all",
+        )
+        self.assertTrue(any("more than one switch" in p for p in problems), problems)
+
+    def test_cloudformation_edits_one_copy_of_the_vpc_bound(self):
+        # The VPC bound is written once per branch of HasRegionCondition. An edit to one copy ships a
+        # VPC bound that depends on whether AllowedRegion is set, with every key still in place.
+        drifted = CFN_VPC_BOUND.replace("vpc/${EgressVpcId}", "vpc/${EgressVpcId}*")
+        region_set, region_unset = CFN_BOTH_BOUNDS.rsplit(CFN_VPC_BOUND, 1)[0], drifted
+        self.assertRejected(
+            edited((AWS_CFN, CFN_ATTACH_BOUNDS, CFN_ATTACH_BOUNDS.replace(
+                CFN_BOTH_BOUNDS, region_set + region_unset,
+            ))),
+            "`EgressAttachToInstances` in aws/cloudformation/ringleader-onboarding.yaml writes `StringLike` on `ec2:Vpc` with a different value",
+        )
+
+    def test_cloudformation_drops_the_region_bound_when_no_vpc_is_known(self):
+        # Every bound is still emitted together in SOME combination, so only the rule that each
+        # bound follows one switch sees that a stack without a VPC loses its region bound.
+        self.assertRejected(
+            edited((AWS_CFN, CFN_ATTACH_BOUNDS, CFN_ATTACH_BOUNDS.replace(
+                CFN_REGION_ONLY, "                    - !Ref AWS::NoValue\n",
+            ))),
+            "`EgressAttachToInstances` in aws/cloudformation/ringleader-onboarding.yaml emits a condition under more than one switch",
+        )
+
+    def test_cloudformation_gates_both_bounds_on_whether_a_vpc_is_known(self):
+        # Each bound still follows exactly one switch, the same one. With a VPC and no AllowedRegion
+        # the statement would name an empty region and refuse every write.
+        self.assertRejected(
+            edited((AWS_CFN, CFN_ATTACH_BOUNDS, CFN_ATTACH_BOUNDS.replace(
+                CFN_BOTH_BOUNDS + CFN_REGION_ONLY,
+                """\
+                    - StringLike:
+""" + CFN_VPC_BOUND + """\
+                      StringEquals:
+                        "aws:RequestedRegion": !Ref AllowedRegion
+                    - !Ref AWS::NoValue
+""",
+            ))),
+            "emits StringEquals aws:RequestedRegion under different inputs",
+        )
+
+    def test_terraform_gates_the_region_bound_on_the_wrong_input(self):
+        self.assertRejected(
+            edited((AWS_TF, TF_ATTACH_BOUNDS, TF_ATTACH_BOUNDS.replace(
+                "for_each = local.region_condition ? [1] : []",
+                "for_each = length(local.egress_vpc_arns) > 0 ? [1] : []",
+            ))),
+            "emits StringEquals aws:RequestedRegion under different inputs",
+        )
+
+    def test_a_switch_the_table_does_not_pair(self):
+        self.assertRejected(
+            edited((AWS_TF, TF_ATTACH_BOUNDS, TF_ATTACH_BOUNDS.replace(
+                "for_each = local.region_condition ? [1] : []",
+                "for_each = length(var.allowed_regions) > 0 ? [1] : []",
+            ))),
+            "under a switch that `SWITCHES` does not name",
+        )
+
+    def test_terraform_makes_its_two_bounds_exclusive(self):
+        self.assertRejected(
+            edited((AWS_TF, TF_ATTACH_BOUNDS, TF_ATTACH_BOUNDS.replace(
+                "for_each = length(local.egress_vpc_arns) > 0 ? [1] : []",
+                "for_each = local.region_condition ? [] : [1]",
+            ))),
+            "`EgressAttachToInstances` in aws/terraform/main.tf never carries all",
+        )
+
+    def test_terraform_drops_a_bound(self):
+        self.assertRejected(
+            edited((AWS_TF, TF_ATTACH_BOUNDS, TF_ATTACH_BOUNDS.replace(
+                """      dynamic "condition" {
+        for_each = local.region_condition ? [1] : []
+        content {
+          test     = "StringEquals"
+          variable = "aws:RequestedRegion"
+          values   = var.allowed_regions
+        }
+      }
+
+""", ""))),
+            "`EgressAttachToInstances` is bounded by different conditions",
+        )
+
+    def test_cloudformation_changes_a_bound_operator(self):
+        self.assertRejected(
+            edited((AWS_CFN, CFN_ATTACH_BOUNDS, CFN_ATTACH_BOUNDS.replace("StringLike:", "ArnLike:"))),
+            "`EgressAttachToInstances` is bounded by different conditions",
+        )
+
+    def test_cloudformation_adds_a_bound_terraform_lacks(self):
+        self.assertRejected(
+            edited((AWS_CFN, """\
+                  Action: "iam:PassRole"
+                  Resource: !Sub "arn:${AWS::Partition}:iam::*:role${WorkstationIdentityPath}*"
+                  Condition:
+                    StringEquals:
+""", """\
+                  Action: "iam:PassRole"
+                  Resource: !Sub "arn:${AWS::Partition}:iam::*:role${WorkstationIdentityPath}*"
+                  Condition:
+                    StringEquals:
+                      "aws:RequestedRegion": !Ref AllowedRegion
+""")),
+            "`PassWorkstationInstanceProfileRole` is bounded by different conditions",
+        )
+
+
+class TheConditionReadersRefuseWhatTheyCannotRead(Rejects):
+    def test_a_flow_if_in_cloudformation(self):
+        self.assertRejected(
+            edited((AWS_CFN, CFN_ATTACH_BOUNDS, CFN_ATTACH_BOUNDS.replace(
+                CFN_REGION_ONLY,
+                '                    - !If [HasRegionCondition, {StringEquals: {"aws:RequestedRegion": !Ref AllowedRegion}}, !Ref AWS::NoValue]\n',
+            ))),
+            "flow form",
+        )
+
+    def test_a_terraform_gate_that_is_not_a_ternary(self):
+        self.assertRejected(
+            edited((AWS_TF, TF_ATTACH_BOUNDS, TF_ATTACH_BOUNDS.replace(
+                "for_each = local.region_condition ? [1] : []",
+                "for_each = toset(var.allowed_regions)",
+            ))),
+            "is not `<gate> ? [1] : []`",
         )
 
 

@@ -40,7 +40,7 @@
 #                index: two VNets on one range can never be peered.
 #   VNET_CIDR / SUBNET_CIDR  overrides; empty derives them from
 #                REGION_INDEX                                    (default: empty)
-#   SSH_SOURCE_CIDR  one CIDR allowed inbound on TCP 22        (default: empty = no inbound rule)
+#   SSH_SOURCE_CIDR  one CIDR allowed inbound on TCP 22        (default: empty = no rule of yours)
 #   SECONDARY_SSH_SOURCE_CIDR  one CIDR allowed inbound on the
 #                secondary SSH port, for workstation types that
 #                run their own SSH daemon inside the VM. "none"
@@ -69,8 +69,10 @@
 #
 # EGRESS_CONTROL lets Ringleader manage the network security groups that restrict where
 # workstations may connect. It adds NSG and security-rule read/write/delete plus join/action,
-# still scoped to this resource group, and restricts nothing until you declare an egress
-# policy on a workstation. Set it to 0 to skip the grant.
+# still scoped to this resource group, and restricts no outbound traffic until you declare an
+# egress policy on a workstation. Ringleader also uses it to write its SSH rules, which narrow
+# inbound from outside the VNet to TCP 22 and 2222 on a workstation with no policy. Set it to 0
+# to skip the grant.
 #
 set -euo pipefail
 
