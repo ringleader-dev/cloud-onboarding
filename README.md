@@ -125,9 +125,9 @@ each asset carries it, so it cannot drift from the port Ringleader actually dial
 
 The clouds differ in how narrowly the rule can be aimed. **GCP** scopes it to its own network tag
 (`ringleader-secondary-ssh`), so it reaches only the workstations you tag with it. **AWS** puts it
-on the workstations security group, like the rule for 22. **Azure** cannot scope it at all — an
-NSG attaches to the subnet and there is no per-VM tag to match — so the source ranges are the only
-narrowing, and the rule admits the port to every VM on that subnet.
+on the workstations security group, like the rule for 22. **Azure** aims it at the whole subnet,
+because an NSG attaches to the subnet and this rule names no destination inside it. The source
+ranges are the only narrowing, and the rule admits the port to every VM there.
 
 ## Controlling where workstations can connect
 

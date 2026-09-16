@@ -138,10 +138,10 @@ secondary_ssh_source_ranges = ["203.0.113.0/24"]
 ```
 
 That adds one NSG rule, `AllowRingleaderSecondarySSHInbound`. **It covers the whole subnet.** An
-NSG attaches to the subnet and Azure has no per-VM tag for a rule to match, so — unlike the GCP
-module, which aims the same rule at a network tag — this admits the port to every VM on the
-workstations subnet. The source ranges are the only narrowing available; give the workstations
-that need the port a subnet of their own if that is too broad.
+NSG attaches to the subnet, and this rule names no destination inside it, so it admits the port to
+every VM on the workstations subnet. The GCP module aims the same rule at a network tag. The
+source ranges are the only narrowing available; give the workstations that need the port a subnet
+of their own if that is too broad.
 
 Leave `secondary_ssh_source_ranges` empty — the default — and **no rule is created**; your VNet
 admits exactly what it admits today. Ringleader tells you whether the workstations you plan to run
@@ -177,15 +177,17 @@ enable_egress_control = false
 EGRESS_CONTROL=0 ./deploy.sh    # the ARM path
 ```
 
-It adds seventeen actions to the custom role, still scoped to your one resource group:
+It adds twenty-three actions to the custom role, still scoped to your one resource group:
 
 | action | why |
 |---|---|
 | `Microsoft.Network/networkSecurityGroups/read` / `write` / `delete` | one NSG per distinct egress policy |
 | `.../networkSecurityGroups/securityRules/read` / `write` / `delete` | keep that NSG's rules in step with the manifest |
 | `Microsoft.Network/networkSecurityGroups/join/action` | attach the NSG to a workstation's NIC — the one people forget |
+| `Microsoft.Network/applicationSecurityGroups/read` / `write` / `delete`, plus `joinIpConfiguration/action` and `joinNetworkSecurityRule/action` | the group Ringleader will create and put each workstation's NIC in. The inbound SSH rule it writes in your subnet NSG will name that group, so one rule stays right as workstations come and go. The two `join` actions are the ones people forget: read, write and delete grant neither. Ringleader creates the group and collects it, so nothing here declares one, and the grant arrives early so the rule does not cost you a second apply. `listIpConfigurations/action` is deliberately **not** granted: Azure refuses to delete a group an interface still uses and names those interfaces in the refusal, so collecting one needs no membership read |
 | `Microsoft.Network/routeTables/*` (with `routes/*` and `join/action`) | steer a workstation's traffic at the egress gateway when a policy names hostnames |
 | `Microsoft.Network/virtualNetworks/subnets/write` / `delete` | an Azure route table attaches **per subnet**, so steering is per subnet rather than per workstation — which is what `create_governed_subnet` below exists to give it — and a route table Ringleader creates, it must also be able to detach and collect. Not a subnet per policy: one gateway serves many policies from one subnet, telling them apart by source address |
+| `Microsoft.Network/natGateways/read` | see whether a subnet already has an outbound path before giving a machine a public address of its own |
 | `Microsoft.Resources/subscriptions/resourcegroups/resources/read` | the odd one out, and the reason it is called out below |
 
 **The last row is not a networking action, and a least-privilege role that omits it fails in a
@@ -193,7 +195,7 @@ way that costs money rather than erroring.** The sweep that collects a leaked eg
 lists the resource group's generic `resources` collection rather than a typed per-provider one,
 so it needs a `Microsoft.Resources` action where everything else it does is `Microsoft.Compute`
 or `Microsoft.Network`. Built-in **Contributor** covers it, so a deployment using Contributor
-never sees this; a hand-rolled role can hold all sixteen networking actions above and still be
+never sees this; a hand-rolled role can hold all twenty-two networking actions above and still be
 refused here. And the refusal is not a partial listing — the sweep collects **nothing**,
 including the VM it did not need this action to see, so what is left behind is a running gateway
 VM — and, if one was declared for it, a billed public IP.

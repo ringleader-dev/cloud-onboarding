@@ -61,7 +61,7 @@ output "role_extras_granted" {
   description = "Optional action sets folded into the custom role, for audit. The base action list is in ../arm/azuredeploy.json."
   value = concat(
     var.enable_workstation_identities ? ["Microsoft.ManagedIdentity CRUD + assign, Microsoft.Authorization roleAssignments -- workstation runtime identities"] : [],
-    var.enable_egress_control ? ["Microsoft.Network/networkSecurityGroups (+ securityRules) and routeTables (+ routes) read/write/delete and join/action, plus virtualNetworks/subnets/write and delete -- egress control"] : [],
+    var.enable_egress_control ? ["Microsoft.Network/networkSecurityGroups (+ securityRules) and routeTables (+ routes) read/write/delete and join/action, plus virtualNetworks/subnets/write and delete, natGateways/read, and applicationSecurityGroups read/write/delete with joinIpConfiguration/action and joinNetworkSecurityRule/action -- egress control"] : [],
     # Listed on its own because it is the one egress action outside Microsoft.Network, and the one
     # a hand-rolled role is most likely to omit: the sweep that collects a leaked egress gateway
     # reads the resource group's generic `resources` collection. Without it that sweep collects
