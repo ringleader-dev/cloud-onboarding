@@ -136,10 +136,17 @@ variable "enable_egress_control" {
     Let Ringleader manage the network security groups that restrict where your workstations
     may connect. On by default; set false to opt out.
 
-    It adds sixteen actions to the custom role, still scoped to this one resource group:
+    It adds twenty-three actions to the custom role, still scoped to this one resource group:
 
       - NSG read/write/delete on the group and its security rules, plus join/action, which is
-        what lets Ringleader attach a group to a workstation's NIC; and
+        what lets Ringleader attach a group to a workstation's NIC;
+      - application-security-group read/write/delete, plus joinIpConfiguration/action and
+        joinNetworkSecurityRule/action. Ringleader will put each workstation's NIC in a group it
+        made and name that group as the destination of the inbound SSH rule it writes in your
+        subnet NSG, so that one rule holds steady as workstations come and go. The
+        two join actions are the ones people forget: read,
+        write and delete grant neither. The rule ships in Ringleader, and the grant arrives early
+        so it does not cost you a second apply; and
       - route-table read/write/delete (with its routes and join/action) plus subnet write and
         delete, which is how a workstation's traffic is steered to the DNS / HTTPS proxy when a
         policy names hostnames. An Azure route table attaches per subnet, so per-policy
