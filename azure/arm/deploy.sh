@@ -256,6 +256,17 @@ if [ "$CREATE_NETWORK" = "true" ]; then
     GATEWAY_NSG_EXISTS=true
   fi
 
+  # The VNet's subnets are deployed as one list, and a subnet deployed without a route table loses
+  # the one it had. That includes the route table Ringleader associates with a governed subnet to
+  # steer it at an egress gateway. So an existing VNet's route tables are read here and handed back
+  # to the template, which keeps each one on its subnet. The VNet list is a plain assignment so that a failed
+  # az call stops this script rather than reading as "no VNet yet", which would drop every route table.
+  SUBNET_ROUTE_TABLES="[]"
+  EXISTING_VNETS="$(az network vnet list -g "$RG" --query '[].name' -o tsv)"
+  if printf '%s\n' "$EXISTING_VNETS" | grep -qx "${NAME_PREFIX}-vnet"; then
+    SUBNET_ROUTE_TABLES="$(az network vnet subnet list -g "$RG" --vnet-name "${NAME_PREFIX}-vnet" --query '[?routeTable].{name: name, id: routeTable.id}' -o json)"
+  fi
+
   # The other half of that shape: a deployment adds and updates rules, it never deletes one. So
   # clearing a CIDR closes its rule here rather than in the template. Deleting a rule that is not
   # there succeeds, which is what makes this safe to run on every pass.
@@ -290,6 +301,7 @@ if [ "$CREATE_NETWORK" = "true" ]; then
                  createGovernedSubnet="$CREATE_GOVERNED_SUBNET" \
                  governedSubnetCidr="$GOVERNED_SUBNET_CIDR" \
                  additionalGovernedSubnets="$ADDITIONAL_GOVERNED_SUBNETS_JSON" \
+                 subnetRouteTables="$SUBNET_ROUTE_TABLES" \
                  workstationsNsgExists="$WORKSTATIONS_NSG_EXISTS" \
                  gatewayNsgExists="$GATEWAY_NSG_EXISTS" \
     --query '[properties.outputs.subnetId.value, properties.outputs.governedSubnetId.value, properties.outputs.gatewaySubnetId.value]' -o tsv)"

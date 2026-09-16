@@ -145,6 +145,15 @@ deployment never deletes a rule, so clearing `SSH_SOURCE_CIDR`, `SECONDARY_SSH_S
 `GATEWAY_MANAGEMENT_SOURCE_CIDR` closes its rule through `deploy.sh` rather than through the
 template. Deploying the template by hand with a cleared CIDR leaves that rule as it was.
 
+**`deploy.sh` keeps each subnet's route table across a redeploy.** The VNet's subnets are deployed
+as one list, and a subnet deployed without a route table loses the one it had. That includes the
+route table Ringleader associates with a governed subnet to steer it at an egress gateway. Losing it
+takes that subnet off the gateway until Ringleader's next pass: a workstation there with no public IP
+loses its egress, and one with a public IP reaches the internet without going through the gateway.
+`deploy.sh` reads the route table on each subnet of an existing VNet and passes the list as
+`subnetRouteTables`, and the template keeps each one. Deploying the template by hand without that
+list removes the route table from every subnet the template declares.
+
 **Why a second template rather than a `deployNetwork` flag on the first.**
 `azuredeploy.json` is also deployed by the [Terraform module](../terraform/),
 which compares Azure's normalized echo of it against the file on every plan — so
