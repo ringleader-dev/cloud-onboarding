@@ -59,6 +59,12 @@ org_uid               = "0192f5bf-af83-7178-8d0a-f1c7aea06bde"
 # governed and ungoverned boxes in one subnet is what Ringleader refuses.
 # create_governed_subnet = false
 
+# One more governed subnet per namespace that runs its own proxy, beyond the one above: a proxy
+# steers a whole subnet, and a subnet is for one namespace. Each label=prefix entry becomes a
+# subnet named governed-<label>, built like the one above. Write each prefix out. The six /20s
+# from 10.70.128.0/20 to 10.70.208.0/20 are free on the default range.
+# additional_governed_subnets = { team-a = "10.70.208.0/20" }
+
 # Where the landing pad goes. Defaults to eastus; set it per region.
 # location = "eastus"
 

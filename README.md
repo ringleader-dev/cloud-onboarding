@@ -345,9 +345,12 @@ Each cloud's README lists the exact values. In short:
 - **AWS** — role ARN, region, and (if created) subnet id and security group id.
 
 Each module also prints a **governed subnet id** where it created one. That is the subnet you
-name on a workstation that carries an **egress policy** — placing a box in it is what puts it
-behind the proxy, and mixing governed and ungoverned boxes in one subnet is what Ringleader
-refuses.
+name on a workstation that carries an **egress policy**. Placing a box in it is what puts it
+behind the proxy. On AWS and Azure, a box with no egress policy loses its egress if it shares a
+subnet the proxy steers. On those two clouds, each Ringleader namespace that runs its own proxy also
+needs a governed subnet of its own. Set `additional_governed_subnets` (`ADDITIONAL_GOVERNED_SUBNETS`
+for `deploy.sh`) to create one for each further namespace. Terraform keys those ids by the labels
+you gave them, the Azure `deploy.sh` prints them, and CloudFormation outputs them by slot number.
 
 ## Layout
 

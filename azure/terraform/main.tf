@@ -508,3 +508,22 @@ resource "azurerm_subnet_network_security_group_association" "governed" {
   subnet_id                 = azurerm_subnet.governed[0].id
   network_security_group_id = azurerm_network_security_group.workstations[0].id
 }
+
+# More governed subnets, one per additional_governed_subnets entry, each built exactly like the one
+# above. A gateway steers a whole subnet and a subnet belongs to one Ringleader namespace, so a
+# second namespace running its own gateway needs a governed subnet of its own. Keyed by the label
+# rather than by position, so adding or removing one entry leaves every other subnet in place.
+resource "azurerm_subnet" "governed_additional" {
+  for_each                        = var.create_network ? var.additional_governed_subnets : {}
+  name                            = "governed-${each.key}"
+  resource_group_name             = var.resource_group_name
+  virtual_network_name            = azurerm_virtual_network.workstations[0].name
+  address_prefixes                = [each.value]
+  default_outbound_access_enabled = false
+}
+
+resource "azurerm_subnet_network_security_group_association" "governed_additional" {
+  for_each                  = azurerm_subnet.governed_additional
+  subnet_id                 = each.value.id
+  network_security_group_id = azurerm_network_security_group.workstations[0].id
+}

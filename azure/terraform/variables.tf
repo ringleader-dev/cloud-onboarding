@@ -308,6 +308,36 @@ variable "governed_subnet_prefix" {
   }
 }
 
+variable "additional_governed_subnets" {
+  type        = map(string)
+  default     = {}
+  description = <<-EOT
+    More governed subnets, beside the one create_governed_subnet reserves: a map of a label you
+    choose to that subnet's address prefix. Empty by default. Needs create_network.
+
+    A gateway steers a whole subnet, and a subnet belongs to one Ringleader namespace, so each
+    namespace that runs its own gateway needs a governed subnet of its own. Add one entry per
+    such namespace beyond the first. The label only names the subnet (governed-<label>) and keys
+    it in the additional_governed_subnet_ids output. It means nothing to Ringleader, so naming
+    it after the namespace that will use the subnet is a convenient choice.
+
+    Each subnet is built exactly like the governed subnet above: the workstations NSG, no route
+    table, no NAT gateway, and default outbound access disabled. There is no derived default, so
+    each prefix must be written out. It must sit inside vnet_address_space and overlap no other
+    subnet, or the apply fails. On the default VNet range, the six /20s from 10.70.128.0/20 to
+    10.70.208.0/20 are free and leave the workstations prefix room to grow.
+
+    Changing an entry's prefix changes the subnet in place, renaming a label replaces the subnet,
+    and removing an entry deletes it. Azure refuses all three while anything is deployed in the
+    subnet.
+  EOT
+
+  validation {
+    condition     = alltrue([for label, prefix in var.additional_governed_subnets : can(regex("^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$", label)) && can(cidrhost(prefix, 0))])
+    error_message = "additional_governed_subnets maps a label of lowercase letters, digits and hyphens (at most 40 characters, starting and ending with a letter or digit) to a CIDR block, e.g. { team-a = \"10.70.208.0/20\" }."
+  }
+}
+
 # --- Network landing pad, on by default (egress out; SSH in via your rule and Ringleader's) ---
 
 variable "create_network" {

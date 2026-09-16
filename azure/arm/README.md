@@ -12,7 +12,7 @@ it in one idempotent run.
 | File | What it is |
 |---|---|
 | [`azuredeploy.json`](azuredeploy.json) | ARM template: the custom least-privilege role definition + a role assignment, scoped to the resource group. Deploy at **resource-group scope**. Takes the service-principal **object id** as `principalId`. It is the single source of the action list — the [Terraform module](../terraform/) deploys this same file. |
-| [`azuredeploy-network.json`](azuredeploy-network.json) | ARM template: the **optional** landing pad — vnet + `workstations` subnet + NAT gateway + an NSG per subnet, with inbound rules only for the CIDRs you name. Outputs `subnetId`, `governedSubnetId` and `gatewaySubnetId`. Deploy at resource-group scope, after `azuredeploy.json`. |
+| [`azuredeploy-network.json`](azuredeploy-network.json) | ARM template: the **optional** landing pad (a VNet, the `workstations` subnet, a NAT gateway and an NSG per subnet), with inbound rules only for the CIDRs you name. Outputs `subnetId`, `governedSubnetId`, `additionalGovernedSubnetIds` and `gatewaySubnetId`. Deploy at resource-group scope, after `azuredeploy.json`. |
 | [`azuredeploy.parameters.example.json`](azuredeploy.parameters.example.json) | Example parameters file. |
 | [`deploy.sh`](deploy.sh) | End-to-end wrapper: creates the app + SP + OIDC federated credential with `az`, then deploys the template. |
 
@@ -100,6 +100,15 @@ access turned **off** — a flag Azure fixes at subnet creation, so it has to be
 deploy. See
 [`../README.md`](../README.md#and-a-subnet-for-the-workstations-that-proxy-governs). Set it to
 `false` to skip.
+
+`ADDITIONAL_GOVERNED_SUBNETS` makes one more governed subnet for each further namespace that runs its
+own proxy, as `label=cidr` pairs separated by commas (`team-a=10.70.208.0/20,team-b=10.70.192.0/20`).
+Each pair becomes a subnet named `governed-<label>`, built like the governed subnet, and `deploy.sh`
+prints its id, which ends in that name. The template takes the pairs as the
+`additionalGovernedSubnets` object and outputs `additionalGovernedSubnetIds`. The VNet's subnets are
+deployed as one list, so list every pair on every run. A pair left out deletes its subnet, and
+leaving the variable unset deletes them all. See
+[`../README.md`](../README.md#one-governed-subnet-per-namespace-that-runs-a-proxy).
 
 `EGRESS_CONTROL` is separate and goes on the **role**, not the network: it adds the NSG
 actions Ringleader needs to enforce an egress policy. Also on by default; `EGRESS_CONTROL=0`

@@ -1018,3 +1018,16 @@ resource "aws_subnet" "governed" {
   map_public_ip_on_launch = false
   tags                    = merge(var.tags, { Name = "ringleader-governed" })
 }
+
+# More governed subnets, one per additional_governed_subnets entry, each built exactly like the one
+# above. A gateway steers a whole subnet and a subnet belongs to one Ringleader namespace, so a
+# second namespace running its own gateway needs a governed subnet of its own. Keyed by the label
+# rather than by position, so adding or removing one entry leaves every other subnet in place.
+resource "aws_subnet" "governed_additional" {
+  for_each                = var.create_network ? var.additional_governed_subnets : {}
+  vpc_id                  = aws_vpc.workstations[0].id
+  cidr_block              = each.value
+  availability_zone       = coalesce(var.availability_zone, data.aws_availability_zones.available[0].names[0])
+  map_public_ip_on_launch = false
+  tags                    = merge(var.tags, { Name = "ringleader-governed-${each.key}" })
+}

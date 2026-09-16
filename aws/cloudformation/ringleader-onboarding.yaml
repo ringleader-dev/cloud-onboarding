@@ -262,6 +262,81 @@ Parameters:
       the two egress-control ranges stay together and SubnetCidr is free to grow. Set it only to
       override, and then it must sit inside the VPC range.
 
+  # AdditionalGovernedSubnet<n>Label and ...Cidr, six slots: one more governed subnet per Ringleader
+  # namespace that runs its own gateway, since a gateway steers a whole subnet and a subnet is for one
+  # namespace. This template uses no transform, so it cannot loop over a list. Each subnet is built
+  # like GovernedSubnet and named ringleader-governed-<label>. An empty Cidr creates nothing, and a
+  # Cidr needs a Label. Changing a Cidr replaces the subnet, and emptying it deletes the subnet.
+  # deploy.sh fills the slots from ADDITIONAL_GOVERNED_SUBNETS.
+  AdditionalGovernedSubnet1Label:
+    Type: String
+    Default: ""
+    AllowedPattern: "^([a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?)?$"
+    Description: Label of additional governed subnet 1, required with its Cidr. It names the subnet ringleader-governed-<label>.
+  AdditionalGovernedSubnet1Cidr:
+    Type: String
+    Default: ""
+    AllowedPattern: "^([0-9]{1,3}(\\.[0-9]{1,3}){3}/[0-9]{1,2})?$"
+    Description: >-
+      CIDR of additional governed subnet 1, for one Ringleader namespace that runs its own
+      gateway. The subnet is built like the governed subnet. Empty creates nothing. It must sit
+      inside the VPC range. Changing it replaces the subnet, and emptying it deletes the subnet.
+  AdditionalGovernedSubnet2Label:
+    Type: String
+    Default: ""
+    AllowedPattern: "^([a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?)?$"
+    Description: Label of additional governed subnet 2. See AdditionalGovernedSubnet1Cidr.
+  AdditionalGovernedSubnet2Cidr:
+    Type: String
+    Default: ""
+    AllowedPattern: "^([0-9]{1,3}(\\.[0-9]{1,3}){3}/[0-9]{1,2})?$"
+    Description: >-
+      CIDR of additional governed subnet 2. See AdditionalGovernedSubnet1Cidr.
+  AdditionalGovernedSubnet3Label:
+    Type: String
+    Default: ""
+    AllowedPattern: "^([a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?)?$"
+    Description: Label of additional governed subnet 3. See AdditionalGovernedSubnet1Cidr.
+  AdditionalGovernedSubnet3Cidr:
+    Type: String
+    Default: ""
+    AllowedPattern: "^([0-9]{1,3}(\\.[0-9]{1,3}){3}/[0-9]{1,2})?$"
+    Description: >-
+      CIDR of additional governed subnet 3. See AdditionalGovernedSubnet1Cidr.
+  AdditionalGovernedSubnet4Label:
+    Type: String
+    Default: ""
+    AllowedPattern: "^([a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?)?$"
+    Description: Label of additional governed subnet 4. See AdditionalGovernedSubnet1Cidr.
+  AdditionalGovernedSubnet4Cidr:
+    Type: String
+    Default: ""
+    AllowedPattern: "^([0-9]{1,3}(\\.[0-9]{1,3}){3}/[0-9]{1,2})?$"
+    Description: >-
+      CIDR of additional governed subnet 4. See AdditionalGovernedSubnet1Cidr.
+  AdditionalGovernedSubnet5Label:
+    Type: String
+    Default: ""
+    AllowedPattern: "^([a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?)?$"
+    Description: Label of additional governed subnet 5. See AdditionalGovernedSubnet1Cidr.
+  AdditionalGovernedSubnet5Cidr:
+    Type: String
+    Default: ""
+    AllowedPattern: "^([0-9]{1,3}(\\.[0-9]{1,3}){3}/[0-9]{1,2})?$"
+    Description: >-
+      CIDR of additional governed subnet 5. See AdditionalGovernedSubnet1Cidr.
+  AdditionalGovernedSubnet6Label:
+    Type: String
+    Default: ""
+    AllowedPattern: "^([a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?)?$"
+    Description: Label of additional governed subnet 6. See AdditionalGovernedSubnet1Cidr.
+  AdditionalGovernedSubnet6Cidr:
+    Type: String
+    Default: ""
+    AllowedPattern: "^([0-9]{1,3}(\\.[0-9]{1,3}){3}/[0-9]{1,2})?$"
+    Description: >-
+      CIDR of additional governed subnet 6. See AdditionalGovernedSubnet1Cidr.
+
 Mappings:
   # The /16 each index takes. Written out rather than computed, because a reader deciding which
   # index to give a new region should be able to see the range they are choosing. Indexes stop at
@@ -278,6 +353,32 @@ Mappings:
     "7": { Vpc: "10.67.0.0/16" }
     "8": { Vpc: "10.68.0.0/16" }
     "9": { Vpc: "10.69.0.0/16" }
+
+Rules:
+  AdditionalGovernedSubnet1HasALabel:
+    Assertions:
+      - Assert: !Or [!Equals [!Ref AdditionalGovernedSubnet1Cidr, ""], !Not [!Equals [!Ref AdditionalGovernedSubnet1Label, ""]]]
+        AssertDescription: AdditionalGovernedSubnet1Cidr is set, so AdditionalGovernedSubnet1Label must be too.
+  AdditionalGovernedSubnet2HasALabel:
+    Assertions:
+      - Assert: !Or [!Equals [!Ref AdditionalGovernedSubnet2Cidr, ""], !Not [!Equals [!Ref AdditionalGovernedSubnet2Label, ""]]]
+        AssertDescription: AdditionalGovernedSubnet2Cidr is set, so AdditionalGovernedSubnet2Label must be too.
+  AdditionalGovernedSubnet3HasALabel:
+    Assertions:
+      - Assert: !Or [!Equals [!Ref AdditionalGovernedSubnet3Cidr, ""], !Not [!Equals [!Ref AdditionalGovernedSubnet3Label, ""]]]
+        AssertDescription: AdditionalGovernedSubnet3Cidr is set, so AdditionalGovernedSubnet3Label must be too.
+  AdditionalGovernedSubnet4HasALabel:
+    Assertions:
+      - Assert: !Or [!Equals [!Ref AdditionalGovernedSubnet4Cidr, ""], !Not [!Equals [!Ref AdditionalGovernedSubnet4Label, ""]]]
+        AssertDescription: AdditionalGovernedSubnet4Cidr is set, so AdditionalGovernedSubnet4Label must be too.
+  AdditionalGovernedSubnet5HasALabel:
+    Assertions:
+      - Assert: !Or [!Equals [!Ref AdditionalGovernedSubnet5Cidr, ""], !Not [!Equals [!Ref AdditionalGovernedSubnet5Label, ""]]]
+        AssertDescription: AdditionalGovernedSubnet5Cidr is set, so AdditionalGovernedSubnet5Label must be too.
+  AdditionalGovernedSubnet6HasALabel:
+    Assertions:
+      - Assert: !Or [!Equals [!Ref AdditionalGovernedSubnet6Cidr, ""], !Not [!Equals [!Ref AdditionalGovernedSubnet6Label, ""]]]
+        AssertDescription: AdditionalGovernedSubnet6Cidr is set, so AdditionalGovernedSubnet6Label must be too.
 
 Conditions:
   HasRegionCondition: !Not [!Equals [!Ref AllowedRegion, ""]]
@@ -318,6 +419,12 @@ Conditions:
   WantNat: !And
     - !Condition WantNetwork
     - !Equals [!Ref CreateNatGateway, "true"]
+  WantAdditionalGovernedSubnet1: !And [!Condition WantNetwork, !Not [!Equals [!Ref AdditionalGovernedSubnet1Cidr, ""]]]
+  WantAdditionalGovernedSubnet2: !And [!Condition WantNetwork, !Not [!Equals [!Ref AdditionalGovernedSubnet2Cidr, ""]]]
+  WantAdditionalGovernedSubnet3: !And [!Condition WantNetwork, !Not [!Equals [!Ref AdditionalGovernedSubnet3Cidr, ""]]]
+  WantAdditionalGovernedSubnet4: !And [!Condition WantNetwork, !Not [!Equals [!Ref AdditionalGovernedSubnet4Cidr, ""]]]
+  WantAdditionalGovernedSubnet5: !And [!Condition WantNetwork, !Not [!Equals [!Ref AdditionalGovernedSubnet5Cidr, ""]]]
+  WantAdditionalGovernedSubnet6: !And [!Condition WantNetwork, !Not [!Equals [!Ref AdditionalGovernedSubnet6Cidr, ""]]]
 
 Resources:
   RingleaderOidcProvider:
@@ -910,6 +1017,62 @@ Resources:
       MapPublicIpOnLaunch: false
       Tags: [{ Key: Name, Value: ringleader-governed }]
 
+  # One subnet per filled AdditionalGovernedSubnet slot, built like GovernedSubnet above.
+  AdditionalGovernedSubnet1:
+    Type: AWS::EC2::Subnet
+    Condition: WantAdditionalGovernedSubnet1
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref AdditionalGovernedSubnet1Cidr
+      AvailabilityZone: !GetAtt Subnet.AvailabilityZone
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "ringleader-governed-${AdditionalGovernedSubnet1Label}" }]
+  AdditionalGovernedSubnet2:
+    Type: AWS::EC2::Subnet
+    Condition: WantAdditionalGovernedSubnet2
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref AdditionalGovernedSubnet2Cidr
+      AvailabilityZone: !GetAtt Subnet.AvailabilityZone
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "ringleader-governed-${AdditionalGovernedSubnet2Label}" }]
+  AdditionalGovernedSubnet3:
+    Type: AWS::EC2::Subnet
+    Condition: WantAdditionalGovernedSubnet3
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref AdditionalGovernedSubnet3Cidr
+      AvailabilityZone: !GetAtt Subnet.AvailabilityZone
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "ringleader-governed-${AdditionalGovernedSubnet3Label}" }]
+  AdditionalGovernedSubnet4:
+    Type: AWS::EC2::Subnet
+    Condition: WantAdditionalGovernedSubnet4
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref AdditionalGovernedSubnet4Cidr
+      AvailabilityZone: !GetAtt Subnet.AvailabilityZone
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "ringleader-governed-${AdditionalGovernedSubnet4Label}" }]
+  AdditionalGovernedSubnet5:
+    Type: AWS::EC2::Subnet
+    Condition: WantAdditionalGovernedSubnet5
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref AdditionalGovernedSubnet5Cidr
+      AvailabilityZone: !GetAtt Subnet.AvailabilityZone
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "ringleader-governed-${AdditionalGovernedSubnet5Label}" }]
+  AdditionalGovernedSubnet6:
+    Type: AWS::EC2::Subnet
+    Condition: WantAdditionalGovernedSubnet6
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref AdditionalGovernedSubnet6Cidr
+      AvailabilityZone: !GetAtt Subnet.AvailabilityZone
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "ringleader-governed-${AdditionalGovernedSubnet6Label}" }]
+
   WorkstationsSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Condition: WantNetwork
@@ -1062,6 +1225,30 @@ Outputs:
       providerConfig.aws.subnetId on the workstations that carry an egress policy -- placing a
       box in it is what makes it gateway-governed. It has no route table on purpose.
     Value: !Ref GovernedSubnet
+  AdditionalGovernedSubnet1Id:
+    Condition: WantAdditionalGovernedSubnet1
+    Description: Additional governed subnet 1, for one namespace's workstations that carry an egress policy.
+    Value: !Ref AdditionalGovernedSubnet1
+  AdditionalGovernedSubnet2Id:
+    Condition: WantAdditionalGovernedSubnet2
+    Description: Additional governed subnet 2, for one namespace's workstations that carry an egress policy.
+    Value: !Ref AdditionalGovernedSubnet2
+  AdditionalGovernedSubnet3Id:
+    Condition: WantAdditionalGovernedSubnet3
+    Description: Additional governed subnet 3, for one namespace's workstations that carry an egress policy.
+    Value: !Ref AdditionalGovernedSubnet3
+  AdditionalGovernedSubnet4Id:
+    Condition: WantAdditionalGovernedSubnet4
+    Description: Additional governed subnet 4, for one namespace's workstations that carry an egress policy.
+    Value: !Ref AdditionalGovernedSubnet4
+  AdditionalGovernedSubnet5Id:
+    Condition: WantAdditionalGovernedSubnet5
+    Description: Additional governed subnet 5, for one namespace's workstations that carry an egress policy.
+    Value: !Ref AdditionalGovernedSubnet5
+  AdditionalGovernedSubnet6Id:
+    Condition: WantAdditionalGovernedSubnet6
+    Description: Additional governed subnet 6, for one namespace's workstations that carry an egress policy.
+    Value: !Ref AdditionalGovernedSubnet6
   PrivateRouteTableId:
     Condition: WantNat
     Description: >-

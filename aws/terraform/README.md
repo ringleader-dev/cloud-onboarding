@@ -51,13 +51,15 @@ output "handoff" { value = module.ringleader_onboarding.handoff }
 | `subnet_cidr` | `null` (derived) | the first `/20` of `vpc_cidr` — `10.60.0.0/20` at index 0. Set it only to override |
 | `gateway_subnet_cidr` | `null` (derived) | the 241st `/24` of `vpc_cidr` — `10.60.240.0/24` at index 0, well clear of `subnet_cidr`. Set it only to override |
 | `governed_subnet_cidr` | `null` (derived) | the 15th `/20` of `vpc_cidr` — `10.60.224.0/20` at index 0. Set it only to override |
+| `additional_governed_subnets` | `{}` | one more governed subnet per namespace that runs its own proxy, as a map of your label to a CIDR you write out. Each is built like the governed subnet and named `ringleader-governed-<label>`. See `aws/README.md` |
 | `max_session_duration` | `3600` | ceiling on the life of the credentials Ringleader mints by assuming the role (AWS bounds: 3600–43200). 3600 is AWS's own default, so setting it changes nothing on an existing role |
 
 ## Outputs
 
-`target_role_arn`, `account_id`, `subnet_id`, `governed_subnet_id`, `gateway_subnet_id`,
-`security_group_id`, `inbound_only_security_group_id`, and `handoff` (all of them in one
-object). Hand `handoff` back to Ringleader. Plus `vpc_id`, `gateway_subnet_cidr` and
+`target_role_arn`, `account_id`, `subnet_id`, `governed_subnet_id`,
+`additional_governed_subnet_ids` (keyed by your label), `gateway_subnet_id`, `security_group_id`,
+`inbound_only_security_group_id`, and `handoff` (all of them in one object). Hand `handoff` back
+to Ringleader. Plus `vpc_id`, `gateway_subnet_cidr` and
 `private_route_table_id` when the matching options are on. `vpc_cidr` and `subnet_cidr` report
 the ranges this region actually took — worth recording, since they are what the next region has
 to stay clear of.
