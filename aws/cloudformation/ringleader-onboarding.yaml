@@ -5,12 +5,7 @@ Description: >-
   AssumeRoleWithWebIdentity (trust pinned to your org's aud AND sub, permissions limited
   to the EC2 workstation lifecycle), and optionally a public-subnet landing-pad network.
 
-# About the two condition keys: CloudFormation cannot build an object key from a parameter,
-# and the IAM trust-policy condition keys are "<issuer-host+path>:aud" and ":sub", which
-# embed your org. So this template carries the placeholder __OIDC_PROVIDER__ in exactly those
-# two keys, and deploy.sh substitutes your issuer host+path (e.g.
-# oidc-app.ringleader.dev/org/<org-id>) before running `aws cloudformation deploy`. Deploying
-# by hand? Replace __OIDC_PROVIDER__ first. Everything else is a real parameter.
+# deploy.sh needs this template at 51,200 bytes or less once rendered. Keep comments to one line. See README.md.
 
 Parameters:
   IssuerUrl:
@@ -32,21 +27,15 @@ Parameters:
     Description: "The assertion's sub claim: org:<org-id>."
     AllowedPattern: "^org:[0-9a-f-]{36}$"
 
-  # HARDCODED DEFAULT, and deliberately safe to let go stale. Creating an IAM OIDC provider
-  # requires a ThumbprintList, but since 2023 AWS validates an IdP served from a well-known
-  # public CA against its own trust store and IGNORES this value -- so onboarding still
-  # succeeds if Ringleader's issuer moves to a different CA. deploy.sh always overrides it
-  # with the value it computes from the live TLS chain, so this default is reached only by a
-  # by-hand deploy that passes no Thumbprint. See README.md -> "About the Thumbprint default"
-  # for how to compute your own.
   Thumbprint:
     Type: String
     Default: "08745487e891c19e3078c1f2a07e452950ef36f6"
     Description: >-
-      SHA-1 thumbprint of the CA at the top of the issuer's TLS chain. AWS ignores it for an
-      IdP served from a well-known public CA (Ringleader's issuer is), but the API requires
-      the field. deploy.sh recomputes it from the live chain; this default is Google Trust
-      Services Root R1, Ringleader's issuer CA at the time of writing.
+      SHA-1 thumbprint of the CA at the top of the issuer's TLS chain. When the issuer's
+      certificate chains to a CA that AWS trusts, as Ringleader's does, AWS checks it against its own
+      CA list. It uses this value only when it cannot fetch the certificate or TLS 1.3 is required.
+      deploy.sh recomputes it from the live chain. This default is Google Trust Services Root R1,
+      the CA at the top of Ringleader's issuer chain.
     AllowedPattern: "^[0-9a-fA-F]{40}$"
 
   RoleName:
@@ -70,30 +59,17 @@ Parameters:
       default; set false and supply your own subnet and security group instead. The VPC,
       subnet, gateway and security group are free -- the NAT gateway below is not.
 
-  # An AWS VPC is regional, so a second region is a second VPC and joining them later needs an
-  # inter-region Transit Gateway -- which cannot route overlapping ranges. Two regions deployed on
-  # one range can never be peered and the only remedy is to renumber and re-onboard, so the
-  # allocation has to be right on the FIRST deploy, when the answer is still free.
-  #
-  # Hence this parameter has NO Default. CloudFormation cannot tell a first deploy from a second
-  # one, and a default would hand the second region the first one's range without a word. Refusing
-  # to guess is the whole mechanism: `aws cloudformation deploy` fails naming RegionIndex until you
-  # say which region this is. Index 0 is 10.60.0.0/16, exactly what this template created before it
-  # derived anything, so an existing stack keeps every range it has by passing 0.
-  #
-  # The Terraform module enforces the same allocation through its region_indexes map; the two paths
-  # produce byte-identical ranges for the same index. See aws/README.md for the table.
+  # No Default: CloudFormation cannot tell a first region from a second. See ../README.md.
   RegionIndex:
     Type: String
     AllowedValues: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
     Description: >-
       Which /16 this region's landing pad takes: the VPC gets 10.(60 + RegionIndex).0.0/16 and
       every subnet below is carved out of it. It has no default, so CloudFormation requires it on
-      EVERY deploy -- pass 0 when CreateNetwork=false or when VpcCidr overrides the derivation, where
-      it allocates nothing. Give your first region 0 -- that is the range this template has always
-      created,
-      so an existing stack is unchanged -- and the next region 1. Never reuse an index: two regions
-      on one range can never be peered. Past ten regions, or on your own IPAM, set VpcCidr instead.
+      EVERY deploy. Pass 0 when CreateNetwork=false or when VpcCidr overrides the derivation, where
+      it allocates nothing. Give your first region 0 (10.60.0.0/16) and the next region 1. Never
+      reuse an index: two regions on one range can never be peered. Past ten regions, or on your
+      own IPAM, set VpcCidr instead.
 
   VpcCidr:
     Type: String
@@ -162,9 +138,9 @@ Parameters:
       Let Ringleader hold artifact payloads -- sealed agent-session transcripts, workflow file
       outputs, files a workstation publishes -- in an S3 bucket in THIS account rather than in
       Ringleader's own. On by default. With it off those bytes go to a bucket Ringleader owns,
-      which is where they go today; nothing degrades. Leave ArtifactStorageBucket empty for the
-      managed width (Ringleader creates its own buckets, confined by ARN to names starting
-      ringleader-), or name a bucket of yours for the narrower one. Granting it does nothing on
+      and nothing degrades. Leave ArtifactStorageBucket empty for the managed width (Ringleader
+      creates its own buckets, confined by ARN to names starting ringleader-), or name a bucket
+      of yours for the narrower one. Granting it does nothing on
       its own -- no payload is written here until a Ringleader namespace declares a Storage
       object naming a bucket.
 
@@ -262,12 +238,6 @@ Parameters:
       the two egress-control ranges stay together and SubnetCidr is free to grow. Set it only to
       override, and then it must sit inside the VPC range.
 
-  # AdditionalGovernedSubnet<n>Label and ...Cidr, six slots: one more governed subnet per Ringleader
-  # namespace that runs its own gateway, since a gateway steers a whole subnet and a subnet is for one
-  # namespace. This template uses no transform, so it cannot loop over a list. Each subnet is built
-  # like GovernedSubnet and named ringleader-governed-<label>. An empty Cidr creates nothing, and a
-  # Cidr needs a Label. Changing a Cidr replaces the subnet, and emptying it deletes the subnet.
-  # deploy.sh fills the slots from ADDITIONAL_GOVERNED_SUBNETS.
   AdditionalGovernedSubnet1Label:
     Type: String
     Default: ""
@@ -338,10 +308,6 @@ Parameters:
       CIDR of additional governed subnet 6. See AdditionalGovernedSubnet1Cidr.
 
 Mappings:
-  # The /16 each index takes. Written out rather than computed, because a reader deciding which
-  # index to give a new region should be able to see the range they are choosing. Indexes stop at
-  # 9 so this block stays clear of the Azure module's 10.70.0.0/16-10.79.0.0/16 and the GCP
-  # module's 10.80.0.0/16-10.89.0.0/16; onboarding all three clouds then overlaps nothing.
   RegionCidrs:
     "0": { Vpc: "10.60.0.0/16" }
     "1": { Vpc: "10.61.0.0/16" }
@@ -382,8 +348,6 @@ Rules:
 
 Conditions:
   HasRegionCondition: !Not [!Equals [!Ref AllowedRegion, ""]]
-  # An empty CIDR parameter means "derive it"; a non-empty one is an override that wins. There is
-  # no `Fn::Coalesce`, so each one needs its own condition.
   HasVpcCidr: !Not [!Equals [!Ref VpcCidr, ""]]
   HasSubnetCidr: !Not [!Equals [!Ref SubnetCidr, ""]]
   HasGatewaySubnetCidr: !Not [!Equals [!Ref GatewaySubnetCidr, ""]]
@@ -398,8 +362,6 @@ Conditions:
   WantAnyInbound: !Or [!Condition WantSsh, !Condition WantSecondarySsh]
   WantWorkstationIdentities: !Equals [!Ref EnableWorkstationIdentities, "true"]
   WantArtifactStorage: !Equals [!Ref EnableArtifactStorage, "true"]
-  # An empty bucket name is the MANAGED width; a name is the narrower one. The two differ in
-  # which ARNs the statements reach and in whether the bucket-shaping actions are granted.
   ArtifactStorageIsManaged: !Equals [!Ref ArtifactStorageBucket, ""]
   WantArtifactStorageManaged: !And
     - !Condition WantArtifactStorage
@@ -451,7 +413,7 @@ Resources:
             Action: "sts:AssumeRoleWithWebIdentity"
             Condition:
               StringEquals:
-                # deploy.sh replaces __OIDC_PROVIDER__ with your issuer host+path.
+                # deploy.sh replaces __OIDC_PROVIDER__ with your issuer host and path.
                 "__OIDC_PROVIDER__:aud": !Ref Audience
                 "__OIDC_PROVIDER__:sub": !Ref Subject
       Policies:
@@ -476,17 +438,6 @@ Resources:
                   - "ec2:DescribeAvailabilityZones"
                 Resource: "*"
 
-              # The one read that returns CONTENT rather than shape: with Attribute=userData,
-              # DescribeInstanceAttribute hands back an instance's WHOLE boot payload, from outside
-              # the box. It is granted so what Ringleader wrote to a box it created can be read back
-              # the way an attacker would and shown to carry no bearer secret.
-              #
-              # It is a statement of its OWN so it can take the region bound the reads above
-              # deliberately do not. Unbounded on "*" it would return the user-data of every
-              # instance in the account, including instances in regions this role may not otherwise
-              # touch at all. Bounded, it reaches only instances the role already holds
-              # StopInstances + ModifyInstanceAttribute + StartInstances over, which can REWRITE the
-              # bytes it merely reads.
               - Sid: Ec2DescribeUserData
                 Effect: Allow
                 Action:
@@ -498,21 +449,6 @@ Resources:
                       "aws:RequestedRegion": !Ref AllowedRegion
                   - !Ref AWS::NoValue
 
-              # ModifyInstanceAttribute is what a machine RESIZE issues, on the stopped instance --
-              # without it that cycle ends in UnauthorizedOperation and the workstation rests
-              # stopped. The same API also sets user-data and IAM cannot tell the two apart, but the
-              # role already holds RunInstances, so it widens nothing this grant did not permit.
-              #
-              # ModifyVolume grows a workstation's root volume without replacing the machine, and
-              # EC2 refuses to make a volume smaller. The same call can change a volume's type,
-              # IOPS, throughput and Multi-Attach setting, and so its cost. RunInstances can already
-              # launch a volume of any type, IOPS or throughput, and the role holds no AttachVolume,
-              # so a Multi-Attach volume cannot be attached to a second instance. Ringleader calls
-              # it when you raise a workstation's rootVolumeGiB. Ringleader does not call
-              # DescribeVolumesModifications yet. It is listed in Ec2Describe above and reports a
-              # modification's state, and EC2 accepts no second change to a volume until the first
-              # reaches completed. It is granted now because an action added later would ask every
-              # customer to apply this again.
               - Sid: Ec2Lifecycle
                 Effect: Allow
                 Action:
@@ -535,15 +471,8 @@ Resources:
                 Action:
                   - "ssm:GetParameters"
                   - "ssm:GetParameter"
-                # ${AWS::Partition}, not a literal "aws": the same template then works in
-                # GovCloud (aws-us-gov) and China (aws-cn), where a hardcoded partition yields a
-                # policy that is valid and matches nothing.
                 Resource: !Sub "arn:${AWS::Partition}:ssm:*::parameter/aws/service/*"
 
-              # Pass an instance-profile role to a workstation (runtime identities), so a box can
-              # run as an IAM role of yours. Bounded to roles under WorkstationIdentityPath and to
-              # ec2.amazonaws.com, so it can hand nothing to any other service and reaches no role
-              # outside that path.
               - !If
                 - WantWorkstationIdentities
                 - Sid: PassWorkstationInstanceProfileRole
@@ -555,18 +484,6 @@ Resources:
                       "iam:PassedToService": "ec2.amazonaws.com"
                 - !Ref AWS::NoValue
 
-              # Egress control, when EnableEgressControl=true. Ringleader compiles each distinct
-              # egress policy into ONE security group and attaches it to the workstations
-              # carrying that policy, so a fleet sharing a policy costs one group -- which
-              # matters, because AWS caps an ENI at 5 security groups and a region at 2,500.
-              #
-              # The three ingress actions are for the DNS / HTTPS proxy VM, whose own group
-              # has to admit workstation traffic. The third of them marks the rule admitting
-              # inbound management traffic to that VM as Ringleader's own.
-              #
-              # Bounded to the VPC when one is known, and to AllowedRegion when that is set. With
-              # both, the statement carries both conditions, and IAM applies the statement only
-              # when every condition in it holds.
               - !If
                 - WantEgressControl
                 - Sid: EgressSecurityGroups
@@ -577,27 +494,7 @@ Resources:
                     - "ec2:RevokeSecurityGroupEgress"
                     - "ec2:AuthorizeSecurityGroupIngress"
                     - "ec2:RevokeSecurityGroupIngress"
-                    # Provenance. The gateway's inbound management rule is
-                    # tcp 30000-32767 from 0.0.0.0/0, which an operator can write by hand and
-                    # Ringleader could then not tell from its own, so Ringleader stamps every
-                    # range it writes with a description naming the control plane behind it
-                    # and can then revoke only what that stamp proves is its. The stamp on a
-                    # NEW rule rides the authorize above; this action is for a rule that
-                    # already exists WITHOUT one, since an authorize naming an existing
-                    # protocol, ports and source is rejected as a duplicate and the
-                    # description is not part of what EC2 compares. It selects a rule and
-                    # replaces its description text, expressing no protocol, port or address
-                    # of its own, so it cannot add, remove or widen a rule.
-                    #
-                    # The code writing those descriptions ships in Ringleader rather than
-                    # here, and this grant arrives ahead of it on purpose: a landing pad is
-                    # applied once, in the customer's own account, so an action added
-                    # afterwards costs a second apply.
                     - "ec2:UpdateSecurityGroupRuleDescriptionsIngress"
-                    # Steering: what makes a workstation's traffic arrive at the DNS / HTTPS
-                    # proxy when a policy names hostnames rather than address ranges. An AWS
-                    # route table is per subnet, so per-policy steering needs a subnet per
-                    # policy and a route table to go with it.
                     - "ec2:DeleteRouteTable"
                     - "ec2:CreateRoute"
                     - "ec2:ReplaceRoute"
@@ -629,14 +526,6 @@ Resources:
                       - !Ref AWS::NoValue
                 - !Ref AWS::NoValue
 
-              # The creates: a security group per compiled policy, and the route table and subnet
-              # steering uses. A statement of their own because the ec2:Vpc condition above can
-              # never match a create. AWS's service reference lists what each create is authorized
-              # against, the new object and the VPC it goes in, and for a create it lists no
-              # ec2:Vpc key on either, so under that condition every create is refused. They are
-              # bounded to the same VPC by resource ARN instead, because the service reference lists
-              # the VPC among those resources. AWS's example policies do not show a create scoped
-              # this way, so that bound rests on the service reference alone.
               - !If
                 - WantEgressControl
                 - Sid: EgressCreate
@@ -662,13 +551,6 @@ Resources:
                     - !Ref AWS::NoValue
                 - !Ref AWS::NoValue
 
-              # The two reads the reconciler and its sweep need, in a statement of their own
-              # because they cannot go in the one above. EC2's Describe actions support no
-              # resource-level permissions, so ec2:Vpc is absent from the request context and a
-              # condition on it can never match -- granting them there reads correctly and
-              # denies at runtime. AWS documents this: "the Describe actions do not support
-              # resource-level permissions, so you must specify them in a separate statement
-              # without conditions." The region condition is fine; only the VPC one is not.
               - !If
                 - WantEgressControl
                 - Sid: EgressDescribe
@@ -684,14 +566,6 @@ Resources:
                     - !Ref AWS::NoValue
                 - !Ref AWS::NoValue
 
-              # A reserved address for the egress gateway, so the address your upstreams see
-              # does not change underneath them. Without one the gateway leaves on the subnet's
-              # auto-assigned address, and Ringleader replaces that machine when it fails
-              # health -- so anything you allowlisted upstream would break at the worst moment.
-              #
-              # Bounded by REGION and not by VPC: an Elastic IP is an account-level resource
-              # and is not associated with a VPC at allocation time, so an ec2:Vpc condition on
-              # AllocateAddress can never match -- the same reason the reads above carry none.
               - !If
                 - WantEgressControl
                 - Sid: EgressGatewayAddress
@@ -710,11 +584,6 @@ Resources:
                     - !Ref AWS::NoValue
                 - !Ref AWS::NoValue
 
-              # Two jobs: moving a workstation's NIC onto the security group its policy
-              # compiled to -- which is what makes a policy change take effect on a running
-              # workstation rather than only on the next one created -- and clearing the
-              # source/destination check on the proxy's own interface, without which AWS
-              # silently drops every packet it forwards.
               - !If
                 - WantEgressControl
                 - Sid: EgressAttachToInstances
@@ -744,21 +613,6 @@ Resources:
                       - !Ref AWS::NoValue
                 - !Ref AWS::NoValue
 
-              # Artifact storage, when EnableArtifactStorage=true: where a namespace's payload
-              # bytes live. It grants no bucket and declares none -- which bucket a Ringleader
-              # namespace writes to is declared on a Storage object over there, and until one
-              # exists nothing is written here.
-              #
-              # Three statements, because S3 splits its authorization that way: bucket-level
-              # actions authorize against the BUCKET arn, object-level ones against `<bucket>/*`,
-              # and a policy that puts s3:ListBucket on the object arn is the classic S3 mistake --
-              # it lints clean, deploys, and denies at runtime. The third is the shaping the
-              # MANAGED width alone gets, kept separate so the two widths differ by whether a
-              # statement is present rather than by what is inside one.
-              #
-              # Bounded by NAME PREFIX rather than by region: S3 is global, so a region condition
-              # would break a bucket placed elsewhere for residency, and a bucket has no VPC.
-              # ringleader- is the prefix Ringleader names every bucket it creates with.
               - !If
                 - WantArtifactStorage
                 - Sid: ArtifactStorageBuckets
@@ -788,9 +642,6 @@ Resources:
                   Resource: !Sub "arn:${AWS::Partition}:s3:::ringleader-*"
                 - !Ref AWS::NoValue
 
-              # The multipart actions are not extras: any upload over the SDK's threshold becomes
-              # a multipart upload, so a grant without them fails on a large transcript and on
-              # nothing else -- the worst shape of bug to find in production.
               - !If
                 - WantArtifactStorage
                 - Sid: ArtifactStorageObjects
@@ -807,7 +658,6 @@ Resources:
                     - !Sub "arn:${AWS::Partition}:s3:::${ArtifactStorageBucket}/*"
                 - !Ref AWS::NoValue
 
-  # --- Optional landing-pad network -----------------------------------------------------
   Vpc:
     Type: AWS::EC2::VPC
     Condition: WantNetwork
@@ -838,8 +688,6 @@ Resources:
     Condition: WantNetwork
     Properties:
       VpcId: !Ref Vpc
-      # The first /20 of the VPC range, unless overridden. Derived rather than defaulted so
-      # that moving the VPC moves every subnet with it -- there is no second literal to forget.
       CidrBlock: !If
         - HasSubnetCidr
         - !Ref SubnetCidr
@@ -878,11 +726,6 @@ Resources:
       SubnetId: !Ref Subnet
       RouteTableId: !Ref RouteTable
 
-  # NAT gateway, for anything on this VPC without a public IP: a workstation created with
-  # providerConfig.aws.assignPublicIp: false, and the gateway subnet below. It lives in the
-  # public subnet (that is where a NAT gateway has to be) and is reached through the private
-  # route table, which is what actually gives a private instance egress. Bills per hour plus
-  # data processing.
   NatEip:
     Type: AWS::EC2::EIP
     Condition: WantNat
@@ -914,28 +757,11 @@ Resources:
       DestinationCidrBlock: "0.0.0.0/0"
       NatGatewayId: !Ref NatGateway
 
-  # Where the DNS / HTTPS proxy VM runs -- created empty, and on by default.
-  #
-  # Ringleader's egress control points workstations at a proxy that reads the hostname off each
-  # connection and allows or refuses it, and it builds that VM itself once you declare an
-  # EgressGateway naming this subnet as spec.subnet. It builds none before that: a route table
-  # attaches per subnet and replaces the default route of everything in it, so a proxy sitting
-  # in a subnet it steers would route its own egress into itself and black-hole every
-  # workstation it serves. A subnet of its own also means the security-group rules that permit
-  # workstation -> proxy traffic can name one stable range instead of one instance's address.
-  #
-  # It is public, and that is the cost decision rather than a convenience. The proxy carries a
-  # fleet's whole outbound volume; internet ingress is free, so a proxy with its own public
-  # address pays nothing for it, while the same bytes through a managed NAT gateway meter at
-  # $0.045/GB. It also shares the workstations subnet's availability zone, because AWS charges
-  # cross-AZ traffic in both directions and a proxy sits on the path of everything a
-  # workstation does.
   GatewaySubnet:
     Type: AWS::EC2::Subnet
     Condition: WantGatewaySubnet
     Properties:
       VpcId: !Ref Vpc
-      # The 241st /24 of the VPC range, unless overridden.
       CidrBlock: !If
         - HasGatewaySubnetCidr
         - !Ref GatewaySubnetCidr
@@ -952,9 +778,6 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags: [{ Key: Name, Value: ringleader-gateway }]
 
-  # Its own route table rather than a share of the workstations one. Same routes today, but
-  # the proxy's subnet is where a per-policy route eventually lands, and splitting it now
-  # means that change never has to touch the subnet the workstations are on.
   GatewayRouteTable:
     Type: AWS::EC2::RouteTable
     Condition: WantGatewaySubnet
@@ -978,29 +801,11 @@ Resources:
       SubnetId: !Ref GatewaySubnet
       RouteTableId: !Ref GatewayRouteTable
 
-  # And a home for the WORKSTATIONS that gateway governs -- also empty, also on by default.
-  #
-  # A gateway steers a whole subnet and serves only the boxes it holds a policy for, so a
-  # steered subnet has to hold governed boxes and nothing else. The workstations subnet above
-  # is where every workstation in the VPC goes, governed or not; steering that one would take
-  # the egress of every box in it that has no policy.
-  #
-  # It has NO ROUTE TABLE ASSOCIATION, deliberately. Ringleader claims the subnet by creating
-  # its own table and associating it, and refuses one that already carries an association --
-  # taking yours over would need ec2:ReplaceRouteTableAssociation, which no grant here
-  # includes, and nothing could put yours back. Until a gateway steers it the subnet falls back
-  # to the VPC's main route table, which carries only the local route, so a workstation in here
-  # has no egress and will not converge: the gateway has to exist first. And once steering
-  # lands, 0.0.0.0/0 points at the gateway's interface, which is also the reply path for
-  # anything dialling the box from outside the VPC -- so reach a governed workstation on its
-  # private address and create it with assignPublicIp: false, which is why this subnet hands
-  # out no public IPs.
   GovernedSubnet:
     Type: AWS::EC2::Subnet
     Condition: WantGovernedSubnet
     Properties:
       VpcId: !Ref Vpc
-      # The 15th /20 of the VPC range, unless overridden -- immediately below the gateway /24.
       CidrBlock: !If
         - HasGovernedSubnetCidr
         - !Ref GovernedSubnetCidr
@@ -1017,7 +822,6 @@ Resources:
       MapPublicIpOnLaunch: false
       Tags: [{ Key: Name, Value: ringleader-governed }]
 
-  # One subnet per filled AdditionalGovernedSubnet slot, built like GovernedSubnet above.
   AdditionalGovernedSubnet1:
     Type: AWS::EC2::Subnet
     Condition: WantAdditionalGovernedSubnet1
@@ -1078,20 +882,13 @@ Resources:
     Condition: WantNetwork
     Properties:
       GroupName: ringleader-workstations
-      # Do NOT restate the ingress list here as it grows: GroupDescription requires REPLACEMENT,
-      # so editing it swaps the security group for a new one with a new id -- the id you handed
-      # back to Ringleader (providerConfig.aws.securityGroupIds). SecurityGroupIngress below is
-      # the authority on what is actually open.
+      # GroupDescription cannot change: replacing the group is refused, since it has a fixed name.
       GroupDescription: "Ringleader workstations: egress out; inbound SSH only from SshSourceCidr."
       VpcId: !Ref Vpc
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: "0.0.0.0/0"
           Description: "All egress (a workstation reaching the Ringleader control plane)."
-      # 2222 is the SECONDARY SSH port, fixed by Ringleader and deliberately not a parameter:
-      # you never have to know the number, and it cannot drift from the port Ringleader dials.
-      # With both CIDRs empty this property resolves away entirely, so a stack deployed on the
-      # defaults admits exactly what it admitted before SecondarySshSourceCidr existed.
       SecurityGroupIngress: !If
         - WantAnyInbound
         - - !If
@@ -1113,30 +910,12 @@ Resources:
         - !Ref AWS::NoValue
       Tags: [{ Key: Name, Value: ringleader-workstations }]
 
-  # The same group for a workstation that DECLARES AN EGRESS POLICY: identical inbound rules,
-  # and no egress it can actually use.
-  #
-  # Why a second group rather than an edit to the one above: a security group is ALLOW-ONLY and
-  # EC2 AGGREGATES the rules of every group on a network interface, so the group Ringleader
-  # compiles a policy into can only ADD to what the box's other groups already permit. Beside
-  # WorkstationsSecurityGroup's allow-all it narrows nothing; beside this one it IS the union.
-  # Both have to exist -- take the egress rule off the group above and every workstation
-  # WITHOUT a policy loses the egress it needs to come up at all.
-  #
-  # THE 127.0.0.1/32 RULE IS HOW CLOUDFORMATION SPELLS "NO EGRESS", and it is not decoration.
-  # AWS gives every new security group an allow-all egress rule, and CloudFormation only
-  # replaces it when SecurityGroupEgress names at least one rule: omitting the property leaves
-  # the allow-all, and so does an empty list -- both verified against the live API, and both
-  # silently produce a group that defeats every policy placed beside it. One rule to the
-  # loopback address is the smallest thing that displaces it. Loopback traffic never reaches the
-  # interface, so the rule permits nothing; it exists to be the rule that is not allow-all.
-  # (The Terraform path has no such constraint and declares no egress at all.)
   InboundOnlySecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Condition: WantInboundOnlyGroup
     Properties:
       GroupName: ringleader-workstations-inbound-only
-      # GroupDescription requires REPLACEMENT -- see the group above.
+      # GroupDescription cannot change: replacing the group is refused, since it has a fixed name.
       GroupDescription: "Ringleader workstations with a declared egress policy: inbound SSH only, no egress."
       VpcId: !Ref Vpc
       SecurityGroupEgress:

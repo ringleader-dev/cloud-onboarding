@@ -373,6 +373,10 @@ needs cloud credentials:
 - **`terraform test`** for each module that ships a `tests/` directory. Providers are mocked
   and only `plan` runs, so it needs no cloud account.
 - **`cfn-lint`** on the AWS CloudFormation template.
+- **The template size check** (`.github/scripts/check_template_size.py`). `aws cloudformation
+  deploy` refuses a template over 51,200 bytes unless you give it an S3 bucket, and `deploy.sh`
+  does not. The check measures the template the way `deploy.sh` renders it, and fails above that
+  size.
 - **The trust-pin guard** (`.github/scripts/check_trust_pins.py`) — the one check that is
   about security rather than deployability. It covers **all six artifacts**: each cloud's
   Terraform module and the template or script beside it, since both are supported paths and

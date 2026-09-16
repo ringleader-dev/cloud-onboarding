@@ -13,3 +13,15 @@ already told — in this session, or by the task you were given — to change th
 it to understand what a customer applies is always fine.
 
 This file is also `CLAUDE.md`.
+
+## When you change it
+
+- **Keep each comment in the CloudFormation and ARM templates to one line.** A comment is part of
+  the template a customer deploys, and templates have size limits. `deploy.sh` can deploy
+  `aws/cloudformation/ringleader-onboarding.yaml` only when the template it renders is 51,200 bytes
+  or less, and CI fails above that (`.github/scripts/check_template_size.py`). Put the reason a
+  parameter, statement or resource has its shape in the `README.md` beside the template, or in the
+  cloud's own `README.md`.
+- **Describe what the repository does now, not how it got here.** Leave out earlier designs, what a
+  value used to be, and why an old approach was dropped. The git log holds that history, so anyone
+  who needs it can read it there.

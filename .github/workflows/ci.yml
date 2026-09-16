@@ -145,3 +145,8 @@ jobs:
       # The template ships with the __OIDC_PROVIDER__ placeholder deploy.sh substitutes; it sits
       # in two condition KEYS, which are free-form strings, so the unrendered file lints clean.
       - run: cfn-lint aws/cloudformation/ringleader-onboarding.yaml
+
+      # `aws cloudformation deploy` refuses a template over 51,200 bytes without --s3-bucket, which
+      # deploy.sh does not pass. cfn-lint has no rule for that limit.
+      - name: deploy.sh renders the template at 51,200 bytes or less
+        run: python3 .github/scripts/check_template_size.py
