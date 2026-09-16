@@ -44,7 +44,9 @@ The permissions policy's **base** is exactly these four statements — no wildca
   with any user-data at all, so it widens nothing this grant did not already permit. `ModifyVolume`
   grows a workstation's **root volume** without replacing it, and EC2 refuses to make a volume
   smaller. It can also change a volume's type, IOPS, throughput and Multi-Attach setting, and so
-  what the volume costs. Ringleader calls it when you raise a workstation's `rootVolumeGiB`, and
+  what the volume costs. `RunInstances` can already launch a volume of any type, IOPS or throughput.
+  The role holds no `ec2:AttachVolume`, so a Multi-Attach volume cannot be attached to a second
+  instance. Ringleader calls `ModifyVolume` when you raise a workstation's `rootVolumeGiB`, and
   without it EC2 refuses the grow. Ringleader does not call `DescribeVolumesModifications` yet. It
   reports a grow's state, including `completed`, and it is granted now so that using it later does
   not ask you to apply this again,
@@ -448,6 +450,13 @@ decision Ringleader never touches.
 are what report the bucket's encryption and region back onto the `Storage` object, and without
 them that status can only say `unknown`.
 
+The grant is two statements in the named width and three in the managed one. S3 checks bucket
+actions such as `s3:ListBucket` against the bucket's ARN and object actions against
+`<bucket>/*`, so the two sets name different resources and sit in separate statements.
+`s3:ListBucket` on an object ARN deploys cleanly and is refused on every call. The third
+statement, managed width only, holds `CreateBucket`, `DeleteBucket` and the public-access-block
+and lifecycle actions.
+
 The multipart actions (`AbortMultipartUpload`, `ListMultipartUploadParts`,
 `ListBucketMultipartUploads`) are not extras. Any upload over the SDK's threshold becomes a
 multipart upload, so a grant without them fails on a large transcript and on nothing else — the
@@ -552,18 +561,17 @@ read its warning first.
 - **AMIs are x86-64.** The alias table (`ubuntu-24.04`, `debian-12`,
   `amazonlinux-2023`, …) resolves x86-64 AMIs, so use an x86-64 instance type (default
   `t3.medium`).
-- **The thumbprint is a formality, and both paths compute it for you.** Creating an IAM
-  OIDC provider requires a `ThumbprintList`, but since 2023 AWS validates an IdP served
-  from a well-known public CA against its own trust store and ignores the value. Both
-  paths read the issuer's live TLS chain anyway rather than hardcode one:
-  `terraform` via the `tls_certificate` data source, `deploy.sh` via `openssl s_client`.
+- **Both paths compute the thumbprint for you.** When the issuer's certificate chains to a CA that
+  AWS trusts, AWS checks it against its own list of trusted CAs and not against the thumbprint. AWS
+  uses the thumbprint only when it cannot fetch the certificate or the server requires TLS 1.3. Both
+  paths read the thumbprint from the issuer's live TLS chain: `terraform` with the `tls_certificate`
+  data source, `deploy.sh` with `openssl s_client`.
 
-  **The CloudFormation template does carry a hardcoded `Thumbprint` default**
-  (Google Trust Services Root R1, Ringleader's issuer CA at the time of writing). It is
-  only ever used if you deploy `ringleader-onboarding.yaml` **by hand** without passing
-  `Thumbprint` — `deploy.sh` always overrides it with the freshly computed value. If
-  Ringleader's issuer moves to a different CA, that stale default still onboards
-  correctly, because AWS ignores it for a public-CA issuer. Pass your own value if your
-  account policy requires an accurate one.
+  **The CloudFormation template also carries a `Thumbprint` default**: Google Trust Services Root
+  R1, the CA at the top of Ringleader's issuer chain. It is used only if you deploy
+  `ringleader-onboarding.yaml` **by hand** without passing `Thumbprint`, because `deploy.sh` always
+  passes the value it computes. If Ringleader's issuer moves to another CA that AWS trusts, the
+  stale default still lets Ringleader assume the role. Pass your own value if your account policy
+  needs an accurate one.
 
 More detail: <https://docs.ringleader.dev/cloud-onboarding/aws/>.

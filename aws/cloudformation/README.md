@@ -18,11 +18,11 @@ SSH_SOURCE_CIDR=<your.ip/32> \
 
 `REGION_INDEX` is **required** whenever this creates a network, and picks which `/16` the
 landing pad takes: the VPC gets `10.(60 + REGION_INDEX).0.0/16` and every subnet is carved out
-of it. Give your first region `0` — that is `10.60.0.0/16`, the range this template has always
-created, so an existing stack is unchanged — and the next region `1`. There is no default on
-purpose: an AWS VPC is regional, two VPCs on one range can never be peered, and nothing here
-can tell a first region from a second, so guessing would hand the second one the first one's
-range in silence. See [`../README.md`](../README.md#a-second-region-name-it-do-not-renumber-it).
+of it. Give your first region `0`, which is `10.60.0.0/16`, and the next region `1`. There is no
+default. An AWS VPC is regional, and two VPCs on one range can never be peered. Neither `deploy.sh`
+nor CloudFormation can tell a first region from a second, so a default would give the second region
+the first one's range without a warning. See
+[`../README.md`](../README.md#a-second-region-name-it-do-not-renumber-it).
 
 Env vars: `ISSUER_URL`, `ORG_UID` (required); `REGION_INDEX` (required with a network);
 `REGION` (default `us-east-1`), `STACK_NAME`
@@ -105,11 +105,12 @@ Deploy with `--capabilities CAPABILITY_NAMED_IAM` (the role has a fixed name).
 always recomputes it from the live chain and passes it, so the default below is used
 **only if you deploy the template by hand without passing `Thumbprint`**.
 
-That default is a hardcoded value — Google Trust Services Root R1, Ringleader's issuer CA
-at the time of writing — and it is deliberately not a problem if it goes stale: since 2023
-AWS validates an IdP served from a well-known public CA against its own trust store and
-ignores the thumbprint entirely. Onboarding still succeeds. Pass your own value if your
-account policy requires the field to be accurate:
+That default is the thumbprint of Google Trust Services Root R1, the CA at the top of Ringleader's
+issuer chain. When the issuer's certificate chains to a CA that AWS trusts, AWS checks it against
+its own list of trusted CAs and not against the thumbprint. AWS uses the thumbprint only when it
+cannot fetch the certificate or the server requires TLS 1.3. So if the issuer moves to another CA
+that AWS trusts, a stale default still lets Ringleader assume the role. Pass your own value if your
+account policy needs the field to be accurate:
 
 ```sh
 THUMBPRINT=$(echo | openssl s_client -servername oidc-app.ringleader.dev \
@@ -133,6 +134,30 @@ egress out, inbound SSH. `InboundOnlySecurityGroupId` has the same inbound rules
 egress, and it is the one a workstation that declares `spec.egress` must carry — see
 [the union rule](../README.md#which-security-group-a-workstation-gets). Give a policy-bearing
 workstation the first id and Ringleader refuses to launch it.
+
+## Changing the template
+
+`deploy.sh` deploys the template with `aws cloudformation deploy --template-file` and no S3
+bucket, and the AWS CLI refuses a template over 51,200 bytes on that path. CI fails when the
+template `deploy.sh` renders is over that size (`.github/scripts/check_template_size.py`), so
+keep each comment in `ringleader-onboarding.yaml` to one line. Write the reasoning here or in
+[`../README.md`](../README.md) instead.
+
+Three edits to the template hurt the customers who apply it:
+
+- **Changing `GroupDescription` on either security group.** CloudFormation can change a group's
+  description only by replacing the group, and it refuses to replace a group with a fixed
+  `GroupName`, so the stack update fails. The rules in `SecurityGroupIngress` and
+  `SecurityGroupEgress` update without replacing the group.
+- **Removing the `127.0.0.1/32` egress rule on the inbound-only group.** When CloudFormation
+  creates a security group whose `SecurityGroupEgress` is empty or absent, AWS adds its allow-all
+  egress rule. This rule is what gives a new group no usable egress. See
+  [Which security group a workstation gets](../README.md#which-security-group-a-workstation-gets).
+- **Adding a `Default` to `RegionIndex`.** A customer's second region would then take the first
+  region's range.
+
+The gateway subnet has a route table of its own rather than sharing the workstations subnet's,
+so a route added for the gateway never changes where a workstation's traffic goes.
 
 ## Revoke
 
