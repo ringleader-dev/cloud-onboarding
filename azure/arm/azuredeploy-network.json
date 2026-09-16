@@ -107,6 +107,13 @@
         "description": "More governed subnets, beside the one createGovernedSubnet reserves: an object mapping a label you choose to that subnet's CIDR, e.g. {\"team-a\": \"10.70.208.0/20\"}. Empty by default. A gateway steers a whole subnet and a subnet belongs to one Ringleader namespace, so each namespace that runs its own gateway needs a governed subnet of its own. Each entry becomes a subnet named governed-<label>, built exactly like the governed subnet: the workstations NSG, no route table, no NAT gateway, default outbound access disabled. Each CIDR must be written out, sit inside the VNet range and overlap no other subnet; on the default range the six /20s from 10.70.128.0/20 to 10.70.208.0/20 are free. The VNet's subnets are declared as one list, so an entry left out of a later deployment is deleted, which Azure refuses while a network interface is still in it."
       }
     },
+    "subnetRouteTables": {
+      "type": "Array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "The route table already associated with each subnet of an existing VNet, as [{\"name\": \"<subnet>\", \"id\": \"<route table id>\"}]. Empty, the default, is right for a new VNet. The VNet's subnets are deployed as one list. A subnet deployed without a route table loses its route table, including the one Ringleader adds to steer a governed subnet. Each subnet named here keeps its route table. deploy.sh looks them up and passes this for you."
+      }
+    },
     "workstationsNsgExists": {
       "type": "Bool",
       "defaultValue": false,
@@ -201,9 +208,15 @@
             }
           }
         }
+      },
+      {
+        "name": "subnetsKeepingRouteTables",
+        "count": "[length(variables('effectiveSubnets'))]",
+        "input": "[if(contains(variables('subnetRouteTableIds'), variables('effectiveSubnets')[copyIndex('subnetsKeepingRouteTables')].name), union(variables('effectiveSubnets')[copyIndex('subnetsKeepingRouteTables')], createObject('properties', union(variables('effectiveSubnets')[copyIndex('subnetsKeepingRouteTables')].properties, createObject('routeTable', createObject('id', variables('subnetRouteTableIds')[variables('effectiveSubnets')[copyIndex('subnetsKeepingRouteTables')].name]))))), variables('effectiveSubnets')[copyIndex('subnetsKeepingRouteTables')])]"
       }
     ],
-    "effectiveSubnets": "[concat(variables('workstationSubnets'), if(parameters('createGatewaySubnet'), variables('gatewaySubnets'), createArray()), if(parameters('createGovernedSubnet'), variables('governedSubnets'), createArray()), variables('additionalGovernedSubnetList'))]"
+    "effectiveSubnets": "[concat(variables('workstationSubnets'), if(parameters('createGatewaySubnet'), variables('gatewaySubnets'), createArray()), if(parameters('createGovernedSubnet'), variables('governedSubnets'), createArray()), variables('additionalGovernedSubnetList'))]",
+    "subnetRouteTableIds": "[toObject(parameters('subnetRouteTables'), lambda('table', lambdaVariables('table').name), lambda('table', lambdaVariables('table').id))]"
   },
   "resources": [
     {
@@ -351,7 +364,7 @@
             "[variables('vnetAddressSpace')]"
           ]
         },
-        "subnets": "[variables('effectiveSubnets')]"
+        "subnets": "[variables('subnetsKeepingRouteTables')]"
       }
     }
   ],
