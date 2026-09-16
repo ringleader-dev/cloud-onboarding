@@ -300,10 +300,10 @@ class SecondarySSHPortCannotDrift(Rejects):
         )
         self.assertRejected(srcs, "no line reading")
 
-    def test_the_arm_variable_is_renamed(self):
+    def test_the_arm_rule_is_renamed(self):
         self.assertRejected(
-            edited((AZURE_ARM, '"secondarySshRules": [', '"altSshRules": [')),
-            "secondarySshRules",
+            edited((AZURE_ARM, "'/AllowRingleaderSecondarySSHInbound')]", "'/AllowRingleaderAltSSHInbound')]")),
+            "expected 1",
         )
 
 
@@ -642,8 +642,8 @@ class TheAzureManagementRuleCannotDrift(Rejects):
     """
 
     TF_PORTS = '  gateway_management_ports = ["22", "30000-32767"]'
-    ARM_PORTS = '"destinationPortRanges": [\n            "22",\n            "30000-32767"\n          ]'
-    ARM_PROTOCOL = '"protocol": "Tcp",\n          "direction": "Inbound",\n          "access": "Allow",\n          "priority": 4010,'
+    ARM_PORTS = '"destinationPortRanges": [\n          "22",\n          "30000-32767"\n        ]'
+    ARM_PROTOCOL = '"protocol": "Tcp",\n        "direction": "Inbound",\n        "access": "Allow",\n        "priority": 4010,'
     SH_DEFAULT = 'GATEWAY_MANAGEMENT_SOURCE_CIDR="${GATEWAY_MANAGEMENT_SOURCE_CIDR:-$SSH_SOURCE_CIDR}"'
 
     def test_the_module_narrows_the_set(self):
@@ -690,9 +690,9 @@ class TheAzureManagementRuleCannotDrift(Rejects):
     def test_the_template_stops_deploying_the_rule(self):
         self.assertRejected(
             edited((AZURE_ARM,
-                    "\"effectiveGatewaySecurityRules\": \"[concat(variables('gatewayVnetRules'), if(equals(parameters('gatewayManagementSourceCidr'), ''), createArray(), variables('gatewayManagementRules')))]\"",
-                    "\"effectiveGatewaySecurityRules\": \"[variables('gatewayVnetRules')]\"")),
-            "gatewayManagementRules",
+                    "\"name\": \"[concat(variables('gatewayNsgName'), '/allow-management-inbound')]\"",
+                    "\"name\": \"[concat(variables('gatewayNsgName'), '/allow-mgmt-inbound')]\"")),
+            "expected 1",
         )
 
     def test_the_script_stops_following(self):
@@ -731,6 +731,46 @@ class TheAzureManagementRuleCannotDrift(Rejects):
             edited((AZURE_TF, "var.gateway_management_source_ranges == null ? var.ssh_source_ranges :",
                     "var.gateway_management_source_ranges == null ? var.secondary_ssh_source_ranges :")),
             "mirrors `var.secondary_ssh_source_ranges`",
+        )
+
+
+class TheArmGroupsKeepARuleTheyDidNotDeclare(Rejects):
+    """Ringleader writes inbound rules of its own inside the two groups the ARM pad creates.
+
+    Two shapes take them away again, and both deploy cleanly: a `securityRules` list on the group,
+    which a deployment sets as a whole, and redeploying a group that is already there, which resets
+    the rules to the ones the template declares. Each case below is one of those shapes coming back.
+    """
+
+    NSG_BODY = ('"name": "[variables(\'gatewayNsgName\')]",\n'
+                '      "location": "[parameters(\'location\')]"')
+
+    def test_the_group_declares_a_rule_list_again(self):
+        self.assertRejected(
+            edited((AZURE_ARM, self.NSG_BODY,
+                    self.NSG_BODY + ',\n      "properties": {\n        "securityRules": []\n      }')),
+            "securityRules",
+        )
+
+    def test_the_group_is_redeployed_over_one_that_exists(self):
+        self.assertRejected(
+            edited((AZURE_ARM,
+                    '"condition": "[and(parameters(\'createGatewaySubnet\'), not(parameters(\'gatewayNsgExists\')))]"',
+                    '"condition": "[parameters(\'createGatewaySubnet\')]"')),
+            "without asking",
+        )
+
+    def test_the_script_stops_passing_the_switch(self):
+        self.assertRejected(
+            edited((AZURE_SH, '                 workstationsNsgExists="$WORKSTATIONS_NSG_EXISTS" \\\n', "")),
+            "does not pass `workstationsNsgExists`",
+        )
+
+    def test_the_script_looks_the_group_up_under_another_name(self):
+        self.assertRejected(
+            edited((AZURE_SH, 'WORKSTATIONS_NSG="${NAME_PREFIX}-workstations-nsg"',
+                    'WORKSTATIONS_NSG="${NAME_PREFIX}-workstations"')),
+            "does not name",
         )
 
 

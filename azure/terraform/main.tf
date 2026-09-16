@@ -352,7 +352,9 @@ resource "azurerm_subnet_network_security_group_association" "gateway" {
 # carries a deliberately neutral inbound allow, because a fresh NSG ends in DenyAllInBound and an
 # outbound-only group on a NIC that had none would cut SSH to the box's public address. Neutral
 # means this subnet's rules become the whole story, which WIDENS inbound if that NIC group was
-# narrowing anything. Ringleader never touches the subnet, so rules here always survive.
+# narrowing anything. Ringleader will add an inbound rule of its own in this group, at a priority
+# between 4090 and 4096, and never edits or deletes one declared here -- each rule below is its
+# own resource, so an apply leaves Ringleader's in place and Ringleader leaves these in place.
 #
 # And do not add an OUTBOUND Deny here. It cannot tighten a policy -- the NIC NSG already denies
 # whatever the policy does not list -- but it can BREAK one, by blocking a destination the policy

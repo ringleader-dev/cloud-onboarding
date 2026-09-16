@@ -213,10 +213,10 @@ interchangeable:
 
 | layer | object | written by | decides |
 |---|---|---|---|
-| subnet | `ringleader-workstations-nsg`, from this module | **you** | inbound — who may reach the workstation |
+| subnet | `ringleader-workstations-nsg`, from this module | **you**, plus one rule of Ringleader's | inbound — who may reach the workstation |
 | NIC | one NSG per distinct egress policy | **Ringleader** | outbound — where the workstation may connect |
 
-Azure evaluates both and **both must allow**. Three consequences, all worth having before the
+Azure evaluates both and **both must allow**. Four consequences, all worth having before the
 first policy:
 
 - **Keep your inbound rules on the subnet NSG.** The group Ringleader attaches to the NIC carries
@@ -229,8 +229,15 @@ first policy:
 - **A NIC NSG of your own is replaced, not merged.** A NIC carries at most one NSG. If you supply
   the interface yourself (`providerConfig.azure.networkInterfaceId`) and narrowed inbound *there*,
   declaring `spec.egress` overwrites that group and the subnet's rules become the whole story —
-  which **widens** inbound. Move those rules onto the subnet NSG first; Ringleader never touches
-  it.
+  which **widens** inbound. Move those rules onto the subnet NSG first. Ringleader adds rules
+  there, but never edits or deletes one you wrote.
+- **Leave priorities 4090 to 4096 free in the subnet NSG.** Ringleader will add one inbound allow
+  rule of its own in that range: the SSH ports, aimed at the private addresses of the workstations
+  it runs, so a workstation is reachable without you widening the group by hand. The rule names
+  those addresses, so a VM in the subnet that Ringleader did not create stays as closed as your
+  own rules leave it. The rule ships in Ringleader rather than in this module, and the range is
+  reserved now because you apply this pad once: a rule of yours already sitting in it stops
+  Ringleader writing its own, and the workstation then reports that it has no way in.
 - **Do not add an outbound `Deny` to the subnet NSG.** It cannot make a policy tighter — the NIC
   NSG already denies everything the policy does not list — but it can make one *break*, by
   blocking a destination the policy allows. The failure looks like Ringleader ignoring your
@@ -348,7 +355,9 @@ What it gets and what it deliberately does not:
   the whole window before steering lands, and the UDR overrides it the moment it does. A box with
   its own public IP still has Azure's own outbound until then — that is Azure's behaviour, not
   something this module can remove, and it is a reason to create governed workstations without
-  one.
+  one. Reaching one does not need an address of its own either way: the gateway VM forwards a
+  port per governed workstation when the `EgressGateway` asks for it (`spec.inboundManagement`,
+  plus `spec.publicAddress` to reach that port from outside the VNet).
 - **Azure's implicit default outbound access turned off**, which is the half Azure *does* let the
   module remove. Without it a workstation in here with no public IP would still reach the internet
   through Azure's own SNAT — an unpoliced path that survives withholding the NAT gateway, and the
