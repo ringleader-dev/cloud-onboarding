@@ -56,6 +56,10 @@
 #   CREATE_GOVERNED_SUBNET  false to skip the subnet the workstations
 #                a gateway GOVERNS go in                       (default: true)
 #   GOVERNED_SUBNET_CIDR  override; empty derives the 15th /20  (default: empty)
+#   ADDITIONAL_GOVERNED_SUBNETS  more governed subnets, one per namespace
+#                that runs its own gateway, as label=cidr pairs
+#                separated by commas. List every pair on every run
+#                (default: empty, which deletes any the VNet has)
 #
 # The defaults grant what Ringleader needs for the features available today, so enabling one
 # later does not mean a second onboarding pass. Only the landing pad costs money.
@@ -117,6 +121,33 @@ CREATE_GATEWAY_SUBNET="${CREATE_GATEWAY_SUBNET:-true}"
 GATEWAY_SUBNET_CIDR="${GATEWAY_SUBNET_CIDR:-}"
 CREATE_GOVERNED_SUBNET="${CREATE_GOVERNED_SUBNET:-true}"
 GOVERNED_SUBNET_CIDR="${GOVERNED_SUBNET_CIDR:-}"
+# More governed subnets, one per namespace that runs its own gateway: a gateway steers a whole
+# subnet, and a subnet belongs to one namespace. Each label=cidr pair becomes a subnet named
+# governed-<label>, built like the governed subnet above. The VNet's subnets are deployed as one
+# list, so a pair left out of a later run deletes that subnet, which Azure refuses while a network
+# interface is still in it. List every pair on every run.
+ADDITIONAL_GOVERNED_SUBNETS="${ADDITIONAL_GOVERNED_SUBNETS:-}"
+ADDITIONAL_GOVERNED_SUBNETS_JSON="{}"
+if [ -n "$ADDITIONAL_GOVERNED_SUBNETS" ]; then
+  ADDITIONAL_GOVERNED_SUBNETS_JSON=""
+  GOVERNED_REST="${ADDITIONAL_GOVERNED_SUBNETS},"
+  while [ -n "$GOVERNED_REST" ]; do
+    pair="${GOVERNED_REST%%,*}"
+    GOVERNED_REST="${GOVERNED_REST#*,}"
+    label="${pair%%=*}"
+    cidr="${pair#*=}"
+    if ! printf '%s' "$label" | grep -Eq '^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$' ||
+      ! printf '%s' "$cidr" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$'; then
+      echo "ADDITIONAL_GOVERNED_SUBNETS entry '$pair' is not label=cidr, with a label of lowercase letters, digits and hyphens, e.g. team-a=10.70.208.0/20" >&2
+      exit 1
+    fi
+    case ",$ADDITIONAL_GOVERNED_SUBNETS_JSON," in
+      *"\"$label\":"*) echo "ADDITIONAL_GOVERNED_SUBNETS names the label '$label' twice" >&2; exit 1 ;;
+    esac
+    ADDITIONAL_GOVERNED_SUBNETS_JSON="${ADDITIONAL_GOVERNED_SUBNETS_JSON:+$ADDITIONAL_GOVERNED_SUBNETS_JSON,}\"$label\":\"$cidr\""
+  done
+  ADDITIONAL_GOVERNED_SUBNETS_JSON="{${ADDITIONAL_GOVERNED_SUBNETS_JSON}}"
+fi
 if [[ "${WORKSTATION_IDENTITIES:-1}" == "1" ]]; then
   ENABLE_IDENTITIES=true
 else
@@ -258,6 +289,7 @@ if [ "$CREATE_NETWORK" = "true" ]; then
                  gatewaySubnetCidr="$GATEWAY_SUBNET_CIDR" \
                  createGovernedSubnet="$CREATE_GOVERNED_SUBNET" \
                  governedSubnetCidr="$GOVERNED_SUBNET_CIDR" \
+                 additionalGovernedSubnets="$ADDITIONAL_GOVERNED_SUBNETS_JSON" \
                  workstationsNsgExists="$WORKSTATIONS_NSG_EXISTS" \
                  gatewayNsgExists="$GATEWAY_NSG_EXISTS" \
     --query '[properties.outputs.subnetId.value, properties.outputs.governedSubnetId.value, properties.outputs.gatewaySubnetId.value]' -o tsv)"
@@ -268,6 +300,10 @@ if [ "$CREATE_NETWORK" = "true" ]; then
   # out, an operator on this path never learns the id -- and Ringleader builds no gateway VM at
   # all until an EgressGateway names it.
   GATEWAY_SUBNET_ID="$(echo "$NETWORK_OUTPUTS" | sed -n 3p)"
+  ADDITIONAL_GOVERNED_SUBNET_IDS="$(az deployment group show \
+    --resource-group "$RG" \
+    --name ringleader-onboarding-network \
+    --query 'properties.outputs.additionalGovernedSubnetIds.value[].id' -o tsv)"
 fi
 
 cat <<EOF
@@ -285,6 +321,12 @@ fi
 # steers a whole subnet, so mixing governed and ungoverned boxes in one is what the arm refuses.
 if [ -n "${GOVERNED_SUBNET_ID:-}" ]; then
   echo "  governed subnet  : ${GOVERNED_SUBNET_ID}   (use for workstations with an egress policy)"
+fi
+# One more governed subnet per ADDITIONAL_GOVERNED_SUBNETS pair, each for exactly one namespace's
+# workstations, and never for two namespaces. Each id ends in governed-<label>.
+if [ -n "${ADDITIONAL_GOVERNED_SUBNET_IDS:-}" ]; then
+  echo "  additional governed subnets, one namespace each (the label ends each id):"
+  printf '%s\n' "$ADDITIONAL_GOVERNED_SUBNET_IDS" | sed 's/^/    /'
 fi
 # The gateway subnet is where the proxy VM ITSELF goes, so it is handed back on the EgressGateway
 # rather than on a workstation -- and no gateway VM is built until it is. A proxy placed in a

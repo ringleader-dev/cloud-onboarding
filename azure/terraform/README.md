@@ -39,16 +39,18 @@ Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standal
 | `create_governed_subnet` | **`true`** | Reserve the subnet the workstations that proxy **governs** go in — the 15th `/20` of the VNet, `10.70.224.0/20` at index 0. Carries the workstations NSG so `rl shell` still reaches a box in it; carries neither a route table nor the NAT gateway, and Azure's implicit default outbound access is **off** — a governed box's egress is the proxy's. That flag is fixed at subnet creation. See `azure/README.md`. |
 | `gateway_subnet_prefix` | `null` (derived) | The 241st `/24` of `vnet_address_space` — `10.70.240.0/24` at index 0, well clear of `subnet_prefix`. Set it only to override. |
 | `governed_subnet_prefix` | `null` (derived) | The 15th `/20` of `vnet_address_space` — `10.70.224.0/20` at index 0. Set it only to override. |
+| `additional_governed_subnets` | `{}` | One more governed subnet per namespace that runs its own proxy, as a map of your label to a prefix you write out. Each is built like the governed subnet and named `governed-<label>`. See `azure/README.md`. |
 
 ## Outputs
 
 `handoff` bundles `target_app_client_id`, `subscription_id`, `resource_group_name`, and the
-three subnet ids (`subnet_id`, `governed_subnet_id`, `gateway_subnet_id`) when
-`create_network` is on. Add your **tenant id**
-(`az account show --query tenantId -o tsv`) and hand all of it back to Ringleader. The three
-subnets are not interchangeable — a workstation carrying an egress policy goes in
+subnet ids (`subnet_id`, `governed_subnet_id`, `gateway_subnet_id`, and
+`additional_governed_subnet_ids` keyed by your label) when `create_network` is on. Add your
+**tenant id** (`az account show --query tenantId -o tsv`) and hand all of it back to Ringleader.
+None of the subnets are interchangeable. A workstation carrying an egress policy goes in
 `governed_subnet_id`, every other one in `subnet_id`, and `gateway_subnet_id` goes on the
-`EgressGateway` itself as `spec.subnet`.
+`EgressGateway` itself as `spec.subnet`. Each additional governed subnet is for one namespace's
+workstations that carry an egress policy.
 
 Also available: `gateway_subnet_prefix` — what an
 egress allowlist names to let workstations reach the proxy, so it is worth recording — and

@@ -57,6 +57,11 @@ output "governed_subnet_prefix" {
   description = "The governed subnet's prefix. Worth recording: it is the source range the gateway keys its policies on."
 }
 
+output "additional_governed_subnet_ids" {
+  value       = { for label, subnet in azurerm_subnet.governed_additional : label => subnet.id }
+  description = "The subnets additional_governed_subnets created, keyed by your label. Each one is for ONE Ringleader namespace: name it as providerConfig.azure.subnetId on that namespace's workstations that carry an egress policy, and never give two namespaces the same one. governed_subnet_id is a separate subnet, for a namespace of its own."
+}
+
 output "role_extras_granted" {
   description = "Optional action sets folded into the custom role, for audit. The base action list is in ../arm/azuredeploy.json."
   value = concat(
@@ -89,18 +94,20 @@ output "handoff" {
     Everything to hand back to Ringleader, in one place. Add your tenant id
     (az account show --query tenantId -o tsv).
 
-    THREE subnet ids, and they are not interchangeable: a workstation that carries an egress
+    THREE subnet ids beside any additional ones, and they are not interchangeable: a workstation that carries an egress
     policy goes in governed_subnet_id, every other one in subnet_id, and gateway_subnet_id
-    goes on the EgressGateway itself as spec.subnet -- the gateway VM cannot sit in a subnet
-    it steers.
+    goes on the EgressGateway itself as spec.subnet, because the gateway VM cannot sit in a
+    subnet it steers. additional_governed_subnet_ids holds one more governed subnet per entry you
+    added, each for one namespace's workstations only.
   EOT
   value = {
-    target_app_client_id = local.target_client_id
-    subscription_id      = var.subscription_id
-    resource_group_name  = var.resource_group_name
-    subnet_id            = var.create_network ? azurerm_subnet.workstations[0].id : null
-    governed_subnet_id   = var.create_network && var.create_governed_subnet ? azurerm_subnet.governed[0].id : null
-    gateway_subnet_id    = var.create_network && var.create_gateway_subnet ? azurerm_subnet.gateway[0].id : null
+    target_app_client_id           = local.target_client_id
+    subscription_id                = var.subscription_id
+    resource_group_name            = var.resource_group_name
+    subnet_id                      = var.create_network ? azurerm_subnet.workstations[0].id : null
+    governed_subnet_id             = var.create_network && var.create_governed_subnet ? azurerm_subnet.governed[0].id : null
+    additional_governed_subnet_ids = { for label, subnet in azurerm_subnet.governed_additional : label => subnet.id }
+    gateway_subnet_id              = var.create_network && var.create_gateway_subnet ? azurerm_subnet.gateway[0].id : null
 
     artifact_storage_grant        = var.enable_artifact_storage ? (var.artifact_storage_account_name == "" ? "managed" : "named") : null
     artifact_storage_account_name = var.enable_artifact_storage && var.artifact_storage_account_name != "" ? var.artifact_storage_account_name : null

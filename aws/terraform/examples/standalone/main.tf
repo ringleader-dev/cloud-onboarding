@@ -66,6 +66,12 @@ variable "create_governed_subnet" {
   default = true
 }
 
+# More governed subnets, one per namespace that runs its own proxy. Forwarded below, like the rest.
+variable "additional_governed_subnets" {
+  type    = map(string)
+  default = {}
+}
+
 # Which /16 each region's landing pad takes. Forwarded below, so a value set in
 # terraform.tfvars actually takes effect -- a variable this root did not declare would be
 # accepted with a warning and then IGNORED, leaving the second region on the first one's range.
@@ -110,6 +116,8 @@ module "ringleader_onboarding" {
   create_nat_gateway     = var.create_nat_gateway
   create_gateway_subnet  = var.create_gateway_subnet
   create_governed_subnet = var.create_governed_subnet
+
+  additional_governed_subnets = var.additional_governed_subnets
 }
 
 output "handoff" {

@@ -100,6 +100,13 @@
         "description": "Optional override for the governed subnet. Empty derives the 15th /20 of the VNet range (10.70.224.0/20 at index 0), immediately below the gateway /24 at the top of the VNet, so the two egress-control ranges stay together and the workstations prefix is free to grow. Set it only to override, and then it must sit inside the VNet range."
       }
     },
+    "additionalGovernedSubnets": {
+      "type": "Object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "More governed subnets, beside the one createGovernedSubnet reserves: an object mapping a label you choose to that subnet's CIDR, e.g. {\"team-a\": \"10.70.208.0/20\"}. Empty by default. A gateway steers a whole subnet and a subnet belongs to one Ringleader namespace, so each namespace that runs its own gateway needs a governed subnet of its own. Each entry becomes a subnet named governed-<label>, built exactly like the governed subnet: the workstations NSG, no route table, no NAT gateway, default outbound access disabled. Each CIDR must be written out, sit inside the VNet range and overlap no other subnet; on the default range the six /20s from 10.70.128.0/20 to 10.70.208.0/20 are free. The VNet's subnets are declared as one list, so an entry left out of a later deployment is deleted, which Azure refuses while a network interface is still in it."
+      }
+    },
     "workstationsNsgExists": {
       "type": "Bool",
       "defaultValue": false,
@@ -180,7 +187,23 @@
         }
       }
     ],
-    "effectiveSubnets": "[concat(variables('workstationSubnets'), if(parameters('createGatewaySubnet'), variables('gatewaySubnets'), createArray()), if(parameters('createGovernedSubnet'), variables('governedSubnets'), createArray()))]"
+    "copy": [
+      {
+        "name": "additionalGovernedSubnetList",
+        "count": "[length(parameters('additionalGovernedSubnets'))]",
+        "input": {
+          "name": "[concat(variables('governedSubnetName'), '-', items(parameters('additionalGovernedSubnets'))[copyIndex('additionalGovernedSubnetList')].key)]",
+          "properties": {
+            "addressPrefix": "[items(parameters('additionalGovernedSubnets'))[copyIndex('additionalGovernedSubnetList')].value]",
+            "defaultOutboundAccess": false,
+            "networkSecurityGroup": {
+              "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+            }
+          }
+        }
+      }
+    ],
+    "effectiveSubnets": "[concat(variables('workstationSubnets'), if(parameters('createGatewaySubnet'), variables('gatewaySubnets'), createArray()), if(parameters('createGovernedSubnet'), variables('governedSubnets'), createArray()), variables('additionalGovernedSubnetList'))]"
   },
   "resources": [
     {
@@ -345,6 +368,19 @@
       "value": "[if(parameters('createGovernedSubnet'), resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('governedSubnetName')), '')]",
       "metadata": {
         "description": "The subnet for the workstations a gateway governs, or empty if createGovernedSubnet was false. Hand it back as providerConfig.azure.subnetId on the workstations that carry an egress policy."
+      }
+    },
+    "additionalGovernedSubnetIds": {
+      "type": "Array",
+      "copy": {
+        "count": "[length(parameters('additionalGovernedSubnets'))]",
+        "input": {
+          "label": "[items(parameters('additionalGovernedSubnets'))[copyIndex()].key]",
+          "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), concat(variables('governedSubnetName'), '-', items(parameters('additionalGovernedSubnets'))[copyIndex()].key))]"
+        }
+      },
+      "metadata": {
+        "description": "The subnets additionalGovernedSubnets created, one {label, id} pair per entry. Each one is for ONE Ringleader namespace: name it as providerConfig.azure.subnetId on that namespace's workstations that carry an egress policy, and never give two namespaces the same one. governedSubnetId is a separate subnet, for a namespace of its own."
       }
     },
     "gatewaySubnetId": {

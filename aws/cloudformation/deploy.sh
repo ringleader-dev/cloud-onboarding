@@ -46,6 +46,11 @@
 #                workstations a gateway GOVERNS go in            (default: true)
 #   GOVERNED_SUBNET_CIDR  override its CIDR; empty derives the
 #                15th /20 of the VPC range                       (default: empty)
+#   ADDITIONAL_GOVERNED_SUBNETS  up to six more governed subnets, one per
+#                namespace that runs its own gateway, as label=cidr
+#                pairs separated by commas. A pair's position is its
+#                slot, so leave a gap (a,,c) to remove one. "none"
+#                removes them all       (default: unset, which keeps the stack's)
 #   VPC_CIDR     override the whole VPC range; empty derives it
 #                from REGION_INDEX                               (default: empty)
 #   SUBNET_CIDR  override the workstations subnet; empty derives
@@ -107,6 +112,7 @@ CREATE_GATEWAY_SUBNET="${CREATE_GATEWAY_SUBNET:-true}"
 GATEWAY_SUBNET_CIDR="${GATEWAY_SUBNET_CIDR:-}"
 CREATE_GOVERNED_SUBNET="${CREATE_GOVERNED_SUBNET:-true}"
 GOVERNED_SUBNET_CIDR="${GOVERNED_SUBNET_CIDR:-}"
+ADDITIONAL_GOVERNED_SUBNETS="${ADDITIONAL_GOVERNED_SUBNETS:-}"
 
 case "$ISSUER_URL" in
   https://*/) echo "ISSUER_URL must not end in a slash" >&2; exit 1 ;;
@@ -143,6 +149,7 @@ echo ">> create network:$CREATE_NETWORK  ssh cidr: ${SSH_SOURCE_CIDR:-<none>}"
 echo ">> secondary ssh cidr: ${SECONDARY_SSH_SOURCE_CIDR:-<none>}"
 echo ">> egress control:$EGRESS_CONTROL  vpc: ${EGRESS_VPC_ID:-<the one this stack creates>}"
 echo ">> gateway subnet:$CREATE_GATEWAY_SUBNET  governed subnet: $CREATE_GOVERNED_SUBNET  nat: $CREATE_NAT_GATEWAY"
+echo ">> additional governed subnets: ${ADDITIONAL_GOVERNED_SUBNETS:-<unchanged>}"
 
 # Substitute the one placeholder CloudFormation cannot parameterize (a condition KEY).
 # All four CIDR overrides are passed ONLY when set. `aws cloudformation deploy` keeps a stack's
@@ -166,6 +173,47 @@ if [ -n "$GATEWAY_SUBNET_CIDR" ]; then
 fi
 if [ -n "$GOVERNED_SUBNET_CIDR" ]; then
   CIDR_OVERRIDES+=("GovernedSubnetCidr=$GOVERNED_SUBNET_CIDR")
+fi
+
+# More governed subnets, one per namespace that runs its own gateway: a gateway steers a whole
+# subnet, and a subnet belongs to one namespace. The template has six slots, and each pair fills the
+# next one in order, so a pair's POSITION is its slot. Changing which CIDR a slot holds replaces that
+# subnet, so add new pairs at the end, and remove one by leaving its place empty
+# (team-a=10.60.208.0/20,,team-c=10.60.176.0/20) rather than closing the gap.
+#
+# Like the CIDR overrides above, the slots are passed only when ADDITIONAL_GOVERNED_SUBNETS is set,
+# so a run that does not mention them keeps what the stack has. When it is set, all six are passed,
+# so the list is the whole set. "none" empties every slot, which deletes those subnets.
+if [ -n "$ADDITIONAL_GOVERNED_SUBNETS" ]; then
+  GOVERNED_REST=""
+  if [ "$ADDITIONAL_GOVERNED_SUBNETS" != "none" ]; then
+    GOVERNED_REST="${ADDITIONAL_GOVERNED_SUBNETS},"
+  fi
+  SEEN_LABELS=","
+  for slot in 1 2 3 4 5 6; do
+    pair="${GOVERNED_REST%%,*}"
+    GOVERNED_REST="${GOVERNED_REST#*,}"
+    label=""
+    cidr=""
+    if [ -n "$pair" ]; then
+      label="${pair%%=*}"
+      cidr="${pair#*=}"
+      if ! printf '%s' "$label" | grep -Eq '^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$' ||
+        ! printf '%s' "$cidr" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$'; then
+        echo "ADDITIONAL_GOVERNED_SUBNETS entry '$pair' is not label=cidr, with a label of lowercase letters, digits and hyphens, e.g. team-a=10.60.208.0/20" >&2
+        exit 1
+      fi
+      case "$SEEN_LABELS" in
+        *",$label,"*) echo "ADDITIONAL_GOVERNED_SUBNETS names the label '$label' twice" >&2; exit 1 ;;
+      esac
+      SEEN_LABELS="${SEEN_LABELS}${label},"
+    fi
+    CIDR_OVERRIDES+=("AdditionalGovernedSubnet${slot}Label=$label" "AdditionalGovernedSubnet${slot}Cidr=$cidr")
+  done
+  if [ -n "${GOVERNED_REST//,/}" ]; then
+    echo "ADDITIONAL_GOVERNED_SUBNETS names more than six subnets; the template has six slots" >&2
+    exit 1
+  fi
 fi
 
 RENDERED="$(mktemp)"

@@ -384,6 +384,41 @@ What it gets and what it deliberately does not:
   subnet creation**: turning it off later replaces the subnet, so it has to be right on the first
   apply.
 
+### One governed subnet per namespace that runs a proxy
+
+A proxy steers a whole subnet, so every workstation in a steered subnet should belong to the
+Ringleader namespace that runs the proxy. A proxy takes the egress of any other workstation in its
+subnet. So each namespace that runs its own proxy needs a governed subnet of its own.
+`create_governed_subnet` makes the first, and `additional_governed_subnets` makes one more for each
+further namespace:
+
+```hcl
+additional_governed_subnets = {
+  team-a = "10.70.208.0/20"
+  team-b = "10.70.192.0/20"
+}
+```
+```bash
+ADDITIONAL_GOVERNED_SUBNETS=team-a=10.70.208.0/20,team-b=10.70.192.0/20 ./deploy.sh
+```
+
+Each entry becomes a subnet named `governed-<label>`, built exactly like the governed subnet above.
+The label names the subnet and keys the `additional_governed_subnet_ids` output. Ringleader never
+reads it, so use the name of the namespace that will use the subnet. Set each id as
+`providerConfig.azure.subnetId` on that namespace's workstations that carry an egress policy, and on
+no other namespace's.
+
+These subnets have no derived prefix, so write each one out. In a first region, the six `/20`s from
+`10.70.128.0/20` to `10.70.208.0/20` are free and leave the workstations subnet room to grow. A
+prefix outside the VNet, or overlapping another subnet, fails the deployment. Changing an entry's
+prefix changes the subnet in place, and removing an entry deletes it. Azure refuses both while
+anything is deployed in the subnet. Renaming a label replaces its subnet, which is refused the same
+way.
+
+The ARM path deploys the VNet's subnets as one list, so list every pair on every `deploy.sh` run. A
+pair left out deletes its subnet, and leaving `ADDITIONAL_GOVERNED_SUBNETS` unset deletes them all.
+That is unlike the AWS `deploy.sh`, which keeps them.
+
 ## Optional: artifact storage in a storage account of yours
 
 Ringleader holds **artifact payloads** — the sealed transcript of an agent session above all,
@@ -560,6 +595,7 @@ $ cd azure/terraform && terraform init && terraform test
 | **resource group** | the one you scoped |
 | **subnet id** (only if you created a network) | `terraform output handoff` |
 | **governed subnet id** (only if you turned it on) | `terraform output handoff` — `providerConfig.azure.subnetId` for the workstations that carry an egress policy |
+| **additional governed subnet ids** (only if you added them) | `terraform output handoff`, or printed by `deploy.sh`. One for each further namespace that runs a proxy, used on that namespace's workstations only. See [One governed subnet per namespace that runs a proxy](#one-governed-subnet-per-namespace-that-runs-a-proxy) |
 | **gateway subnet id** (only if you reserved one) | `terraform output handoff` — goes on the `EgressGateway` as `spec.subnet`, not on a workstation; no gateway VM is built until it has one |
 | **`artifact_storage_grant`** (`managed` or `named`) | `terraform output handoff` — the `Storage` object's `spec.grant`, if you want payloads in a storage account of yours |
 | **`artifact_storage_account_name`** (named width only) | `terraform output handoff`, with the container Ringleader should write to. On the managed width Ringleader creates both itself |

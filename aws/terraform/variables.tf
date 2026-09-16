@@ -464,6 +464,35 @@ variable "governed_subnet_cidr" {
   }
 }
 
+variable "additional_governed_subnets" {
+  type        = map(string)
+  default     = {}
+  description = <<-EOT
+    More governed subnets, beside the one create_governed_subnet reserves: a map of a label you
+    choose to that subnet's CIDR. Empty by default. Needs create_network.
+
+    A gateway steers a whole subnet, and a subnet belongs to one Ringleader namespace, so each
+    namespace that runs its own gateway needs a governed subnet of its own. Add one entry per
+    such namespace beyond the first. The label only names the subnet (ringleader-governed-<label>)
+    and keys it in the additional_governed_subnet_ids output. It means nothing to Ringleader, so
+    naming it after the namespace that will use the subnet is a convenient choice.
+
+    Each subnet is built exactly like the governed subnet above: empty, with no route table, and
+    handing out no public IPs. There is no derived default, so each CIDR must be written out. It
+    must sit inside vpc_cidr and overlap no other subnet, or the apply fails. On the default VPC
+    range, the six /20s from 10.60.128.0/20 to 10.60.208.0/20 are free and leave the
+    workstations range room to grow to a /17.
+
+    Changing an entry's CIDR replaces its subnet, renaming a label replaces its subnet, and
+    removing an entry deletes it. AWS refuses all three while an instance is still in the subnet.
+  EOT
+
+  validation {
+    condition     = alltrue([for label, cidr in var.additional_governed_subnets : can(regex("^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$", label)) && can(cidrhost(cidr, 0))])
+    error_message = "additional_governed_subnets maps a label of lowercase letters, digits and hyphens (at most 40 characters, starting and ending with a letter or digit) to a CIDR block, e.g. { team-a = \"10.60.208.0/20\" }."
+  }
+}
+
 variable "tags" {
   type        = map(string)
   default     = {}

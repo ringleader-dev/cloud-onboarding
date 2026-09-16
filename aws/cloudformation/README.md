@@ -91,6 +91,12 @@ of its own, and refuses one that already carries an association. Until a proxy s
 workstation in there has no egress at all; see
 [`../README.md`](../README.md#and-a-subnet-for-the-workstations-that-proxy-governs).
 
+Six optional slots make one more governed subnet for each further namespace that runs its own
+proxy: `AdditionalGovernedSubnet1Label` and `AdditionalGovernedSubnet1Cidr` through
+`AdditionalGovernedSubnet6Label` and `AdditionalGovernedSubnet6Cidr`. `deploy.sh` fills them from
+`ADDITIONAL_GOVERNED_SUBNETS`, and each filled slot outputs `AdditionalGovernedSubnet<n>Id`. See
+[`../README.md`](../README.md#one-governed-subnet-per-namespace-that-runs-a-proxy).
+
 Deploy with `--capabilities CAPABILITY_NAMED_IAM` (the role has a fixed name).
 
 ### About the `Thumbprint` default
@@ -119,7 +125,8 @@ THUMBPRINT=$(echo | openssl s_client -servername oidc-app.ringleader.dev \
 With the proxy subnet on, also `GatewaySubnetId`; with a NAT gateway, `PrivateRouteTableId`.
 Hand the role ARN, region, and (if created) subnet + security group back to Ringleader —
 plus `GatewaySubnetId`, which goes on the `EgressGateway` as `spec.subnet` rather than on a
-workstation, and `GovernedSubnetId` for the workstations that carry an egress policy.
+workstation, and `GovernedSubnetId` for the workstations that carry an egress policy. Each filled
+slot adds an `AdditionalGovernedSubnet<n>Id`, for one namespace's workstations only.
 
 **Two security groups, and the choice is not cosmetic.** `SecurityGroupId` is the landing pad:
 egress out, inbound SSH. `InboundOnlySecurityGroupId` has the same inbound rules and no usable

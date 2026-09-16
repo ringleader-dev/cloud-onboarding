@@ -73,6 +73,12 @@ variable "create_governed_subnet" {
   default = true
 }
 
+# More governed subnets, one per namespace that runs its own proxy. Forwarded below, like the rest.
+variable "additional_governed_subnets" {
+  type    = map(string)
+  default = {}
+}
+
 # Where the landing pad goes, and which /16 it takes. Both are forwarded below for the reason
 # above -- a variable this root did not declare would be accepted with a warning and then
 # IGNORED, leaving the second region on the first one's range.
@@ -123,9 +129,10 @@ module "ringleader" {
   secondary_ssh_source_ranges      = var.secondary_ssh_source_ranges
   gateway_management_source_ranges = var.gateway_management_source_ranges
 
-  enable_egress_control  = var.enable_egress_control
-  create_gateway_subnet  = var.create_gateway_subnet
-  create_governed_subnet = var.create_governed_subnet
+  enable_egress_control       = var.enable_egress_control
+  create_gateway_subnet       = var.create_gateway_subnet
+  create_governed_subnet      = var.create_governed_subnet
+  additional_governed_subnets = var.additional_governed_subnets
 
   # The landing pad's location and its range. region_indexes keys off location, so the same map
   # in a second region's tfvars gives that region a different /16 by construction.

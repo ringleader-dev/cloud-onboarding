@@ -87,6 +87,11 @@ output "governed_subnet_cidr" {
   description = "The governed subnet's range. Worth recording: it is the source range the gateway keys its policies on."
 }
 
+output "additional_governed_subnet_ids" {
+  value       = { for label, subnet in aws_subnet.governed_additional : label => subnet.id }
+  description = "The subnets additional_governed_subnets created, keyed by your label. Each one is for ONE Ringleader namespace: name it as providerConfig.aws.subnetId on that namespace's workstations that carry an egress policy, and never give two namespaces the same one. governed_subnet_id is a separate subnet, for a namespace of its own."
+}
+
 output "private_route_table_id" {
   value       = var.create_network && var.create_nat_gateway ? aws_route_table.private[0].id : null
   description = "Route table sending 0.0.0.0/0 to the NAT gateway. Associate any subnet that should reach the internet without a public IP with it."
@@ -161,16 +166,18 @@ output "handoff" {
   description = <<-EOT
     Everything to hand back to Ringleader, in one place. TWO security-group ids, and which one
     a workstation gets is the difference between an enforced egress policy and a workstation
-    that will not start -- see the two outputs above. THREE subnet ids, and they are not
+    that will not start -- see the two outputs above. THREE subnet ids beside any additional ones, and they are not
     interchangeable: a workstation that carries a policy goes in governed_subnet_id, every
     other one in subnet_id, and gateway_subnet_id goes on the EgressGateway itself as
-    spec.subnet -- the gateway VM cannot sit in a subnet it steers.
+    spec.subnet, because the gateway VM cannot sit in a subnet it steers. additional_governed_subnet_ids
+    holds one more governed subnet per entry you added, each for exactly one namespace.
   EOT
   value = {
     target_role_arn                = aws_iam_role.ringleader.arn
     account_id                     = data.aws_caller_identity.current.account_id
     subnet_id                      = var.create_network ? aws_subnet.workstations[0].id : null
     governed_subnet_id             = var.create_network && var.create_governed_subnet ? aws_subnet.governed[0].id : null
+    additional_governed_subnet_ids = { for label, subnet in aws_subnet.governed_additional : label => subnet.id }
     gateway_subnet_id              = var.create_network && var.create_gateway_subnet ? aws_subnet.gateway[0].id : null
     security_group_id              = var.create_network ? aws_security_group.workstations[0].id : null
     inbound_only_security_group_id = var.create_network && var.enable_egress_control ? aws_security_group.workstations_inbound_only[0].id : null

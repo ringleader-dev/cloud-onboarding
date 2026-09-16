@@ -130,9 +130,12 @@ pad's range, and the plan fails rather than guessing if they disagree. See
   workstation gets is the difference between an enforced policy and a workstation that will not
   start: see [Which security group a workstation gets](#which-security-group-a-workstation-gets).
 - if you reserved them: **`governed_subnet_id`**, where a workstation that carries an egress
-  policy goes, and **`gateway_subnet_id`**, where the egress gateway VM runs — the second goes
-  on the `EgressGateway` itself as `spec.subnet`, and Ringleader builds no gateway until it has
-  one, because a gateway placed in the subnet it steers would route its own egress into itself
+  policy goes, and one **`additional_governed_subnet_ids`** entry for each further namespace that
+  runs a proxy (see
+  [One governed subnet per namespace that runs a proxy](#one-governed-subnet-per-namespace-that-runs-a-proxy))
+- if you reserved it: **`gateway_subnet_id`**, where the egress gateway VM runs. It goes on the
+  `EgressGateway` itself as `spec.subnet`, and Ringleader builds no gateway until it has one,
+  because a gateway placed in the subnet it steers would route its own egress into itself
 - if you took artifact storage: **`artifact_storage_grant`** (`managed` or `named`), which
   becomes the `Storage` object's `spec.grant`, and on the named width
   **`artifact_storage_bucket`**, which becomes its `spec.bucket`
@@ -363,6 +366,44 @@ Two properties of this subnet are deliberate, and both will surprise you if you 
 It shares the workstations subnet's availability zone, for the reason the proxy's own subnet does:
 AWS charges cross-AZ traffic in both directions, and every packet a governed box sends crosses to
 the proxy.
+
+### One governed subnet per namespace that runs a proxy
+
+A proxy steers a whole subnet, so every workstation in a steered subnet should belong to the
+Ringleader namespace that runs the proxy. A proxy takes the egress of any other workstation in its
+subnet. So each namespace that runs its own proxy needs a governed subnet of its own.
+`create_governed_subnet` makes the first, and `additional_governed_subnets` makes one more for each
+further namespace:
+
+```hcl
+additional_governed_subnets = {
+  team-a = "10.60.208.0/20"
+  team-b = "10.60.192.0/20"
+}
+```
+```bash
+ADDITIONAL_GOVERNED_SUBNETS=team-a=10.60.208.0/20,team-b=10.60.192.0/20 ./deploy.sh
+```
+
+Each entry becomes a subnet named `ringleader-governed-<label>`, built exactly like the governed
+subnet above. The label names the subnet and keys the `additional_governed_subnet_ids` output.
+Ringleader never reads it, so use the name of the namespace that will use the subnet. Set each id as
+`providerConfig.aws.subnetId` on that namespace's workstations that carry an egress policy, and on
+no other namespace's.
+
+These subnets have no derived range, so write each CIDR out. In a first region, the six `/20`s from
+`10.60.128.0/20` to `10.60.208.0/20` are free and leave the workstations subnet room to grow to a
+`/17`. A CIDR outside the VPC, or overlapping another subnet, fails the apply. Changing an entry's
+CIDR replaces its subnet, and removing an entry deletes it. AWS refuses both while an instance is
+still in the subnet. Renaming a label replaces its subnet in Terraform, which is refused the same
+way, and only retags it in CloudFormation.
+
+The CloudFormation template uses no transform, so it cannot loop over a list: it has six slots, and
+`deploy.sh` fills them in order. A pair's position is its slot, and a filled slot outputs
+`AdditionalGovernedSubnet<n>Id`, where `<n>` is that position. Add new pairs at the end, and remove
+one by leaving its place empty (`team-a=10.60.208.0/20,,team-c=10.60.176.0/20`). A run that leaves
+`ADDITIONAL_GOVERNED_SUBNETS` unset keeps the subnets the stack already has, and `none` removes them
+all.
 
 ### The NAT gateway
 
