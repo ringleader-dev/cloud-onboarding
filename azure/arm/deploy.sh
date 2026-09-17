@@ -247,23 +247,29 @@ if [ "$CREATE_NETWORK" = "true" ]; then
   # it to admit its own workstations. So each group is deployed only when it is absent. Its rules
   # are child resources, which add and update just themselves, so a changed CIDR above still lands
   # on a group this run leaves alone.
+  #
+  # The groups are listed in a plain assignment, so a failed az call stops this script instead of
+  # reading as "no group yet", which would redeploy an existing group and delete Ringleader's rule.
+  # Each name is matched from a here-string rather than a pipe: under pipefail, grep -q exits at the
+  # first match, and the write it cuts off would fail the test on a long list.
+  EXISTING_NSGS="$(az network nsg list -g "$RG" --query '[].name' -o tsv)"
   WORKSTATIONS_NSG_EXISTS=false
-  if [ -n "$(az network nsg show -g "$RG" -n "$WORKSTATIONS_NSG" --query id -o tsv 2>/dev/null)" ]; then
+  if grep -qxF "$WORKSTATIONS_NSG" <<<"$EXISTING_NSGS"; then
     WORKSTATIONS_NSG_EXISTS=true
   fi
   GATEWAY_NSG_EXISTS=false
-  if [ -n "$(az network nsg show -g "$RG" -n "$GATEWAY_NSG" --query id -o tsv 2>/dev/null)" ]; then
+  if grep -qxF "$GATEWAY_NSG" <<<"$EXISTING_NSGS"; then
     GATEWAY_NSG_EXISTS=true
   fi
 
   # The VNet's subnets are deployed as one list, and a subnet deployed without a route table loses
   # the one it had. That includes the route table Ringleader associates with a governed subnet to
   # steer it at an egress gateway. So an existing VNet's route tables are read here and handed back
-  # to the template, which keeps each one on its subnet. The VNet list is a plain assignment so that a failed
-  # az call stops this script rather than reading as "no VNet yet", which would drop every route table.
+  # to the template, which keeps each one on its subnet. The VNet list is read the same way as the
+  # groups above. A failed call must not read as "no VNet yet", because that drops every route table.
   SUBNET_ROUTE_TABLES="[]"
   EXISTING_VNETS="$(az network vnet list -g "$RG" --query '[].name' -o tsv)"
-  if printf '%s\n' "$EXISTING_VNETS" | grep -qx "${NAME_PREFIX}-vnet"; then
+  if grep -qxF "${NAME_PREFIX}-vnet" <<<"$EXISTING_VNETS"; then
     SUBNET_ROUTE_TABLES="$(az network vnet subnet list -g "$RG" --vnet-name "${NAME_PREFIX}-vnet" --query '[?routeTable].{name: name, id: routeTable.id}' -o json)"
   fi
 

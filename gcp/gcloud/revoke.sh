@@ -20,12 +20,17 @@ SA="${SA:-ringleader-workstations}"
 POOL="${POOL:-ringleader}"
 SA_EMAIL="${SA}@${PROJECT}.iam.gserviceaccount.com"
 
-# The pool may already be gone -- a second run, or a revoke before onboarding. Under `set -e`
-# a failing delete would abort the script and take the FULL=1 service-account delete below
-# with it, so branch on the pool's state instead. `describe` exits 0 for a soft-deleted pool
-# as well, so compare the state rather than the exit code.
-POOL_STATE=$(gcloud iam workload-identity-pools describe "$POOL" \
-  --project "$PROJECT" --location global --format='value(state)' 2>/dev/null || true)
+# The pool may already be gone, after a second run or a revoke before onboarding. Deleting a pool
+# that is gone would fail under `set -e` and skip the FULL=1 service-account delete below, so this
+# branches on the pool's state instead. `--show-deleted` lists a soft-deleted pool too, with the
+# state DELETED, which counts as gone.
+#
+# The pools are listed in a plain assignment, so a failed call stops this script: an expired
+# login, a network error, or a project you cannot read. Reading that failure as "already gone"
+# would report federation cut while it is still in place.
+POOLS=$(gcloud iam workload-identity-pools list \
+  --project "$PROJECT" --location global --show-deleted --format='value(name.basename(),state)')
+POOL_STATE=$(printf '%s\n' "$POOLS" | awk -v pool="$POOL" '$1 == pool { print $2 }')
 if [ -z "$POOL_STATE" ] || [ "$POOL_STATE" = "DELETED" ]; then
   echo ">> workload identity pool ${POOL} is already gone; nothing to cut"
 else
