@@ -96,7 +96,7 @@ run "the_gateway_admission_follows_the_inbound_ssh_ranges" {
 
   assert {
     condition     = length(google_compute_firewall.gateway_management) == 1
-    error_message = "naming ssh_source_ranges created no inbound-management rule. A customer who opened 22 to their engineers would then lose those boxes the moment an egress policy steered one, and nothing in this module would have told them."
+    error_message = "naming ssh_source_ranges created no inbound-management rule. Engineers given 22 would then lose the appliance's sshd, and nothing in this module would have told them."
   }
 
   assert {
@@ -116,7 +116,7 @@ run "an_explicit_empty_list_closes_the_admission" {
 
   assert {
     condition     = length(google_compute_firewall.gateway_management) == 0
-    error_message = "an explicit [] did not close the inbound-management rule, so an operator who wants a steered box reachable only from inside the VPC has no way to say so."
+    error_message = "an explicit [] did not close the inbound-management rule, so an operator who does not want their SSH ranges admitted to the appliance has no way to say so."
   }
 
   assert {
@@ -127,8 +127,7 @@ run "an_explicit_empty_list_closes_the_admission" {
 
 # The rule the default suppresses, once an operator asks for it. Asserted on the RESOURCE rather
 # than on the variable: a rule that exists but targets the workstation tag, or opens some other
-# port set, is a rule that reads correctly in the console and leaves a steered workstation exactly
-# as unreachable as it was.
+# port set, is a rule that reads correctly in the console and admits nothing it promises.
 run "the_admission_is_the_rule_it_promises" {
   command = plan
 
@@ -139,12 +138,12 @@ run "the_admission_is_the_rule_it_promises" {
 
   assert {
     condition     = length(google_compute_firewall.gateway_management) == 1
-    error_message = "an explicit narrower list created no inbound-management rule, so a steered workstation stays unreachable while the operator has been told they named who may reach it."
+    error_message = "an explicit narrower list created no inbound-management rule, so the appliance stays closed to ranges the operator has been told they named."
   }
 
   assert {
     condition     = google_compute_firewall.gateway_management[0].direction == "INGRESS"
-    error_message = "the inbound-management rule is not INGRESS. Ringleader writes no ingress rule for the gateway on GCE, which is the whole reason this admission has to live in the landing pad."
+    error_message = "the inbound-management rule is not INGRESS. An egress rule would admit nothing to the appliance, and this rule exists to admit your ranges to it."
   }
 
   assert {
@@ -170,7 +169,7 @@ run "the_admission_is_the_rule_it_promises" {
       for a in google_compute_firewall.gateway_management[0].allow :
       a if a.protocol == "tcp" && a.ports == tolist(["22", "30000-32767"])
     ]) == 1
-    error_message = "the inbound-management rule does not open TCP 22 plus the forwarded range. Both halves are needed: a jump host on the appliance answers on 22, a per-box DNAT bastion needs the high ports, and this pad is applied once whichever Ringleader ships."
+    error_message = "the inbound-management rule does not open TCP 22 plus the forwarded range. Both halves are needed: a jump host on the appliance answers on 22, a per-box forward needs the high ports where Ringleader cannot write its own rule, and this pad is applied once."
   }
 }
 

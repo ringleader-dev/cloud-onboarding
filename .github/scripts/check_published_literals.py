@@ -550,20 +550,21 @@ LITERALS = [
         why=(
             "A workstation an egress policy steers stops answering on its own address from outside\n"
             "  its network -- the steering object is a 0.0.0.0/0 route, so it carries the reply to a\n"
-            "  connection the box never opened. The only repair is to terminate the management\n"
-            "  connection AT the gateway, and on two clouds the landing pad carries that admission: on\n"
-            "  gcp the gateway's inbound firewall is a VPC rule in the customer's project, and on azure\n"
-            "  the gateway SUBNET's NSG, which Azure evaluates before the NSG on the gateway VM's\n"
-            "  NIC, is the landing pad's. This is the port set those rules open, and every route on both\n"
-            "  clouds must open the SAME one: customers who took different routes would otherwise get\n"
-            "  landing pads on which different halves of the feature work.\n\n"
+            "  connection the box never opened. The repair is to terminate the management connection\n"
+            "  AT the gateway. By default Ringleader writes its own rule admitting that, and on two\n"
+            "  clouds the landing pad adds one beside it: a VPC rule in the customer's project on gcp,\n"
+            "  and a rule in the gateway SUBNET's NSG on azure. The pad's rule admits the customer's\n"
+            "  ranges to the appliance's sshd, and to the forwarded ports where Ringleader cannot write\n"
+            "  its own rule. This is the port set those rules open, and every route on both clouds must\n"
+            "  open the SAME one: customers who took different routes would otherwise get landing pads\n"
+            "  on which different halves of the feature work.\n\n"
             "  It is an ENVELOPE rather than one port, deliberately. The two shapes that can carry\n"
             "  management through a gateway need different halves of it -- an SSH jump host on the\n"
-            "  appliance answers on 22, a per-box DNAT bastion needs one high port per governed box --\n"
+            "  appliance answers on 22, a per-box forward needs one high port per governed box --\n"
             "  and a landing pad is applied ONCE, by the customer, in an account we cannot re-enter.\n"
             "  Narrowing this later does not narrow the pads already applied; widening it is a\n"
-            "  re-apply asked of every customer. Ringleader chooses WITHIN this envelope and binds its\n"
-            "  forwarded ports to it, not the other way round. Changing this value is a decision about\n"
+            "  re-apply asked of every customer. Where Ringleader cannot write its own rule, it\n"
+            "  allocates forwarded ports inside this envelope. Changing this value is a decision about\n"
             "  every pad already applied, not about the next one."
         ),
         sites=[
@@ -711,8 +712,7 @@ def check_management_port_wiring(sources: dict[str, str]) -> list[str]:
     The same rule as the tag wiring: a pinned value the rule does not name is a value nothing
     applies. Written out again at the rule, the set is a second definition free to drift from the
     one checked above while both read correctly in isolation -- and the symptom of that drift is a
-    steered workstation that stays unreachable while every object Ringleader checks is as it wrote
-    it.
+    rule that admits nothing it promises while every object Ringleader checks is as it wrote it.
     """
     failures = []
 
@@ -796,10 +796,10 @@ def check_management_default_follows_ssh(sources: dict[str, str]) -> list[str]:
     """The inbound-management admission must FOLLOW the inbound-SSH ranges, on every route.
 
     This is the property that makes the rule land without a second decision: an operator who named
-    the CIDRs their engineers connect from keeps reaching those boxes after a policy steers one.
+    the CIDRs their engineers connect from keeps reaching the gateway after a policy steers a box.
     It is checked rather than assumed because the two ways of losing it are both one line and both
     read as caution -- an empty default here, or a hardcoded list there -- and either leaves ONE
-    route silently unable to reach a steered box while the other can. Four routes carry it: both on
+    route silently unable to reach the gateway while the other can. Four routes carry it: both on
     gcp, and both on azure.
 
     It does not check WHO is admitted: the ranges are the operator's. What it checks is that no
@@ -891,8 +891,8 @@ def check_azure_management_wiring(sources: dict[str, str]) -> list[str]:
 
     The gcp wiring rule on the other cloud: a pinned value the rule does not name is a value nothing
     applies. Azure evaluates the subnet's NSG before the one on the gateway VM's NIC, so a rule on
-    any other group, or opening its ports by a second spelling, leaves a steered workstation
-    unreachable while every object reads as written.
+    any other group, or opening its ports by a second spelling, admits nothing it promises while
+    every object reads as written.
     """
     failures = []
 

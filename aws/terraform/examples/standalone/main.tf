@@ -44,7 +44,7 @@ variable "secondary_ssh_source_ranges" {
 # Egress control, a NAT gateway, and the subnet the proxy VM runs in. All on by default. The
 # gateway subnet is PUBLIC and routed through the internet gateway, so it does not need the NAT
 # gateway -- the two are independent, and the NAT gateway is the one of these that bills hourly.
-# Hand `gateway_subnet_id` from the handoff back as EgressGateway.spec.subnet; no gateway VM is
+# Hand `gateway_subnet_id` from the handoff back as Edge.spec.subnet; no gateway VM is
 # built until you do.
 variable "enable_egress_control" {
   type    = bool

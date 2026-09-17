@@ -35,7 +35,7 @@ output "additional_subnetwork_self_links" {
 
 output "gateway_subnetwork_self_link" {
   value       = var.create_network && var.create_gateway_subnet ? google_compute_subnetwork.gateway[0].self_link : null
-  description = "A reserved, empty range (only when create_gateway_subnet = true). NOT where the egress gateway VM runs and NOT handed back to Ringleader: on GCP the steering route is scoped by network tag and the appliance carries none, so the VM shares the workstations subnet and EgressGateway.spec.subnet is refused. Kept so the addressing matches the AWS and Azure modules and the range stays free; set create_gateway_subnet = false to skip it."
+  description = "A reserved, empty range (only when create_gateway_subnet = true). NOT where the egress gateway VM runs and NOT handed back to Ringleader: on GCP the steering route is scoped by network tag and the appliance carries none, so the VM shares the workstations subnet and Edge.spec.subnet is refused. Kept so the addressing matches the AWS and Azure modules and the range stays free; set create_gateway_subnet = false to skip it."
 }
 
 output "gateway_subnet_cidr" {

@@ -39,7 +39,7 @@ output "subnet_prefix" {
 
 output "gateway_subnet_id" {
   value       = var.create_network && var.create_gateway_subnet ? azurerm_subnet.gateway[0].id : null
-  description = "Subnet the egress gateway VM runs in (only when create_gateway_subnet = true). Hand it back as spec.subnet on the EgressGateway -- Ringleader builds no gateway until you do, because a gateway placed in the subnet it steers routes its own egress into itself. NOT governed_subnet_id, which is the workstations'."
+  description = "Subnet the egress gateway VM runs in (only when create_gateway_subnet = true). Hand it back as spec.subnet on the Edge -- Ringleader builds no gateway until you do, because a gateway placed in the subnet it steers routes its own egress into itself. NOT governed_subnet_id, which is the workstations'."
 }
 
 output "gateway_subnet_prefix" {
@@ -67,11 +67,11 @@ output "role_extras_granted" {
   value = concat(
     var.enable_workstation_identities ? ["Microsoft.ManagedIdentity CRUD + assign, Microsoft.Authorization roleAssignments -- workstation runtime identities"] : [],
     var.enable_egress_control ? ["Microsoft.Network/networkSecurityGroups (+ securityRules) and routeTables (+ routes) read/write/delete and join/action, plus virtualNetworks/subnets/write and delete, natGateways/read, and applicationSecurityGroups read/write/delete with joinIpConfiguration/action and joinNetworkSecurityRule/action -- egress control"] : [],
-    # Listed on its own because it is the one egress action outside Microsoft.Network, and the one
-    # a hand-rolled role is most likely to omit: the sweep that collects a leaked egress gateway
-    # reads the resource group's generic `resources` collection. Without it that sweep collects
-    # NOTHING -- including the VM half, which needs no such action -- and a billed gateway VM is
-    # left behind, with its public IP if one was declared. Built-in Contributor covers it; a narrower role must
+    # Listed on its own because it is the one egress action outside Microsoft.Network, and the one a
+    # hand-rolled role is most likely to omit: the sweep that collects a leaked egress gateway reads
+    # the resource group's generic `resources` collection. Without it that sweep collects NOTHING --
+    # including the VM half, which needs no such action -- and a billed gateway VM is left behind,
+    # with its public IP if it had taken one. Built-in Contributor covers it; a narrower role must
     # name it. See ../README.md, "Optional: egress control".
     var.enable_egress_control ? ["Microsoft.Resources/subscriptions/resourcegroups/resources/read -- the leaked-gateway sweep's object listing"] : [],
     var.enable_artifact_storage ? ["Microsoft.Storage/storageAccounts (+ blobServices, + containers) read, and the four blobs DATA actions read/write/delete/add -- artifact storage. NOT listKeys and NOT listAccountSas: an account key is a long-lived static credential and nothing here issues one."] : [],
@@ -96,7 +96,7 @@ output "handoff" {
 
     THREE subnet ids beside any additional ones, and they are not interchangeable: a workstation that carries an egress
     policy goes in governed_subnet_id, every other one in subnet_id, and gateway_subnet_id
-    goes on the EgressGateway itself as spec.subnet, because the gateway VM cannot sit in a
+    goes on the Edge itself as spec.subnet, because the gateway VM cannot sit in a
     subnet it steers. additional_governed_subnet_ids holds one more governed subnet per entry you
     added, each for one namespace's workstations only.
   EOT

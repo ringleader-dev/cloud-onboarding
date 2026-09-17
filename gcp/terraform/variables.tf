@@ -399,7 +399,7 @@ variable "create_gateway_subnet" {
     NOTHING IS PLACED IN IT, and that is the difference from the AWS and Azure modules. On GCP
     the route that steers a workstation at the proxy is scoped by NETWORK TAG, and the proxy VM
     carries no such tag -- so it sits in the workstations subnet harmlessly, Ringleader builds
-    it there, and EgressGateway.spec.subnet is refused on this provider. Do not hand this
+    it there, and Edge.spec.subnet is refused on this provider. Do not hand this
     range back.
 
     It is on by default because GCP does not bill for a subnet and the three modules then
@@ -473,30 +473,30 @@ variable "gateway_management_source_ranges" {
     the box sends. Nothing inside the box or on the gateway can undo that -- a guest routing
     table does not participate in VPC routing, which is the same property that stops box root
     defeating the chokepoint. The only path left is to terminate the management connection AT
-    the gateway and reach the box from inside the VPC, and on GCP the gateway's inbound firewall
-    is a VPC rule in THIS project rather than an object Ringleader owns. This variable is that
-    rule.
+    the gateway and reach the box from inside the VPC. By default Ringleader writes a VPC ingress
+    rule in THIS project admitting the forwarded ports from any address to its gateway VMs. The
+    gateway keeps the caller's source address, so a steered box's own SSH rule still decides who
+    may open it. This variable adds the landing pad's rule beside it: your ranges to the
+    appliance's sshd on 22, and to the forwarded ports where Ringleader cannot write its own rule.
 
     What it exposes, stated exactly. A GCE ingress rule matches by SOURCE RANGE wherever the source
     sits, so read this as "these CIDRs may reach the appliance", not as "the internet may not":
 
-      * From OUTSIDE the VPC it opens nothing until you ask Ringleader for
-        EgressGateway.spec.publicAddress, which defaults to off -- before that the gateway VM has no
-        external address at all.
+      * From OUTSIDE the VPC it opens nothing while the gateway VM has no external address, which
+        it takes when it first forwards a port to a steered workstation.
       * From INSIDE, or from anywhere you have joined to this VPC (VPN / Interconnect / peering),
         or from any of your own ranges overlapping network_cidr, it takes effect on APPLY. If your
         ssh_source_ranges are private ranges, that is the case you are in.
 
     What is behind it is the appliance's own sshd, which accepts only the keys Ringleader puts
-    there, and a forwarded port range where nothing listens until the inbound path exists. That is
-    why the rule follows the list you already chose for machines in this VPC and never widens past
-    it -- and why closing it is one line.
+    there, and a forwarded port range where nothing listens until Ringleader forwards a port. That
+    is why the rule follows the list you already chose for machines in this VPC and never widens
+    past it -- and why closing it is one line.
 
-    Set [] if you would rather reach a steered box only from inside this VPC and never reach the
-    appliance. Without the rule a steered box is enforced and unreachable, and reports that on its
-    own EgressEnforced condition (reason InboundUnreachable) rather than looking healthy. You do
-    not supply the ports -- the module carries them, so they cannot drift from what Ringleader
-    listens on.
+    Set [] to close it. Ringleader's own rule stays, so that does not keep steered boxes off the
+    internet: set spec.inboundManagement: false on the Edge for that, and a steered box
+    then reports EgressEnforced: True with reason InboundUnreachable. You do not supply the ports --
+    the module carries them, so they cannot drift from what Ringleader listens on.
   EOT
 }
 

@@ -200,7 +200,7 @@ Parameters:
       Reserve the subnet the DNS / HTTPS proxy VM for Ringleader's hostname-level egress
       control runs in. On by default; set false to opt out. This creates nothing but an empty
       subnet and its route table, neither of which AWS bills for; Ringleader builds the VM
-      itself once you declare an EgressGateway naming this subnet as spec.subnet -- and it
+      itself once you declare an Edge naming this subnet as spec.subnet -- and it
       builds none until you do, because a proxy placed in a subnet it steers would route its
       own egress into itself. Hand the GatewaySubnetId output back, NOT GovernedSubnetId,
       which is the workstations'. It is public and in the workstations AZ, both of which are
@@ -1066,7 +1066,7 @@ Outputs:
   GatewaySubnetId:
     Condition: WantGatewaySubnet
     Description: >-
-      Subnet the egress gateway VM runs in. Hand it back as spec.subnet on the EgressGateway --
+      Subnet the egress gateway VM runs in. Hand it back as spec.subnet on the Edge --
       Ringleader builds no gateway until you do, because a gateway placed in the subnet it
       steers routes its own egress into itself. NOT GovernedSubnetId, which is the
       workstations'. Public and in the workstations AZ -- both cost decisions; see

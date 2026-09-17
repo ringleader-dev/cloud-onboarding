@@ -69,14 +69,14 @@
       "type": "String",
       "defaultValue": "",
       "metadata": {
-        "description": "Optional, and empty opens nothing; deploy.sh passes SSH_SOURCE_CIDR unless told otherwise. A single CIDR allowed through the egress gateway subnet's NSG on TCP 22 and 30000-32767, so a workstation an egress policy steers stays reachable through the gateway VM. Azure evaluates this subnet's NSG before the NSG on the gateway VM's NIC, and both must allow. Ringleader puts only the gateway VM in this subnet, and it is reachable from the internet only when EgressGateway.spec.publicAddress gives it a public address. Ignored when createGatewaySubnet is false."
+        "description": "Optional, and empty opens nothing; deploy.sh passes SSH_SOURCE_CIDR unless told otherwise. A single CIDR allowed through the egress gateway subnet's NSG on TCP 22 and 30000-32767. Azure evaluates this subnet's NSG before the NSG on the gateway VM's NIC, and both must allow. By default Ringleader writes its own rule in this NSG, admitting the ports it forwards to steered workstations from any address. This rule admits them from this CIDR when Ringleader cannot write its own. Emptying it does not keep steered workstations off the internet; spec.inboundManagement: false on the Edge does. Ignored when createGatewaySubnet is false."
       }
     },
     "createGatewaySubnet": {
       "type": "Bool",
       "defaultValue": true,
       "metadata": {
-        "description": "Reserve an empty subnet for the egress gateway VM that Ringleader's hostname-level egress control uses. On by default. Ringleader builds that VM here once you declare a policy naming hostnames, and it is billed; carving the range now means the NSG rules that permit workstation -> gateway traffic can name one stable prefix, and avoids renumbering later. Hand its id back as spec.subnet on the EgressGateway -- no gateway VM is built until you do. Azure bills for neither the subnet nor its network security group, so leaving it on costs nothing until a policy builds the VM. The subnet is associated with the NAT gateway, and that is what the VM's egress rests on: it takes no public address of its own unless EgressGateway.spec.publicAddress asks for one."
+        "description": "Reserve an empty subnet for the egress gateway VM that Ringleader's hostname-level egress control uses. On by default. Ringleader builds that VM here once you declare a policy naming hostnames, and it is billed; carving the range now means the NSG rules that permit workstation -> gateway traffic can name one stable prefix, and avoids renumbering later. Hand its id back as spec.subnet on the Edge -- no gateway VM is built until you do. Azure bills for neither the subnet nor its network security group, so leaving it on costs nothing until a policy builds the VM. The subnet is associated with the NAT gateway, and that is what the VM's egress rests on: it has no public address until it first forwards a port to a steered workstation."
       }
     },
     "gatewaySubnetCidr": {
@@ -298,7 +298,7 @@
       }
     },
     {
-      "comments": "The egress gateway subnet's own security group. Azure's default rules are rules INSIDE a group, and a Standard public IP, which the gateway VM carries whenever EgressGateway.spec.publicAddress asks for one, is closed to inbound traffic unless an NSG allows it. This group holds those allows, so the gateway VM takes at most what the rules below admit. Its rules are child resources for the reason the workstations group's are: Ringleader adds a rule of its own here too by default, admitting the ports the gateway forwards to steered workstations, and a securityRules list here would delete it on every re-run.",
+      "comments": "The egress gateway subnet's own security group. Azure's default rules are rules INSIDE a group, and a Standard public IP, which the gateway VM carries once it forwards a port to a steered workstation, is closed to inbound traffic unless an NSG allows it. This group holds those allows, so the gateway VM takes at most what the rules below admit. Its rules are child resources for the reason the workstations group's are: Ringleader adds a rule of its own here too by default, admitting the ports the gateway forwards to steered workstations, and a securityRules list here would delete it on every re-run.",
       "condition": "[and(parameters('createGatewaySubnet'), not(parameters('gatewayNsgExists')))]",
       "type": "Microsoft.Network/networkSecurityGroups",
       "apiVersion": "2023-11-01",
@@ -326,7 +326,7 @@
       }
     },
     {
-      "comments": "Present when gatewayManagementSourceCidr is set, this rule keeps a workstation an egress policy steers reachable: the steering route also carries the reply to a connection the box never opened, so the management connection goes through the gateway VM instead, and for inbound traffic Azure evaluates this subnet's NSG before the NIC's and both must allow. It admits TCP 22 and 30000-32767 from that one CIDR; the NSG on the gateway VM's NIC still decides what reaches the VM. Outbound is untouched, so the gateway keeps the internet access it exists to police.",
+      "comments": "Present when gatewayManagementSourceCidr is set. A steered box is reached through the gateway VM, and Azure evaluates this subnet's NSG before the NIC's, so both must allow. By default Ringleader's own rule in this group admits that traffic from any address. This rule admits TCP 22 and 30000-32767 from that one CIDR, which matters when Ringleader cannot write its own. The NSG on the gateway VM's NIC still decides what reaches the VM. Outbound is untouched, so the gateway keeps the internet access it exists to police.",
       "condition": "[and(parameters('createGatewaySubnet'), not(equals(parameters('gatewayManagementSourceCidr'), '')))]",
       "type": "Microsoft.Network/networkSecurityGroups/securityRules",
       "apiVersion": "2023-11-01",
@@ -400,7 +400,7 @@
       "type": "String",
       "value": "[if(parameters('createGatewaySubnet'), resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('gatewaySubnetName')), '')]",
       "metadata": {
-        "description": "The subnet the egress gateway VM runs in, or empty if createGatewaySubnet was false. Hand it back as spec.subnet on the EgressGateway -- Ringleader builds no gateway until you do, because a gateway placed in the subnet it steers routes its own egress into itself. NOT governedSubnetId, which is the workstations'."
+        "description": "The subnet the egress gateway VM runs in, or empty if createGatewaySubnet was false. Hand it back as spec.subnet on the Edge -- Ringleader builds no gateway until you do, because a gateway placed in the subnet it steers routes its own egress into itself. NOT governedSubnetId, which is the workstations'."
       }
     }
   }

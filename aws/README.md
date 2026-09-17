@@ -137,7 +137,7 @@ pad's range, and the plan fails rather than guessing if they disagree. See
   runs a proxy (see
   [One governed subnet per namespace that runs a proxy](#one-governed-subnet-per-namespace-that-runs-a-proxy))
 - if you reserved it: **`gateway_subnet_id`**, where the egress gateway VM runs. It goes on the
-  `EgressGateway` itself as `spec.subnet`, and Ringleader builds no gateway until it has one,
+  `Edge` itself as `spec.subnet`, and Ringleader builds no gateway until it has one,
   because a gateway placed in the subnet it steers would route its own egress into itself
 - if you took artifact storage: **`artifact_storage_grant`** (`managed` or `named`), which
   becomes the `Storage` object's `spec.grant`, and on the named width
@@ -220,11 +220,11 @@ and the reads that let Ringleader see what it wrote:
 | `ec2:AllocateAddress`, `ec2:ReleaseAddress`, `ec2:AssociateAddress`, `ec2:DisassociateAddress`, `ec2:DescribeAddresses` | reserve one fixed public address for the gateway VM, so what your upstreams see does not change when Ringleader replaces that machine. Region-bounded only: an Elastic IP is account-level and belongs to no VPC when it is allocated |
 
 **The description write is the one grant here that arrives ahead of the code that uses it.**
-The egress gateway's own group admits inbound management traffic with `tcp 30000-32767` from
+The egress gateway's own group admits inbound management traffic on a TCP port range from
 `0.0.0.0/0`, and an operator who writes that same rule by hand writes something Ringleader
-cannot tell from its own. So a later build stamps every rule Ringleader writes with a
-description naming the control plane behind it, and back-fills that stamp onto a rule an
-earlier build left unmarked, which is what this action is for. It is granted now because a
+cannot tell from its own. So Ringleader stamps every rule it writes with a description naming
+the control plane behind it. A later build back-fills that stamp onto a rule an earlier build left
+unmarked, which is what this action is for. It is granted now because a
 landing pad is applied once, in your own account: an action added afterwards would cost you a
 second apply.
 
@@ -313,7 +313,7 @@ CREATE_GATEWAY_SUBNET=false ./deploy.sh
 
 It creates an **empty subnet and its route table**, neither of which AWS bills for.
 
-**Hand its id back as `spec.subnet` on the `EgressGateway`.** It is `gateway_subnet_id` in the
+**Hand its id back as `spec.subnet` on the `Edge`.** It is `gateway_subnet_id` in the
 handoff, and Ringleader builds no gateway VM until it has one: a route table attaches per subnet
 and replaces the default route of everything in it, so a proxy sitting in a subnet it steers would
 route its own egress into itself and black-hole every workstation it serves. Do not hand
@@ -360,11 +360,11 @@ Two properties of this subnet are deliberate, and both will surprise you if you 
   fail-safe direction rather than a bug: a governed box reaches the internet through its proxy or
   not at all.
 - **It hands out no public IPs**, and `providerConfig.aws.assignPublicIp: false` is the posture
-  this subnet is built for. An address buys a governed workstation nothing. Once steering lands,
-  `0.0.0.0/0` points at the proxy's interface, which is also the reply path for anything dialling
-  the workstation from outside the VPC. Two ways in remain: the proxy forwards a port per governed
-  workstation when the `EgressGateway` asks for it (`spec.inboundManagement`), and the private
-  address answers over VPN, peering or Direct Connect.
+  this subnet is built for. Once steering lands, `0.0.0.0/0` points at the proxy's interface. That
+  is also the reply path for anything dialling the workstation from outside the VPC, so an address
+  of its own no longer answers. Two ways in remain. The private address answers over VPN, peering
+  or Direct Connect. And by default the proxy forwards a port to a governed workstation that has a
+  public IP, unless the `Edge` declares `spec.inboundManagement: false`.
 
 It shares the workstations subnet's availability zone, for the reason the proxy's own subnet does:
 AWS charges cross-AZ traffic in both directions, and every packet a governed box sends crosses to

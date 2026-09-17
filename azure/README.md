@@ -105,20 +105,21 @@ Ringleader has **no bastion and no SSH tunnel**: `rl shell`, `rl tmux`, port-for
 and VS Code Web all dial the workstation on **TCP 22**. Bringing a workstation up needs
 only *egress*, so one can finish setting up, report `Ready`, and still be unreachable.
 
-On Azure a workstation gets **no public IP unless you ask for one**
-(`providerConfig.azure.publicIp: true`), which has two consequences:
+On Azure a workstation gets a **public IP unless you opt out**
+(`providerConfig.azure.publicIp: false`). Two things follow:
 
-1. **No public IP and no NAT gateway → no egress → the workstation never comes up.** Azure's
-   default outbound access is being retired, so a private VM with nothing in front of it
-   cannot reach the Ringleader control plane. The landing pad (`create_network = true`) gives
-   it a NAT gateway, fixing egress without a public IP.
+1. **No public IP and no NAT gateway → no egress → the workstation never comes up.** Azure no
+   longer gives new virtual networks default outbound access, so a VM you opt out of a public IP,
+   with nothing in front of it, cannot reach the Ringleader control plane. The landing pad
+   (`create_network = true`) gives it a NAT gateway, fixing egress without a public IP.
 2. **Ringleader admits SSH to its own workstations.** The landing pad attaches an NSG to every
    subnet it creates, and an NSG with no rules of yours still carries Azure's defaults,
    `AllowVnetInBound` and then `DenyAllInBound`, so nothing outside the VNet reaches a VM on it.
    Ringleader adds one rule to that NSG admitting TCP 22 and 2222 from any address to the
    workstations it creates, and to no other VM. A workstation with a public IP is then reachable
-   from the internet on those ports, unless an egress policy steers it. One without a public IP is
-   reachable from anywhere that can route to the VNet. See
+   from the internet on those ports. A steered one is reached through the egress gateway VM
+   instead ([below](#room-for-the-egress-gateway)). One without a public IP is reachable from
+   anywhere that can route to the VNet. See
    [Two NSGs, at two layers](#two-nsgs-at-two-layers--and-which-one-is-yours) for the rule itself.
 
 `ssh_source_ranges` adds a rule of your own on TCP 22, for the CIDRs your engineers connect from:
@@ -209,7 +210,7 @@ or `Microsoft.Network`. Built-in **Contributor** covers it, so a deployment usin
 never sees this; a hand-rolled role can hold all twenty-two networking actions above and still be
 refused here. And the refusal is not a partial listing — the sweep collects **nothing**,
 including the VM it did not need this action to see, so what is left behind is a running gateway
-VM — and, if one was declared for it, a billed public IP.
+VM — and, if it had taken one, a billed public IP.
 
 Ringleader compiles each distinct policy into **one** NSG and attaches it to the NICs of the
 workstations carrying that policy. That matters here: Azure caps an NSG at **1,000 rules** and
@@ -286,15 +287,14 @@ CREATE_GATEWAY_SUBNET=false ./deploy.sh
 
 It creates an **empty subnet and its NSG**, and Azure bills for neither. **The subnet is
 associated with the landing pad's NAT gateway, and that is what the gateway VM's egress rests
-on**: it takes no public address of its own unless Ringleader is asked for one
-(`EgressGateway.spec.publicAddress`), so without that association it would boot and reach
-nothing.
+on**: the VM has no public address until it first forwards a port to a steered workstation
+(below), so without that association it would boot and reach nothing.
 
-**Asking for one does not move its traffic off the NAT gateway.** Azure's NAT gateway takes
+**A public address does not move its traffic off the NAT gateway.** Azure's NAT gateway takes
 precedence over an instance-level public IP for outbound — measured, not inferred: a VM in this
-subnet holding its own static address still egressed from the NAT gateway's. So a public address
-here buys inbound reachability, which the gateway does not need, and changes neither the NAT
-gateway's per-GB processing charge nor the source address your upstreams see. (On GCP it is the
+subnet holding its own static address still egressed from the NAT gateway's. So the gateway's
+public address carries inbound connections only, and changes neither the NAT gateway's per-GB
+processing charge nor the source address your upstreams see. (On GCP it is the
 other way round: an external address there bypasses Cloud NAT, which is why that cloud's README
 prices the two against each other.)
 
@@ -309,31 +309,34 @@ first rule allows the VNet inbound to **any** destination, which is the same rul
 in the NSG on the gateway VM's NIC. Both layers must say it, and the outer one decides. Outbound is
 untouched.
 
-**Its second rule keeps a steered workstation reachable, and it follows `ssh_source_ranges`.** A
-workstation an egress policy steers stops answering on its own address from outside the VNet,
-because the steering route is `0.0.0.0/0` and a default route also carries the *reply* to a
-connection the box never opened. So the management connection goes through the gateway VM, which
-forwards it to the box. Ringleader admits that traffic in the NSG on the gateway VM's NIC. For
-inbound traffic Azure evaluates the subnet's NSG before the NIC's, and both must allow, so this
-group carries the other half: `allow-management-inbound`, TCP 22 and 30000-32767, from the ranges in
-`ssh_source_ranges`. You do not supply the ports.
+**A steered workstation is reached through the gateway VM.** A workstation an egress policy steers
+stops answering on its own address from outside the VNet, because the steering route is `0.0.0.0/0`
+and a default route also carries the *reply* to a connection the box never opened. So by default the
+gateway VM forwards one port to each steered workstation that has a public IP of its own. It takes a
+public IP the first time it does. Azure evaluates this subnet's NSG before the NSG on the gateway
+VM's NIC, and both must allow. Ringleader writes a rule in each that admits the forwarded ports from
+any address. In this group the rule's destination is an application security group holding only
+Ringleader's gateway VMs. The gateway replaces a forwarded connection's source address with its own
+VNet address, so the steered workstation's NSG sees the gateway rather than the caller. The
+workstation's SSH daemon still authenticates every session.
 
-Ringleader puts only the gateway VM in this subnet, and the NSG on its NIC still decides what
-reaches it. From the internet nothing is reachable until the gateway has a public address, which it
-gets only when `EgressGateway.spec.publicAddress` asks for one. Sources inside the VNet were already
-admitted by the first rule. A forwarded connection keeps its source address, so the steered
-workstation's own NSG still decides whether to accept it. To close the rule, set
-`gateway_management_source_ranges = []` (Terraform) or `GATEWAY_MANAGEMENT_SOURCE_CIDR=none`
-(`deploy.sh`). A steered workstation is then reachable only from inside the VNet or a network joined
-to it.
+**Leave priorities 3000 to 3999 free in this NSG too.** Ringleader writes its rule at the lowest
+free priority in that range. It never edits or deletes a rule you wrote.
 
-**Leave priorities 3000 to 3999 free in this NSG too.** By default, Ringleader adds one inbound
-allow rule of its own here, at the lowest free priority in that range. The rule admits TCP from
-any address on the ports the gateway forwards to steered workstations, a range that differs from
-`allow-management-inbound`'s. Its destination is an application security group holding only
-Ringleader's gateway VMs. Ringleader never edits or deletes a rule you wrote.
+**The group's second rule, `allow-management-inbound`, follows `ssh_source_ranges`.** It admits TCP
+22 and 30000-32767 from those ranges, and you do not supply the ports. When Ringleader cannot write
+its own rule in this group, this one is what admits forwarded connections, and only from the ranges
+you named. To close it, set `gateway_management_source_ranges = []` (Terraform) or
+`GATEWAY_MANAGEMENT_SOURCE_CIDR=none` (`deploy.sh`).
 
-**Hand its id back as `spec.subnet` on the `EgressGateway`.** It is `gateway_subnet_id` in the
+**To keep steered workstations off the internet, declare it on the gateway.** Closing
+`allow-management-inbound` does not remove Ringleader's own rule. Set `spec.inboundManagement:
+false` on the `Edge` instead. The gateway VM then forwards no ports, and a steered
+workstation is reachable only from inside the VNet or a network joined to it. To keep the gateway VM
+from taking a public address at all, declare it before the gateway first forwards a port. A gateway
+VM keeps an address it already holds until it is rebuilt.
+
+**Hand its id back as `spec.subnet` on the `Edge`.** It is `gateway_subnet_id` in the
 handoff, and Ringleader builds no gateway VM until it has one: a route table attaches per
 subnet and replaces the default route of everything in it, so a proxy sitting in a subnet it
 steers would route its own egress into itself and black-hole every workstation it serves.
@@ -376,13 +379,14 @@ What it gets and what it deliberately does not:
   permission to re-associate does not exist at all — it declines for the same fail-safe reason, so
   you learn one rule across both clouds.
 - **No NAT gateway**, unlike the workstations and gateway subnets. A governed box's egress is the
-  proxy's job; attaching one would hand every box in here an unpoliced path to the internet for
-  the whole window before steering lands, and the UDR overrides it the moment it does. A box with
-  its own public IP still has Azure's own outbound until then — that is Azure's behaviour, not
-  something this module can remove, and it is a reason to create governed workstations without
-  one. Reaching one does not need an address of its own either way: the gateway VM forwards a
-  port per governed workstation when the `EgressGateway` asks for it (`spec.inboundManagement`,
-  plus `spec.publicAddress` to reach that port from outside the VNet).
+  proxy's job; attaching one would hand every box in here an unpoliced path to the internet for the
+  whole window before steering lands, and the UDR overrides it the moment it does. A box with its
+  own public IP still has Azure's own outbound until then — that is Azure's behaviour, not something
+  this module can remove, and it is a reason to create governed workstations with
+  `providerConfig.azure.publicIp: false`. A governed workstation without a public IP is reachable
+  only from inside the VNet or a network joined to it. One with a public IP is reached from outside
+  through a port the gateway VM forwards to it, unless the `Edge` declares `spec.inboundManagement:
+  false`.
 - **Azure's implicit default outbound access turned off**, which is the half Azure *does* let the
   module remove. Without it a workstation in here with no public IP would still reach the internet
   through Azure's own SNAT — an unpoliced path that survives withholding the NAT gateway, and the
@@ -663,7 +667,7 @@ $ cd azure/terraform && terraform init && terraform test
 | **subnet id** (only if you created a network) | `terraform output handoff` |
 | **governed subnet id** (only if you turned it on) | `terraform output handoff` — `providerConfig.azure.subnetId` for the workstations that carry an egress policy |
 | **additional governed subnet ids** (only if you added them) | `terraform output handoff`, or printed by `deploy.sh`. One for each further namespace that runs a proxy, used on that namespace's workstations only. See [One governed subnet per namespace that runs a proxy](#one-governed-subnet-per-namespace-that-runs-a-proxy) |
-| **gateway subnet id** (only if you reserved one) | `terraform output handoff` — goes on the `EgressGateway` as `spec.subnet`, not on a workstation; no gateway VM is built until it has one |
+| **gateway subnet id** (only if you reserved one) | `terraform output handoff` — goes on the `Edge` as `spec.subnet`, not on a workstation; no gateway VM is built until it has one |
 | **`artifact_storage_grant`** (`managed` or `named`) | `terraform output handoff` — the `Storage` object's `spec.grant`, if you want payloads in a storage account of yours |
 | **`artifact_storage_account_name`** (named width only) | `terraform output handoff`, with the container Ringleader should write to. On the managed width Ringleader creates both itself |
 

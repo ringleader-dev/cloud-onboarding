@@ -112,11 +112,11 @@ It grants two sets of writes, both bounded to the VPCs in egress_vpc_ids and to
         one group per distinct policy and attaches it to the workstations carrying that
         policy, so a fleet sharing a policy costs one group -- which matters, because AWS caps
         an ENI at 5 security groups and a region at 2,500. The three ingress actions are for
-        the DNS / HTTPS proxy VM, whose own group has to admit workstation traffic. The third
-        of them only marks a rule on that group as Ringleader's own, so that a later build can
-        revoke the rules it wrote and leave the rest alone; it replaces a rule's description
-        text and cannot add, remove or widen a rule. It is granted now because a landing pad is
-        applied once, in your own account, so adding an action later costs a second apply.
+        the DNS / HTTPS proxy VM, whose own group has to admit workstation traffic. The third lets a
+        later build stamp a rule an earlier build wrote without one as Ringleader's own, so that it
+        can then revoke that rule and leave the rest alone; it replaces a rule's description text
+        and cannot add, remove or widen a rule. It is granted now because a landing pad is applied
+        once, in your own account, so adding an action later costs a second apply.
       - subnet and route-table actions, which is how a workstation's traffic is made to arrive
         at that proxy. An AWS route table is per subnet, so per-policy steering needs a subnet
         per policy.
@@ -377,7 +377,7 @@ variable "create_gateway_subnet" {
     runs in. On by default; set false to opt out. Needs create_network.
 
     This creates nothing but an empty subnet and its route table, neither of which AWS bills
-    for; Ringleader builds the VM itself once you declare an EgressGateway naming this subnet
+    for; Ringleader builds the VM itself once you declare an Edge naming this subnet
     as spec.subnet. Carving the range now means the security-group rules that permit
     workstation -> proxy traffic can name one stable range instead of one instance's address,
     and saves renumbering later.
