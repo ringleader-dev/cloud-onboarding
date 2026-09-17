@@ -84,7 +84,7 @@ and routed through the internet gateway.
 
 The two subnets are for different things and only the second holds workstations:
 `GatewaySubnet` is where the egress gateway VM runs — hand `GatewaySubnetId` back as
-`spec.subnet` on the `EgressGateway`, and Ringleader builds no gateway VM until you do — and
+`spec.subnet` on the `Edge`, and Ringleader builds no gateway VM until you do — and
 `GovernedSubnet` is where the workstations that proxy **governs** go. The stack gives `GovernedSubnet` no route-table
 association and no public IPs on purpose — Ringleader claims the subnet by associating a table
 of its own, and refuses one that already carries an association. Until a proxy steers it, a
@@ -136,7 +136,7 @@ THUMBPRINT=$(echo | openssl s_client -servername oidc-app.ringleader.dev \
 With the proxy subnet on, also `GatewaySubnetId`; with a NAT gateway, `PrivateRouteTableId`; with
 flow logs, `FlowLogGroupName`, which is for you and not for Ringleader.
 Hand the role ARN, region, and (if created) subnet + security group back to Ringleader —
-plus `GatewaySubnetId`, which goes on the `EgressGateway` as `spec.subnet` rather than on a
+plus `GatewaySubnetId`, which goes on the `Edge` as `spec.subnet` rather than on a
 workstation, and `GovernedSubnetId` for the workstations that carry an egress policy. Each filled
 slot adds an `AdditionalGovernedSubnet<n>Id`, for one namespace's workstations only.
 

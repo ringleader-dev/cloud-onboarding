@@ -197,7 +197,7 @@ locals {
     "ec2:AuthorizeSecurityGroupIngress",
     "ec2:RevokeSecurityGroupIngress",
 
-    # Provenance for the gateway's own inbound management rule, `tcp 30000-32767 from 0.0.0.0/0`.
+    # Provenance for the gateway's own inbound management rule, a TCP port range from 0.0.0.0/0.
     # An operator can write that rule by hand, and one matching on all three terms is
     # indistinguishable from Ringleader's, so Ringleader stamps every range it writes with a
     # description naming the control plane behind it and can then revoke only what that stamp
@@ -215,8 +215,8 @@ locals {
     # It acts on the security group itself, exactly as the pair above does, so this statement's
     # ec2:Vpc and region bounds already cover it and it needs no statement of its own.
     #
-    # Both halves of the stamp -- writing it on a new rule, back-filling it on an old one -- ship
-    # in Ringleader rather than here, and this grant deliberately arrives ahead of them. A landing
+    # Ringleader already writes the stamp on every new rule. The back-fill onto an old rule ships
+    # later, and this grant deliberately arrives ahead of it. A landing
     # pad is applied ONCE, in your own account, by you, so an action added afterwards costs a
     # second apply.
     "ec2:UpdateSecurityGroupRuleDescriptionsIngress",
@@ -952,7 +952,7 @@ resource "aws_route_table" "private" {
 #
 # Ringleader's egress control points workstations at a proxy that reads the hostname off each
 # connection and allows or refuses it, and it builds that VM itself once you hand this subnet's
-# id back as EgressGateway.spec.subnet -- and none before that: a route table attaches per subnet
+# id back as Edge.spec.subnet -- and none before that: a route table attaches per subnet
 # and replaces the default route of everything in it, so a proxy sitting in a subnet it steers
 # would route its own egress into itself. A subnet of its own also means the security-group rules
 # that permit workstation -> proxy traffic can name one stable range instead of one instance's

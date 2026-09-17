@@ -42,12 +42,12 @@ Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standal
 | `enable_artifact_storage` | **`true`** | Let Ringleader hold artifact payloads — sealed agent-session transcripts, workflow file outputs, files a box publishes — in a bucket in **this project** rather than in Ringleader's own. Grants a **custom role** with `storage.buckets.get` and `storage.objects.*`, plus `storage.buckets.update`/`delete` on the managed width, bound by an IAM **condition** to buckets named `ringleader-*`. Never `setIamPolicy`, never `hmacKeys.*`, never `buckets.list`. Writes nothing until a Ringleader namespace declares a `Storage` naming a bucket. |
 | `artifact_storage_bucket` | `""` (managed) | Name a bucket **you** created and the grant narrows to object access on that one bucket, bound on the bucket rather than on the project, with no bucket create, update or delete at all — its location, lifecycle and default encryption key stay yours. Empty takes the managed width, where Ringleader creates and converges its own `ringleader-*` buckets. |
 | `artifact_storage_role_id` | `ringleaderArtifactStorage` | Id of that custom role; the managed width derives a second, `…Provision`, holding `storage.buckets.create` alone. Two roles because bucket creation authorizes against the **project** and so cannot carry the name condition. GCP reserves a deleted custom-role id for 7 days. |
-| `create_gateway_subnet` | **`true`** | Carve an empty range and leave it empty. Unlike AWS and Azure, **nothing is placed in it**: on GCP the steering route is scoped by network tag and the DNS / HTTPS proxy VM carries none, so Ringleader runs it in the workstations subnet and refuses `EgressGateway.spec.subnet`. Costs nothing; keeps the addressing aligned with the other two clouds. |
+| `create_gateway_subnet` | **`true`** | Carve an empty range and leave it empty. Unlike AWS and Azure, **nothing is placed in it**: on GCP the steering route is scoped by network tag and the DNS / HTTPS proxy VM carries none, so Ringleader runs it in the workstations subnet and refuses `Edge.spec.subnet`. Costs nothing; keeps the addressing aligned with the other two clouds. |
 | `create_governed_subnet` | `false` | Reserve a subnet for the workstations that proxy governs. **Off by default, and the one switch that differs from the AWS and Azure modules**: on GCP the steering route is scoped by network tag, so a box is governed by its tag and an untagged neighbour is untouched. See `gcp/README.md`. |
 | `gateway_subnet_cidr` | `null` → 241st `/24` of `network_cidr` | Its range. An override; unset it follows `network_cidr` and sits well clear of `subnet_cidr` so growing that one does not collide. |
 | `governed_subnet_cidr` | `null` → 15th `/20` of `network_cidr` | The governed subnet's range, when `create_governed_subnet` is on. An override; unset it sits immediately below the gateway range. |
 | `create_flow_logs` | `false` | Turn on VPC Flow Logs for every subnet this module creates, `additional_regions` included, with the settings Security Command Center's flow log settings check asks for: 5-second aggregation, every sampled log entry kept, all metadata. That check follows CIS Google Cloud Foundations Benchmark 3.8. **Off by default**, because Google bills flow logs per GiB generated and stored. The records go to Cloud Logging in this project, and its `_Default` bucket keeps them 30 days. Needs `create_network`. See `gcp/README.md` for keeping them longer and for who can read them. |
-| `gateway_management_source_ranges` | `null` | CIDRs allowed to reach the **egress gateway VM** on the management ports, so a workstation an egress policy *steers* stays reachable. Unset **mirrors `ssh_source_ranges`** — reaching a steered box is the decision you already made, still being true — and `[]` closes it. It admits SSH to the appliance itself, so it never widens past that list. From **outside** the VPC it opens nothing until you ask Ringleader for `EgressGateway.spec.publicAddress` (off by default, and the VM has no external address before it); from **inside**, or from a network you have joined to this VPC, it is live on apply. You do not supply the ports. |
+| `gateway_management_source_ranges` | `null` | CIDRs allowed to reach the **egress gateway VM** on the management ports. Unset **mirrors `ssh_source_ranges`**, the engineers you already chose, and `[]` closes it. It admits SSH to the appliance itself, so it never widens past that list. By default Ringleader also writes its own rule admitting the forwarded ports. This one admits them only where Ringleader cannot. `[]` does not keep steered workstations off the internet; `spec.inboundManagement: false` on the `Edge` does. From **outside** the VPC it opens nothing while the VM has no external address; from **inside**, or from a network you have joined to this VPC, it is live on apply. You do not supply the ports. |
 
 ### Why the gateway needs an INGRESS rule of its own
 
@@ -64,26 +64,26 @@ defeating the chokepoint — and the gateway cannot forward the reply either, be
 from the box's **internal** address. So the management connection has to terminate **at the
 gateway**.
 
-On AWS the gateway's inbound firewall is a security group Ringleader creates and owns, so it makes
-that admission itself and no landing-pad change is needed there. On Azure Ringleader writes it in
-the NSG on the gateway VM's NIC, but Azure also evaluates the gateway subnet's NSG, which belongs to
-the landing pad, so the Azure module carries the same admission. GCE has no per-instance firewall
-object: a gateway's inbound rules are VPC ingress rules in **your** project, and Ringleader writes
-no ingress rule for the gateway. This variable is the only place that admission can live.
+By default Ringleader makes that admission itself: on GCP it writes a VPC ingress rule in **your**
+project, from any address, targeting a network tag only its gateway VMs carry. The gateway keeps the
+caller's source address, so a steered workstation's own SSH rule still decides who may open it.
+This variable adds the landing pad's own rule beside it. That rule admits your ranges to the
+appliance's sshd on 22, and to the forwarded ports where Ringleader cannot write its own rule.
 
 It **follows `ssh_source_ranges`** rather than asking again, because it is not a second decision
 about who your engineers are — it is the first one still being true after a policy steers one of
 their boxes. It never widens past that list, and what sits behind it is the appliance's own sshd —
 which accepts only the keys Ringleader puts there — plus a port range where nothing listens until
-the inbound path exists.
+Ringleader forwards a port.
 
 Read the rule as *"these CIDRs may reach the appliance"*, not as *"the internet may not"*: a GCE
 ingress rule matches by source range wherever the source sits. From **outside** this VPC it opens
-nothing until `EgressGateway.spec.publicAddress` is declared, which defaults to off and without
-which the VM has no external address at all. From **inside** it — or from a network you have joined
+nothing while the VM has no external address, which it takes when it first forwards a port to a
+steered workstation. From **inside** it — or from a network you have joined
 to it by VPN, Interconnect or peering, or from any range of yours that overlaps `network_cidr` — it
 takes effect on apply, which is the case whenever `ssh_source_ranges` are private ranges. Set `[]`
-to close it.
+to close it. To keep steered workstations off the internet, set `spec.inboundManagement: false` on
+the `Edge`.
 
 ## Outputs
 

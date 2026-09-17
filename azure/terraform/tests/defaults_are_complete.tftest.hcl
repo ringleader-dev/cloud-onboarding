@@ -101,7 +101,7 @@ run "the_gateway_admission_follows_the_inbound_ssh_ranges" {
 
   assert {
     condition     = length(azurerm_network_security_rule.gateway_management) == 1
-    error_message = "naming ssh_source_ranges created no gateway-management rule. Azure evaluates the gateway subnet's NSG before the one on the gateway VM's NIC, so a customer who opened 22 to their engineers would lose those boxes the moment an egress policy steered one."
+    error_message = "naming ssh_source_ranges created no gateway-management rule. Azure evaluates the gateway subnet's NSG before the one on the gateway VM's NIC, so where Ringleader cannot write its own rule there, engineers who could reach a steered box would lose it."
   }
 
   assert {
@@ -121,7 +121,7 @@ run "an_explicit_empty_list_closes_the_admission" {
 
   assert {
     condition     = length(azurerm_network_security_rule.gateway_management) == 0
-    error_message = "an explicit [] did not close the gateway-management rule, so an operator who wants a steered box reachable only from inside the VNet has no way to say so."
+    error_message = "an explicit [] did not close the gateway-management rule, so an operator who does not want their SSH ranges admitted to the gateway has no way to say so."
   }
 
   assert {
@@ -146,8 +146,8 @@ run "no_gateway_subnet_means_no_admission" {
 }
 
 # The rule itself, once an operator names who it admits. Asserted field by field: a rule on the wrong
-# group, on the wrong ports or with the wrong protocol reads correctly in the portal and leaves a
-# steered workstation exactly as unreachable as it was.
+# group, on the wrong ports or with the wrong protocol reads correctly in the portal and admits
+# nothing it promises.
 run "the_admission_is_the_rule_it_promises" {
   command = plan
 

@@ -295,7 +295,7 @@ itself, once a workstation declares a policy naming hostnames, and it is a **bil
 
 **On GCP that VM runs in the workstations' own subnet, not in a subnet of its own.** Steering here
 is scoped by network tag and the proxy carries no such tag, so it sits beside the boxes without
-steering itself. `EgressGateway.spec.subnet` is **refused** on this provider, so there is no
+steering itself. `Edge.spec.subnet` is **refused** on this provider, so there is no
 gateway subnet id to hand back.
 
 **One organization policy can stop it being created at all.**
@@ -305,19 +305,21 @@ it, so the VM is always created with `--can-ip-forward`. If that constraint is e
 project, allow it an exception before you declare a policy that names hostnames; otherwise the
 create fails and hostname-level egress control simply never starts.
 
-**It takes no external address by default, and this landing pad is why that works.** The Cloud
-NAT below is created with `ALL_SUBNETWORKS_ALL_IP_RANGES`, so it covers the workstations subnet
-the gateway VM runs in and the VM reaches the internet without an address of its own. Nothing
-dials it from outside: a custom-mode VPC denies every ingress it has no rule for, and the only
-rule naming this VM is the one below.
+**It needs no external address for its own traffic, and this landing pad is why that works.** The
+Cloud NAT below is created with `ALL_SUBNETWORKS_ALL_IP_RANGES`, so it covers the workstations
+subnet the gateway VM runs in and the VM reaches the internet without an address of its own. It
+takes one when it first forwards a port to a steered workstation, as
+[below](#reaching-a-workstation-the-gateway-steers) describes. A custom-mode VPC denies every
+ingress it has no rule for, and the rules naming this VM are the ones this README lists.
 
 **But NAT is metered, and for a busy gateway an address is cheaper.** Cloud NAT processes at
 `$0.045/GiB`, while an external address costs about `$3.65/month` — so the address pays for
 itself at roughly **80 GiB/month** through one gateway, and less once Cloud NAT's own per-VM
-hourly charge is counted. Above that, ask Ringleader to set `spec.publicAddress: true` on the
-`EgressGateway`; the default is off because an address is **refused** where
-`constraints/compute.vmExternalIpAccess` is enforced, and a gateway that cannot be created is
-worse than one whose egress is metered.
+hourly charge is counted. Above that, set `spec.publicAddress: true` on the `Edge`, and
+the gateway takes an address even when it forwards no ports. Where
+`constraints/compute.vmExternalIpAccess` is enforced the address is **refused**. The gateway then
+keeps serving its workstations through Cloud NAT, reports the refusal on the `Edge`, and
+asks again later.
 
 **The one firewall rule this needs is created for you.** The proxy VM carries the network tag
 `ringleader-egress-gateway`, and `ringleader-allow-gateway` — created alongside
@@ -335,7 +337,7 @@ egress hardens nothing when removed and breaks egress control while leaving it l
 you never use hostname-level egress control there is no proxy VM, nothing carries the tag, and the
 rule admits nobody.
 
-### Reaching a workstation the gateway steers — the one rule GCP makes you add
+### Reaching a workstation the gateway steers
 
 Once a policy naming hostnames steers a workstation, that box **stops answering on its own address
 from outside this VPC**. `rl shell`, `rl code`, `rl file`, `rl logs`, `rl tmux` and
@@ -353,16 +355,25 @@ escaping the chokepoint. The gateway cannot forward the reply either: it is sour
 **internal** address, which neither the fabric nor your client would accept. So the management
 connection has to **terminate at the gateway** and reach the box from inside the VPC.
 
-**On AWS that is Ringleader's to arrange**, because the gateway's inbound firewall there is a
-security group that Ringleader creates and owns. Azure sits in between. Ringleader writes the rule
-in the NSG on the gateway VM's NIC, and the Azure landing pad adds the matching rule to the gateway
-subnet's NSG, which Azure evaluates first. **On GCP it is yours**, because GCE has no per-instance
-firewall object: the gateway's inbound rules are VPC ingress rules in this project, and Ringleader
-writes no ingress rule for the gateway.
+**Ringleader arranges that.** By default the gateway VM forwards one port to each steered
+workstation that has an external address of its own. It takes an external address itself the first
+time it does. Ringleader admits those ports with a VPC ingress rule it writes in this project, from
+any address, targeting a network tag that only its gateway VMs carry. The gateway keeps the
+caller's source address when it forwards a connection, so the workstation's own SSH rule still
+decides who may open it. The forward admits nobody the workstation would not have admitted at its
+own address, and the workstation's SSH daemon still authenticates every session.
 
-**So this landing pad adds the rule for you, and it follows `ssh_source_ranges`.** Set those and
-you are done — one rule, `ringleader-allow-gateway-management`, targeting the
-`ringleader-egress-gateway` tag, so it reaches the appliance and nothing else in this VPC:
+**To keep steered workstations off the internet, declare it on the gateway.** Set
+`spec.inboundManagement: false` on the `Edge`. The gateway then forwards no ports, and a
+steered workstation is reachable only from inside this VPC, over VPN, Interconnect or peering. It
+**reports** that rather than looking healthy while nobody can open it: `EgressEnforced: True`,
+reason `InboundUnreachable`. To keep the gateway VM from taking an external address for this at
+all, declare it before the gateway first forwards a port. A gateway VM keeps an external address it
+already holds until it is rebuilt.
+
+**This landing pad adds a rule of its own, and it follows `ssh_source_ranges`.** It is
+`ringleader-allow-gateway-management`, targeting the `ringleader-egress-gateway` tag, so it reaches
+the appliance and nothing else in this VPC:
 
 ```hcl
 create_network    = true
@@ -375,16 +386,14 @@ are — it is the first one still being true after a policy steers one of their 
 **What it admits, exactly.** A GCE ingress rule matches by *source range* wherever the source sits,
 so read it as "these CIDRs may reach the appliance" rather than "the internet may not":
 
-- From **outside** this VPC it opens nothing until you ask Ringleader for
-  `EgressGateway.spec.publicAddress`. That is off by default, and until it is set the gateway VM has
-  no external address at all.
+- From **outside** this VPC it opens nothing while the gateway VM has no external address.
 - From **inside** this VPC, from a network you have joined to it (VPN / Interconnect / peering), or
   from any range of yours that overlaps `network_cidr`, it takes effect the moment you apply — which
   is the case whenever your `ssh_source_ranges` are private ranges.
 
-Behind it is the appliance's own sshd, which accepts only the keys Ringleader puts there, and a
-forwarded port range where nothing listens until the inbound path exists. That is why the rule
-follows the list you already chose for machines in this VPC and never widens past it.
+Behind it is the appliance's own sshd, which accepts only the keys Ringleader puts there, so the
+rule follows the list you already chose for machines in this VPC and never widens past it. Where
+Ringleader cannot write its own rule, this one also admits the forwarded ports.
 
 **You never supply the ports.** The module and the script carry the set, so it cannot drift from
 what Ringleader listens on — and the set is deliberately an *envelope* (TCP 22 plus a forwarded
@@ -400,10 +409,8 @@ gateway_management_source_ranges = []
 GATEWAY_MANAGEMENT_RANGES=none ./network-landing-pad.sh
 ```
 
-A steered workstation is then reachable only from inside this VPC — over VPN, Interconnect or
-peering — and it **reports** that rather than looking healthy while nobody can open it:
-`EgressEnforced: True`, reason `InboundUnreachable`, naming the gateway and the two remedies that
-exist (withdraw the box's egress policy, or the gateway).
+Ringleader's own rule stays, so a steered workstation is still reachable through the gateway. To
+keep it off the internet, set `spec.inboundManagement: false` as described above.
 
 ### The reserved range
 
@@ -662,7 +669,7 @@ inter-zone rates while sitting right next to it — use internal addressing betw
 | **project id** | where your workstations run |
 | **workload identity provider** (`//iam.googleapis.com/projects/…/providers/…`) | the token-exchange audience |
 | **subnet self-link** (only if you created a network) | the subnet Ringleader attaches NICs to |
-| **gateway subnet self-link** (only if you reserved one) | nothing — do not hand this back. On GCP the gateway VM runs in the *workstations'* subnet, and `EgressGateway.spec.subnet` is refused here |
+| **gateway subnet self-link** (only if you reserved one) | nothing — do not hand this back. On GCP the gateway VM runs in the *workstations'* subnet, and `Edge.spec.subnet` is refused here |
 | **governed subnet self-link** (only if you turned it on) | an optional range for the governed fleet. GCP governs by network tag, so this is organizational rather than required |
 | **`artifact_storage_grant`** (`managed` or `named`) | the `Storage` object's `spec.grant`, if you want payloads in a bucket of yours |
 | **`artifact_storage_bucket`** (named width only) | that object's `spec.bucket`. On the managed width Ringleader names the bucket itself |

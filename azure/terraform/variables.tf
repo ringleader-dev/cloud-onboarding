@@ -227,14 +227,14 @@ variable "create_gateway_subnet" {
     runs in. On by default; set false to opt out. Needs create_network.
 
     This creates nothing but an empty subnet, which Azure does not bill for; Ringleader builds
-    the VM itself once you declare an EgressGateway naming this subnet as spec.subnet. It is
+    the VM itself once you declare an Edge naming this subnet as spec.subnet. It is
     worth doing early because the NSG rules that permit workstation -> proxy traffic can then
     name one stable prefix instead of one VM's address, and because carving the range now
     avoids renumbering later.
 
     The subnet is associated with the landing pad's NAT gateway, and that is what the gateway
-    VM's egress rests on: it takes no public address of its own unless Ringleader is asked for
-    one (EgressGateway.spec.publicAddress).
+    VM's egress rests on: it has no public address until it first forwards a port to a steered
+    workstation.
   EOT
 }
 
@@ -348,8 +348,9 @@ variable "create_network" {
     inbound only through ssh_source_ranges and the one SSH rule Ringleader adds). On by
     default; set false and supply your own subnet instead.
 
-    On Azure a workstation has no public IP unless you ask for one, so without a NAT gateway
-    it has no egress and never comes up -- which is why this landing pad is the default here.
+    On Azure a workstation you opt out of a public IP (providerConfig.azure.publicIp: false)
+    has no egress without a NAT gateway and never comes up -- which is why this landing pad is
+    the default here.
     The NAT gateway and its public IP do bill per hour, so set this false if you already have
     a subnet with egress for these VMs.
   EOT
@@ -410,19 +411,16 @@ variable "gateway_management_source_ranges" {
     What it is for. A workstation an egress policy steers stops answering on its own address from
     outside the VNet, because the steering route also carries the reply to a connection the box
     never opened. The management connection then goes through the gateway VM, which forwards it to
-    the box. Ringleader admits that traffic in the NSG on the gateway VM's NIC, but for inbound
-    traffic Azure evaluates the subnet's NSG first and both must allow. This variable is the
-    subnet's half.
+    the box. Azure evaluates the subnet's NSG before the NIC's and both must allow. By default
+    Ringleader writes a rule in each, admitting the forwarded ports from any address. This rule
+    admits them from your ranges when Ringleader cannot write its own rule in the subnet's NSG.
 
     What it exposes. The rule admits TCP 22 and 30000-32767 into the gateway subnet. Ringleader puts
-    only the gateway VM there, and the NSG on that VM's NIC still decides what reaches it. From the
-    internet nothing is reachable until the gateway has a public address, which it has only when
-    EgressGateway.spec.publicAddress asks for one. A forwarded connection keeps its source address,
-    so the steered workstation's own NSG still decides whether to accept it.
+    only the gateway VM there, and the NSG on that VM's NIC still decides what reaches it.
 
-    Set [] if you reach the VNet privately. Without the rule a steered workstation is reachable only
-    from inside the VNet or a network joined to it. You do not supply the ports: the module carries
-    them.
+    Set [] to close it. That does not remove Ringleader's own rule, so it does not keep steered
+    workstations off the internet: set spec.inboundManagement: false on the Edge for that. You
+    do not supply the ports: the module carries them.
   EOT
 }
 

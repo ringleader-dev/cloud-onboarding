@@ -105,9 +105,9 @@ which case the workstation reports `SSHAdmissionMissing`. Each cloud's README sa
 [AWS](aws/README.md#reaching-your-workstations), [GCP](gcp/README.md#reaching-your-workstations),
 [Azure](azure/README.md#reaching-your-workstations).
 
-The clouds differ in their default: **GCP** gives every workstation an external IP
-unless you opt out; **Azure** gives none unless you opt in (so it needs the NAT gateway
-for egress); **AWS** gives one by default. See each cloud's README.
+All three clouds give a workstation a public address by default, and each lets you opt out. On
+**Azure** a workstation without one needs the landing pad's NAT gateway for egress. See each cloud's
+README.
 
 ### A second SSH port — opened to the same people as 22
 
@@ -123,12 +123,13 @@ you are running, every module **follows whatever you set for port 22**:
 | `aws/cloudformation/deploy.sh` | `SECONDARY_SSH_SOURCE_CIDR` | mirrors `SSH_SOURCE_CIDR`. `none` creates no rule |
 | `azure/arm/deploy.sh` | `SECONDARY_SSH_SOURCE_CIDR` | mirrors `SSH_SOURCE_CIDR`. `none` creates no rule |
 
-One more thing follows port 22, on GCP and Azure: the rule admitting you to the **egress gateway
-VM**. Without it, a workstation an egress policy steers keeps its egress and stops answering on its
-own address. Both Terraform modules call it `gateway_management_source_ranges`. The GCP script calls
-it `GATEWAY_MANAGEMENT_RANGES`, and the Azure `deploy.sh` calls it `GATEWAY_MANAGEMENT_SOURCE_CIDR`.
-All of them mirror the ranges above, and `[]` and `none` close them. AWS needs no equivalent,
-because there the gateway's inbound firewall is a security group Ringleader creates and owns.
+One more thing follows port 22, on GCP and Azure: a landing-pad rule admitting you to the **egress
+gateway VM**. By default Ringleader writes its own rule for the ports the gateway forwards to
+steered workstations, and this one admits your ranges beside it. Both Terraform modules call it
+`gateway_management_source_ranges`. The GCP script calls it `GATEWAY_MANAGEMENT_RANGES`, and the
+Azure `deploy.sh` calls it `GATEWAY_MANAGEMENT_SOURCE_CIDR`. All of them mirror the ranges above,
+and `[]` and `none` close them. AWS needs no equivalent, because there the gateway's inbound
+firewall is a security group Ringleader creates and owns.
 
 Open nothing for 22 and these modules open nothing for 2222 either, while Ringleader's own rule
 still admits both ports to its workstations. **You never supply the port number:** each asset
@@ -183,7 +184,8 @@ one to two extra workstations per region, and it is the one object in this whole
 money without your creating it by name. Every module reserves a subnet for it
 (`create_gateway_subnet`), which costs nothing — but what happens to that subnet differs by cloud,
 and it is the one handoff detail worth reading twice. **On AWS and Azure the VM goes in it**, and
-you hand its id back as `spec.subnet` on the `EgressGateway`: a route table and a UDR attach per
+you hand its id back as `spec.subnet` on the `Edge`, the resource that declares the gateway (a
+manifest that still says `kind: EgressGateway` is accepted). A route table and a UDR attach per
 subnet and replace the default route of everything in it, so a proxy sitting in a subnet it steers
 would route its own egress into itself — Ringleader therefore builds no gateway VM at all until it
 has that id. **On GCP nothing goes in it and you hand it back nowhere**: the steering route there is
@@ -207,27 +209,31 @@ Two things follow that are worth knowing before you budget:
   proxy holds a rule per box and refuses a source it has no rule for, so an ungoverned
   workstation sharing a steered subnet loses its egress the moment steering lands. That is the
   whole reason for a second subnet rather than steering the landing pad's own.
-- **A steered workstation stops answering on its own address, and on GCP and Azure the landing
-  pad is part of what restores it.** The steering object is a `0.0.0.0/0` route, and a default
-  route carries the *reply* to a connection the box never opened as much as it carries what the
-  box sends. So once a policy naming hostnames takes hold, `rl shell` and everything built on it
-  stop working from outside the VPC, while egress keeps working. Nothing inside the box can undo
-  that (a guest routing table does not take part in VPC routing, which is also why the box's own
-  root cannot escape the chokepoint), so the management connection has to end **at the proxy**.
-  How that connection is admitted differs by cloud:
-  - On AWS it is a security group Ringleader owns and writes itself.
-  - On Azure Ringleader writes it in the NSG on the proxy VM's NIC. Azure also evaluates the
-    gateway subnet's NSG, which is yours, so the Azure landing pad adds the same admission there.
-  - On GCP, which has no per-instance firewall object, it is a VPC ingress rule in your project.
+- **A steered workstation stops answering on its own address, and the egress gateway restores it.**
+  The steering object is a `0.0.0.0/0` route, and a default route carries the *reply* to a
+  connection the box never opened as much as it carries what the box sends. So once a policy naming
+  hostnames takes hold, `rl shell` and everything built on it stop working from outside the VPC,
+  while egress keeps working. Nothing inside the box can undo that (a guest routing table does not
+  take part in VPC routing, which is also why the box's own root cannot escape the chokepoint), so
+  the management connection has to end **at the proxy**. By default the proxy forwards one port to
+  each steered workstation that has a public address of its own. On Azure and GCP it takes a public
+  address itself the first time it does. Ringleader writes the rule admitting those ports from any
+  address:
+  - On AWS it is a security group Ringleader owns.
+  - On Azure it is a rule in the NSG on the proxy VM's NIC and one in the gateway subnet's NSG,
+    which Azure also evaluates.
+  - On GCP, which has no per-instance firewall object, it is a VPC ingress rule in your project,
+    targeting only Ringleader's gateway VMs.
 
-  Both landing pads create their rule **following `ssh_source_ranges`**, so there is nothing extra
-  to set, and `gateway_management_source_ranges = []` (`none` in the scripts) closes it. On Azure
-  the rule adds nothing for sources inside the VNet, which the gateway subnet already admits. On
-  GCP, from outside the VPC the rule opens nothing until you ask Ringleader for
-  `EgressGateway.spec.publicAddress` (off by default, and the proxy has no external address before
-  it). From inside the VPC, or from a network you have joined to it, it is live on apply, so treat
-  it as "these CIDRs may reach the proxy". On GCP a closed rule leaves a steered box reachable only
-  from inside the VPC, which it *reports* rather than looking healthy while nobody can open it.
+  On AWS and GCP the proxy keeps the caller's source address, so the workstation's own inbound rules
+  still decide who may connect. On Azure it replaces the source with its own. To keep steered
+  workstations off the internet, set `spec.inboundManagement: false` on the `Edge`.
+
+  The GCP and Azure landing pads also create a rule of their own **following `ssh_source_ranges`**,
+  admitting those ranges to the proxy VM. It is what admits the forwarded ports when Ringleader
+  cannot write its own rule, and `gateway_management_source_ranges = []` (`none` in the scripts)
+  closes it. On GCP read it as "these CIDRs may reach the proxy": from inside the VPC, or from a
+  network you have joined to it, it is live on apply.
 - **Put the proxy in the same zone as the workstations it serves.** Same-zone traffic is free
   on all three clouds; cross-zone is $0.01/GB, charged to the sender on GCP and to **both
   sides** on AWS and Azure. At 10 TB/month a misplaced proxy costs $100–$200, which is more
@@ -273,7 +279,7 @@ money and grant Ringleader nothing. The governed subnet is off on GCP. Everythin
 |---|---|---|---|---|
 | **Landing-pad network** | VPC/VNet + subnet + egress + a security group / NSG | `create_network` | `CREATE_NETWORK` (AWS, Azure), `network-landing-pad.sh` (GCP) | GCP Cloud NAT, Azure NAT gateway + public IP |
 | **NAT gateway** (AWS) | private route table, so an instance with no public IP has egress | `create_nat_gateway` | `CREATE_NAT_GATEWAY` | yes — hourly **and $0.045/GB** |
-| **Gateway subnet** | where the egress gateway VM runs on AWS and Azure — hand its id back as `EgressGateway.spec.subnet`, and no gateway is built until you do. On GCP a reserved range that stays empty: the VM runs in the workstations subnet and `spec.subnet` is refused | `create_gateway_subnet` | `CREATE_GATEWAY_SUBNET`, `GATEWAY_CIDR` (GCP) | the subnet, no. On AWS and Azure the gateway VM Ringleader puts in it, **yes**; on GCP nothing is placed in it, and the VM still bills — it just runs in the workstations subnet |
+| **Gateway subnet** | where the egress gateway VM runs on AWS and Azure — hand its id back as `Edge.spec.subnet`, and no gateway is built until you do. On GCP a reserved range that stays empty: the VM runs in the workstations subnet and `spec.subnet` is refused | `create_gateway_subnet` | `CREATE_GATEWAY_SUBNET`, `GATEWAY_CIDR` (GCP) | the subnet, no. On AWS and Azure the gateway VM Ringleader puts in it, **yes**; on GCP nothing is placed in it, and the VM still bills — it just runs in the workstations subnet |
 | **Governed subnet** | an empty subnet for the workstations that gateway governs. On by default on AWS and Azure, **off on GCP**, which governs by network tag instead | `create_governed_subnet` | `CREATE_GOVERNED_SUBNET`, `GOVERNED_CIDR` (GCP) | no |
 | **Egress control** | Ringleader may create and maintain the firewall objects an egress policy compiles to, the routes that steer traffic at the gateway, and the gateway VM itself | `enable_egress_control` | `EGRESS_CONTROL` | only if you declare a policy naming hostnames, which builds the gateway VM |
 | **Workstation identities** | Ringleader may create per-user identities and bind roles to them | `enable_workstation_identities` | `WORKSTATION_IDENTITIES` | no |

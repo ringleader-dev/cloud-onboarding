@@ -48,8 +48,8 @@
 #                creates no rule for it        (default: same as SSH_SOURCE_CIDR)
 #   GATEWAY_MANAGEMENT_SOURCE_CIDR  one CIDR allowed through the
 #                egress gateway subnet's NSG on its management
-#                ports, so a workstation an egress policy steers
-#                stays reachable. "none" closes it
+#                ports. It does not remove Ringleader's own rule
+#                there. "none" closes it
 #                                              (default: same as SSH_SOURCE_CIDR)
 #   CREATE_GATEWAY_SUBNET  false to skip the empty subnet reserved for
 #                the egress gateway VM                         (default: true)
@@ -118,10 +118,9 @@ SECONDARY_SSH_SOURCE_CIDR="${SECONDARY_SSH_SOURCE_CIDR:-$SSH_SOURCE_CIDR}"
 if [ "$SECONDARY_SSH_SOURCE_CIDR" = "none" ]; then
   SECONDARY_SSH_SOURCE_CIDR=""
 fi
-# The egress gateway's management ports follow 22 as well: a workstation an egress policy steers is
-# reached through the gateway VM, and this is the gateway subnet's half of that admission -- Azure
-# evaluates the subnet's NSG before the NSG on the gateway VM's NIC, and both must allow. "none"
-# closes it.
+# The egress gateway's management ports follow 22 as well. A workstation an egress policy steers is
+# reached through the gateway VM. By default Ringleader writes its own rule for that in the gateway
+# subnet's NSG, and this one admits your CIDR when Ringleader cannot. "none" closes it.
 GATEWAY_MANAGEMENT_SOURCE_CIDR="${GATEWAY_MANAGEMENT_SOURCE_CIDR:-$SSH_SOURCE_CIDR}"
 if [ "$GATEWAY_MANAGEMENT_SOURCE_CIDR" = "none" ]; then
   GATEWAY_MANAGEMENT_SOURCE_CIDR=""
@@ -351,7 +350,7 @@ if [ "$CREATE_NETWORK" = "true" ]; then
   # The gateway subnet is printed for the same reason the other two are: it is a value the
   # operator has to hand back, and this script is the only place the ARM path shows them. Left
   # out, an operator on this path never learns the id -- and Ringleader builds no gateway VM at
-  # all until an EgressGateway names it.
+  # all until an Edge names it.
   GATEWAY_SUBNET_ID="$(echo "$NETWORK_OUTPUTS" | sed -n 3p)"
   ADDITIONAL_GOVERNED_SUBNET_IDS="$(az deployment group show \
     --resource-group "$RG" \
@@ -414,10 +413,10 @@ if [ -n "${ADDITIONAL_GOVERNED_SUBNET_IDS:-}" ]; then
   echo "  additional governed subnets, one namespace each (the label ends each id):"
   printf '%s\n' "$ADDITIONAL_GOVERNED_SUBNET_IDS" | sed 's/^/    /'
 fi
-# The gateway subnet is where the proxy VM ITSELF goes, so it is handed back on the EgressGateway
+# The gateway subnet is where the proxy VM ITSELF goes, so it is handed back on the Edge
 # rather than on a workstation -- and no gateway VM is built until it is. A proxy placed in a
 # subnet it steers would route its own egress into itself.
 if [ -n "${GATEWAY_SUBNET_ID:-}" ]; then
-  echo "  gateway subnet   : ${GATEWAY_SUBNET_ID}   (EgressGateway spec.subnet -- NOT a workstation)"
+  echo "  gateway subnet   : ${GATEWAY_SUBNET_ID}   (Edge spec.subnet -- NOT a workstation)"
 fi
 echo "==============================================================="

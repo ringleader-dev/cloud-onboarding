@@ -624,7 +624,7 @@ resource "google_compute_subnetwork" "workstations" {
 # HTTPS for the hosts you allow, and it builds that VM itself once a policy names hostnames. On
 # GCP it builds it in the WORKSTATIONS subnet: the route that steers a box at the proxy is scoped
 # by network tag, the proxy carries no such tag, so it sits beside the boxes without steering
-# itself. EgressGateway.spec.subnet is refused on this provider, so this range is not handed back
+# itself. Edge.spec.subnet is refused on this provider, so this range is not handed back
 # and nothing is placed in it -- unlike the AWS and Azure modules, where the VM really does go in
 # the subnet of the same name.
 #
@@ -818,12 +818,12 @@ locals {
   #
   # It is an ENVELOPE, not a single port, because the two ways to reach a steered box through its
   # gateway need different halves of it: an SSH jump host on the appliance answers on 22, and a
-  # per-box DNAT bastion needs one high port per governed box. Admitting both means the landing
-  # pad is applied ONCE whichever Ringleader ships. 30000-32767 sits below Linux's ephemeral range
-  # (32768-60999) so a forwarded port can never collide with a source port the appliance itself is
-  # using. Ports where nothing listens are refused exactly as if this rule did not exist -- the
-  # gateway's ruleset returns locally-destined traffic before any redirect, so a port only opens
-  # when Ringleader puts a listener behind it.
+  # per-box forward needs one high port per governed box where Ringleader cannot write its own rule.
+  # Admitting both means the landing pad is applied ONCE. 30000-32767 sits below Linux's ephemeral
+  # range (32768-60999) so a forwarded port can never collide with a source port the appliance
+  # itself is using. Ports where nothing listens are refused exactly as if this rule did not exist
+  # -- the gateway's ruleset returns locally-destined traffic before any redirect, so a port only
+  # opens when Ringleader puts a listener behind it.
   gateway_management_ports = ["22", "30000-32767"]
 
   # The workstation ranges, in one place because two rules now name them. The governed subnet counts
@@ -935,9 +935,9 @@ resource "google_compute_firewall" "gateway" {
   allow { protocol = "icmp" }
 }
 
-# INBOUND management to the gateway -- the rule without which a steered workstation is enforced and
-# unreachable. It FOLLOWS ssh_source_ranges, so a landing pad that opened 22 to your engineers keeps
-# their boxes reachable after a policy steers one.
+# INBOUND management to the gateway from your ranges. It FOLLOWS ssh_source_ranges, so a landing pad
+# that opened 22 to your engineers keeps them able to reach the appliance after a policy steers one
+# of their boxes.
 #
 # A gateway steers a workstation with a `0.0.0.0/0` static route scoped to that box's tag. A default
 # route is destination-keyed and stateless, so it also carries the REPLY to a connection the box
@@ -946,38 +946,34 @@ resource "google_compute_firewall" "gateway" {
 # goes on running, its egress goes on working through the gateway, and only the inbound path is
 # gone.
 #
-# Nothing Ringleader can write repairs that. A guest routing table does not participate in VPC
+# Nothing inside the box repairs that. A guest routing table does not participate in VPC
 # routing -- the property that stops a governed box's root defeating the chokepoint is the same
 # property that makes this unfixable from inside it -- and the gateway cannot forward the reply
 # either, because it is sourced from the workstation's INTERNAL address, which neither the fabric
 # nor your client would accept. The management connection has to TERMINATE at the gateway and be
 # carried to the box from inside the VPC.
 #
-# On AWS the gateway's inbound firewall is a security group Ringleader creates and owns, so that
-# admission is Ringleader's to make and no landing-pad change is needed there. On Azure Ringleader
-# writes it in the NSG on the gateway VM's NIC too, but Azure also evaluates the gateway SUBNET's
-# NSG, which is the landing pad's, so the Azure module carries the same admission. GCE has no
-# per-instance firewall object: the gateway's inbound rules are VPC ingress rules in THIS project,
-# and Ringleader writes none for the gateway. So on this cloud the landing pad is
-# the only place the admission can live, and this is it.
+# Ringleader makes that admission itself. By default it writes a VPC ingress rule in THIS project
+# admitting the forwarded ports from any address, targeting a network tag only its gateway VMs
+# carry. The gateway keeps the caller's source address, so a steered box's own SSH rule still
+# decides who may open it. This rule admits your ranges to the appliance's sshd on 22, and to the
+# forwarded ports when Ringleader cannot write its own rule.
 #
 # Why it follows rather than asking. These CIDRs get SSH to the appliance itself, so the rule is
 # scoped to the list the operator ALREADY chose for machines in this VPC and never widens past it,
 # and there is no second decision to remember on the day a policy first steers a box.
 #
-# What that admits, stated exactly, because "it opens nothing yet" is only half true. A GCE ingress
-# rule matches by SOURCE RANGE wherever the source sits. From OUTSIDE the VPC this opens nothing
-# until EgressGateway.spec.publicAddress is declared -- off by default, and the VM has no external
-# address before it. From inside, from a joined network (VPN / Interconnect / peering), or from any
-# range of the operator's that overlaps network_cidr, it takes effect on APPLY, which is exactly
-# the case when ssh_source_ranges are private ranges. Behind it is the appliance's own sshd, which
-# accepts only the keys Ringleader puts there, and a port range where nothing listens until the
-# inbound path exists.
+# What that admits, stated exactly. A GCE ingress rule matches by SOURCE RANGE wherever the source
+# sits. From OUTSIDE the VPC this opens nothing while the VM has no external address, which it takes
+# when it first forwards a port to a steered workstation. From inside, from a joined network (VPN /
+# Interconnect / peering), or from any range of the operator's that overlaps network_cidr, it takes
+# effect on APPLY, which is exactly the case when ssh_source_ranges are private ranges. Behind it is
+# the appliance's own sshd, which accepts only the keys Ringleader puts there, and a port range
+# where nothing listens until Ringleader forwards a port.
 #
-# Set gateway_management_source_ranges = [] to close it. Then a governed workstation is reachable
-# only from inside this VPC, and it SAYS so -- it reports EgressEnforced: True with reason
-# InboundUnreachable rather than looking healthy while nobody can open it. That is the right answer
-# if you reach this VPC privately, or if you do not use hostname-level egress control at all.
+# Set gateway_management_source_ranges = [] to close it. Ringleader's own rule stays, so this does
+# not keep steered workstations off the internet; spec.inboundManagement: false on the Edge does,
+# and a steered box then reports EgressEnforced: True with reason InboundUnreachable.
 resource "google_compute_firewall" "gateway_management" {
   count     = var.create_network && length(local.gateway_management_ranges) > 0 ? 1 : 0
   project   = var.project_id

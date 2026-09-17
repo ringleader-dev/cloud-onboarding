@@ -70,11 +70,12 @@ workstation when Ringleader cannot write that rule.
 `CREATE_GATEWAY_SUBNET` is on by default (`GATEWAY_SUBNET_CIDR` overrides its range; unset, it
 derives the 241st `/24` of the VNet, `10.70.240.0/24` at index `0`). It reserves the subnet the
 egress gateway VM for hostname-level egress control runs in, and prints its id as `gateway subnet`.
-**Hand that id back as `spec.subnet` on the `EgressGateway`**, not on a workstation. Ringleader
+**Hand that id back as `spec.subnet` on the `Edge`**, not on a workstation. Ringleader
 builds no gateway VM until it has one, because a proxy placed in a subnet it steers would route its
 own egress into itself. Azure does not bill for the subnet. The subnet is associated with the NAT
-gateway, which is what the VM Ringleader builds in it uses to reach the internet. The VM takes no
-public address of its own unless `EgressGateway.spec.publicAddress` asks for one.
+gateway, which is what the VM Ringleader builds in it uses to reach the internet. The VM takes a
+public address once it first forwards a port to a steered workstation, and none if the
+`Edge` declares `spec.inboundManagement: false` before then.
 
 The subnet also gets an NSG (`<prefix>-gateway-nsg`), because Azure's default rules live *inside* a
 group and a bare subnet would leave the proxy's listeners reachable from the internet rather than
@@ -85,9 +86,10 @@ closed. The NSG carries two rules:
   address the workstation was reaching, so an empty group would drop exactly the traffic the proxy
   exists to carry.
 - **Allow `GATEWAY_MANAGEMENT_SOURCE_CIDR` on TCP 22 and 30000-32767**, created when that variable
-  is not empty. It keeps a workstation an egress policy steers reachable through the gateway VM.
-  Azure evaluates this subnet's NSG before the NSG on the gateway VM's NIC, and both must allow. See
-  [`../README.md`](../README.md#room-for-the-egress-gateway).
+  is not empty. Azure evaluates this subnet's NSG before the NSG on the gateway VM's NIC, and both
+  must allow. Ringleader writes its own rule in this group by default, admitting the ports it
+  forwards to steered workstations from any address. This rule admits them from that CIDR when
+  Ringleader cannot. See [`../README.md`](../README.md#room-for-the-egress-gateway).
 
 Set `createGatewaySubnet` to `false` to skip the subnet and its NSG.
 

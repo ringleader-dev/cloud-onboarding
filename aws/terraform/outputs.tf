@@ -69,7 +69,7 @@ output "vpc_id" {
 
 output "gateway_subnet_id" {
   value       = var.create_network && var.create_gateway_subnet ? aws_subnet.gateway[0].id : null
-  description = "Subnet the egress gateway VM runs in (only when create_gateway_subnet = true). Hand it back as spec.subnet on the EgressGateway -- Ringleader builds no gateway until you do, because a gateway placed in the subnet it steers routes its own egress into itself. NOT governed_subnet_id, which is the workstations'. Public and in the workstations AZ -- both cost decisions; see the variable's description."
+  description = "Subnet the egress gateway VM runs in (only when create_gateway_subnet = true). Hand it back as spec.subnet on the Edge -- Ringleader builds no gateway until you do, because a gateway placed in the subnet it steers routes its own egress into itself. NOT governed_subnet_id, which is the workstations'. Public and in the workstations AZ -- both cost decisions; see the variable's description."
 }
 
 output "gateway_subnet_cidr" {
@@ -173,7 +173,7 @@ output "handoff" {
     a workstation gets is the difference between an enforced egress policy and a workstation
     that will not start -- see the two outputs above. THREE subnet ids beside any additional ones, and they are not
     interchangeable: a workstation that carries a policy goes in governed_subnet_id, every
-    other one in subnet_id, and gateway_subnet_id goes on the EgressGateway itself as
+    other one in subnet_id, and gateway_subnet_id goes on the Edge itself as
     spec.subnet, because the gateway VM cannot sit in a subnet it steers. additional_governed_subnet_ids
     holds one more governed subnet per entry you added, each for exactly one namespace.
   EOT

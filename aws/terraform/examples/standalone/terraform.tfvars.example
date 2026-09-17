@@ -41,7 +41,7 @@ ssh_source_ranges = []
 # create_nat_gateway = false
 
 # The PUBLIC subnet (10.60.240.0/24) plus its route table that the DNS / HTTPS proxy VM for
-# hostname-level egress control runs in. Hand gateway_subnet_id back as EgressGateway.spec.subnet
+# hostname-level egress control runs in. Hand gateway_subnet_id back as Edge.spec.subnet
 # -- Ringleader builds no gateway VM until you do, because a proxy placed in a subnet it steers
 # routes its own egress into itself. AWS bills for neither the subnet nor its route table. Public
 # and in the workstations AZ are both cost decisions: internet ingress is free, and AWS charges
