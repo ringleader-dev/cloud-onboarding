@@ -327,6 +327,12 @@ workstation's own NSG still decides whether to accept it. To close the rule, set
 (`deploy.sh`). A steered workstation is then reachable only from inside the VNet or a network joined
 to it.
 
+**Leave priorities 3000 to 3999 free in this NSG too.** By default, Ringleader adds one inbound
+allow rule of its own here, at the lowest free priority in that range. The rule admits TCP from
+any address on the ports the gateway forwards to steered workstations, a range that differs from
+`allow-management-inbound`'s. Its destination is an application security group holding only
+Ringleader's gateway VMs. Ringleader never edits or deletes a rule you wrote.
+
 **Hand its id back as `spec.subnet` on the `EgressGateway`.** It is `gateway_subnet_id` in the
 handoff, and Ringleader builds no gateway VM until it has one: a route table attaches per
 subnet and replaces the default route of everything in it, so a proxy sitting in a subnet it

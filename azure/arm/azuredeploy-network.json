@@ -298,7 +298,7 @@
       }
     },
     {
-      "comments": "The egress gateway subnet's own security group. Azure's default rules are rules INSIDE a group, and a Standard public IP, which the gateway VM carries whenever EgressGateway.spec.publicAddress asks for one, is closed to inbound traffic unless an NSG allows it. This group holds those allows, so the gateway VM takes at most what the rules below admit. Its rules are child resources for the reason the workstations group's are: Ringleader will add a rule of its own here too, admitting the management band to the gateway VM, and a securityRules list here would delete it on every re-run.",
+      "comments": "The egress gateway subnet's own security group. Azure's default rules are rules INSIDE a group, and a Standard public IP, which the gateway VM carries whenever EgressGateway.spec.publicAddress asks for one, is closed to inbound traffic unless an NSG allows it. This group holds those allows, so the gateway VM takes at most what the rules below admit. Its rules are child resources for the reason the workstations group's are: Ringleader adds a rule of its own here too by default, admitting the ports the gateway forwards to steered workstations, and a securityRules list here would delete it on every re-run.",
       "condition": "[and(parameters('createGatewaySubnet'), not(parameters('gatewayNsgExists')))]",
       "type": "Microsoft.Network/networkSecurityGroups",
       "apiVersion": "2023-11-01",
