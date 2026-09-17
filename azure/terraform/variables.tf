@@ -364,7 +364,7 @@ variable "ssh_source_ranges" {
 
     Ringleader has no bastion and no SSH tunnel: `rl shell`, `rl tmux`, port-forwards and
     VS Code Web all dial the workstation on 22. Ringleader adds its own rule to this NSG, at a
-    priority between 4090 and 4096, admitting TCP 22 and 2222 from any address to the
+    priority between 3000 and 3999, admitting TCP 22 and 2222 from any address to the
     workstations it creates and to no other VM. List CIDRs here to reach the other VMs on those
     subnets, or to keep your engineers able to reach a workstation when Ringleader cannot write
     its rule. Such a workstation reports SSHAdmissionMissing.

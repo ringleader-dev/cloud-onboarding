@@ -248,7 +248,7 @@ first policy:
   decide on their own, which **widens** inbound. Without one, it admits only TCP 22 and 2222 from
   outside the VNet. Move those rules onto the subnet NSG first. Ringleader adds a rule there, but
   never edits or deletes one you wrote.
-- **Leave priorities 4090 to 4096 free in the subnet NSG.** Ringleader adds one inbound allow rule
+- **Leave priorities 3000 to 3999 free in the subnet NSG.** Ringleader adds one inbound allow rule
   of its own there, at the lowest free priority in that range, so its workstations are reachable
   without you widening the group. The rule admits TCP 22 and 2222 from any address. Its
   destination is an application security group that Ringleader creates in your resource group and
@@ -326,6 +326,12 @@ workstation's own NSG still decides whether to accept it. To close the rule, set
 `gateway_management_source_ranges = []` (Terraform) or `GATEWAY_MANAGEMENT_SOURCE_CIDR=none`
 (`deploy.sh`). A steered workstation is then reachable only from inside the VNet or a network joined
 to it.
+
+**Leave priorities 3000 to 3999 free in this NSG too.** By default, Ringleader adds one inbound
+allow rule of its own here, at the lowest free priority in that range. The rule admits TCP from
+any address on the ports the gateway forwards to steered workstations, a range that differs from
+`allow-management-inbound`'s. Its destination is an application security group holding only
+Ringleader's gateway VMs. Ringleader never edits or deletes a rule you wrote.
 
 **Hand its id back as `spec.subnet` on the `EgressGateway`.** It is `gateway_subnet_id` in the
 handoff, and Ringleader builds no gateway VM until it has one: a route table attaches per

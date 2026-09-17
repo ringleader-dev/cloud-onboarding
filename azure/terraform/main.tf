@@ -244,6 +244,12 @@ resource "azurerm_subnet" "workstations" {
 # ports from the ranges you named, and from nowhere else". Outbound is untouched, so the gateway
 # keeps the internet access it exists to police (AllowInternetOutBound at 65001).
 #
+# By default, Ringleader adds one inbound rule of its own in this group, at the lowest free priority
+# between 3000 and 3999: TCP from any address on the ports the gateway forwards to steered
+# workstations, to an application security group holding its gateway VMs. It never edits or deletes
+# a rule declared here, and each rule below is its own resource, so an apply leaves Ringleader's in
+# place and Ringleader leaves these in place.
+#
 # The subnet is associated with the NAT gateway below, so anything placed here has egress without an
 # address of its own.
 resource "azurerm_subnet" "gateway" {
@@ -363,7 +369,7 @@ resource "azurerm_subnet_network_security_group_association" "gateway" {
 # replaced group was narrowing anything. For a box without a policy it admits only TCP 22 and 2222
 # from outside the VNet, so that box takes no other port from there, whatever this group opens.
 # Ringleader adds one inbound rule of its own in this group, at the lowest free priority
-# between 4090 and 4096: TCP 22 and 2222 from any address, to an application security group holding
+# between 3000 and 3999: TCP 22 and 2222 from any address, to an application security group holding
 # its workstations' NICs. It never edits or deletes a rule declared here, and each rule below is its
 # own resource, so an apply leaves Ringleader's in place and Ringleader leaves these in place.
 #
