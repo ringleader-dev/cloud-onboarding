@@ -106,3 +106,20 @@ region_indexes = {
 # create_identity              = false
 # existing_client_id           = "00000000-0000-0000-0000-000000000000"  # terraform output target_app_client_id
 # existing_principal_object_id = "00000000-0000-0000-0000-000000000000"  # terraform output service_principal_object_id
+
+# OFF BY DEFAULT. Uncomment to turn it on.
+#
+# VNet flow logs for the landing pad, kept in a storage account created for them. Compliance scans
+# such as Azure Policy's flow log audit expect them. In most regions they bill per GB collected
+# beyond 5 GB a month, plus storage. The flow log and its storage account go in the Network
+# Watcher's resource group (NetworkWatcherRG), outside the group Ringleader's role reaches, so
+# whoever applies this needs write access there too. Turning it off again deletes the storage
+# account and every record in it.
+# create_flow_logs = true
+#
+# How many days each record is kept, 1 to 365. 365 unless you set it.
+# flow_log_retention_days = 90
+#
+# Only if your subscription's watcher is not the one Azure enables on its own:
+# network_watcher_name                = "eastus-watcher"
+# network_watcher_resource_group_name = "my-network-watchers"

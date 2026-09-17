@@ -72,6 +72,18 @@ variable "additional_governed_subnets" {
   default = {}
 }
 
+# Off by default: VPC flow logs bill per GB and grant Ringleader nothing. Both are forwarded below,
+# like the rest.
+variable "create_flow_logs" {
+  type    = bool
+  default = false
+}
+
+variable "flow_log_retention_days" {
+  type    = number
+  default = 365
+}
+
 # Which /16 each region's landing pad takes. Forwarded below, so a value set in
 # terraform.tfvars actually takes effect -- a variable this root did not declare would be
 # accepted with a warning and then IGNORED, leaving the second region on the first one's range.
@@ -118,6 +130,9 @@ module "ringleader_onboarding" {
   create_governed_subnet = var.create_governed_subnet
 
   additional_governed_subnets = var.additional_governed_subnets
+
+  create_flow_logs        = var.create_flow_logs
+  flow_log_retention_days = var.flow_log_retention_days
 }
 
 output "handoff" {

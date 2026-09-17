@@ -173,3 +173,69 @@ run "the_admission_is_the_rule_it_promises" {
     error_message = "the inbound-management rule does not open TCP 22 plus the forwarded range. Both halves are needed: a jump host on the appliance answers on 22, a per-box DNAT bastion needs the high ports, and this pad is applied once whichever Ringleader ships."
   }
 }
+
+# Flow logs are off by default, on purpose: Google bills them per GiB and they grant Ringleader
+# nothing, so a customer who never asked for them must not start paying. Asserted on every subnet as
+# well as on the variable, so a subnet that stops following the switch is caught too.
+run "flow_logs_stay_off_until_asked_for" {
+  command = plan
+
+  variables {
+    create_governed_subnet = true
+    additional_regions     = { "europe-west1" = "10.80.16.0/20" }
+  }
+
+  assert {
+    condition     = var.create_flow_logs == false
+    error_message = "create_flow_logs defaults to true. Google bills flow logs per GiB and they grant Ringleader nothing, so every customer who re-applies would start paying for logs they never asked for."
+  }
+
+  assert {
+    condition = alltrue([
+      length(google_compute_subnetwork.workstations[0].log_config) == 0,
+      length(google_compute_subnetwork.gateway[0].log_config) == 0,
+      length(google_compute_subnetwork.governed[0].log_config) == 0,
+      length(google_compute_subnetwork.additional["europe-west1"].log_config) == 0,
+    ])
+    error_message = "A subnet carries a log_config on the defaults, so a customer who never set create_flow_logs gets a changed plan and a new bill."
+  }
+}
+
+# Switched on, every subnet this module creates logs its flows, with the three values
+# network-landing-pad.sh passes.
+run "flow_logs_cover_every_subnet_the_module_creates" {
+  command = plan
+
+  variables {
+    create_flow_logs       = true
+    create_governed_subnet = true
+    additional_regions     = { "europe-west1" = "10.80.16.0/20" }
+  }
+
+  assert {
+    condition = alltrue([
+      for s in [
+        google_compute_subnetwork.workstations[0],
+        google_compute_subnetwork.gateway[0],
+        google_compute_subnetwork.governed[0],
+        google_compute_subnetwork.additional["europe-west1"],
+        ] : length(s.log_config) == 1 && alltrue([
+          for c in s.log_config : c.aggregation_interval == "INTERVAL_5_SEC" && c.flow_sampling == 1.0 && c.metadata == "INCLUDE_ALL_METADATA"
+      ])
+    ])
+    error_message = "A subnet this module creates is not logged with 5-second aggregation, every sampled entry kept and all metadata. Those are the settings Security Command Center's flow log settings check asks for. A subnet left out, or logged with less, fails that check. Values that differ from network-landing-pad.sh mean the two routes record different traffic."
+  }
+}
+
+# The switch cannot log a subnet this module did not create. It is refused, because a plan that
+# creates nothing would let a customer who set it for a compliance scan believe the subnet was logged.
+run "flow_logs_without_the_network_are_refused" {
+  command = plan
+
+  variables {
+    create_network   = false
+    create_flow_logs = true
+  }
+
+  expect_failures = [google_project_service.compute]
+}

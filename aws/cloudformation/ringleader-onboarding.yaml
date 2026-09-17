@@ -238,6 +238,21 @@ Parameters:
       the two egress-control ranges stay together and SubnetCidr is free to grow. Set it only to
       override, and then it must sit inside the VPC range.
 
+  CreateFlowLogs:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Record a VPC flow log for all traffic in this stack's VPC, into a CloudWatch Logs group this
+      stack creates. Off by default, because it bills per GB ingested and stored and grants
+      Ringleader nothing. Ringleader's role cannot read or delete the logs. Needs CreateNetwork.
+
+  FlowLogRetentionDays:
+    Type: Number
+    Default: 365
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653]
+    Description: How many days the flow log group keeps its records, when CreateFlowLogs is true.
+
   AdditionalGovernedSubnet1Label:
     Type: String
     Default: ""
@@ -321,6 +336,10 @@ Mappings:
     "9": { Vpc: "10.69.0.0/16" }
 
 Rules:
+  FlowLogsNeedTheNetwork:
+    Assertions:
+      - Assert: !Or [!Equals [!Ref CreateFlowLogs, "false"], !Equals [!Ref CreateNetwork, "true"]]
+        AssertDescription: CreateFlowLogs is true, so CreateNetwork must be too. This stack records flow logs only for the VPC it creates.
   AdditionalGovernedSubnet1HasALabel:
     Assertions:
       - Assert: !Or [!Equals [!Ref AdditionalGovernedSubnet1Cidr, ""], !Not [!Equals [!Ref AdditionalGovernedSubnet1Label, ""]]]
@@ -378,6 +397,9 @@ Conditions:
   WantGovernedSubnet: !And
     - !Condition WantNetwork
     - !Equals [!Ref CreateGovernedSubnet, "true"]
+  WantFlowLogs: !And
+    - !Condition WantNetwork
+    - !Equals [!Ref CreateFlowLogs, "true"]
   WantNat: !And
     - !Condition WantNetwork
     - !Equals [!Ref CreateNatGateway, "true"]
@@ -877,6 +899,59 @@ Resources:
       MapPublicIpOnLaunch: false
       Tags: [{ Key: Name, Value: !Sub "ringleader-governed-${AdditionalGovernedSubnet6Label}" }]
 
+  FlowLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: WantFlowLogs
+    Properties:
+      LogGroupName: ringleader-workstations-flow-logs
+      RetentionInDays: !Ref FlowLogRetentionDays
+      Tags: [{ Key: Name, Value: ringleader-workstations-flow-logs }]
+
+  # Only VPC Flow Logs may assume this role, for this account. See README.md for its five actions.
+  FlowLogsRole:
+    Type: AWS::IAM::Role
+    Condition: WantFlowLogs
+    Properties:
+      Description: "Lets VPC Flow Logs deliver the ringleader-workstations VPC's flow records to its log group."
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: vpc-flow-logs.amazonaws.com
+            Action: "sts:AssumeRole"
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Ref AWS::AccountId
+              ArnLike:
+                "aws:SourceArn": !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:vpc-flow-log/*"
+      Policies:
+        - PolicyName: deliver-flow-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents", "logs:DescribeLogStreams"]
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${FlowLogGroup}"
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${FlowLogGroup}:log-stream:*"
+              - Effect: Allow
+                Action: "logs:DescribeLogGroups"
+                Resource: "*"
+      Tags: [{ Key: Name, Value: ringleader-workstations-flow-logs }]
+
+  FlowLog:
+    Type: AWS::EC2::FlowLog
+    Condition: WantFlowLogs
+    Properties:
+      ResourceId: !Ref Vpc
+      ResourceType: VPC
+      TrafficType: ALL
+      LogDestinationType: cloud-watch-logs
+      LogDestination: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${FlowLogGroup}"
+      DeliverLogsPermissionArn: !GetAtt FlowLogsRole.Arn
+      Tags: [{ Key: Name, Value: ringleader-workstations }]
+
   WorkstationsSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Condition: WantNetwork
@@ -1028,6 +1103,10 @@ Outputs:
     Condition: WantAdditionalGovernedSubnet6
     Description: Additional governed subnet 6, for one namespace's workstations that carry an egress policy.
     Value: !Ref AdditionalGovernedSubnet6
+  FlowLogGroupName:
+    Condition: WantFlowLogs
+    Description: The CloudWatch Logs group this VPC's flow logs are delivered to.
+    Value: !Ref FlowLogGroup
   PrivateRouteTableId:
     Condition: WantNat
     Description: >-

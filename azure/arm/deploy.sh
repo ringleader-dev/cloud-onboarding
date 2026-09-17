@@ -8,7 +8,8 @@
 #   1. creates the app + service principal with az,
 #   2. adds a federated identity credential trusting Ringleader's per-org issuer,
 #   3. deploys the ARM template (custom role + assignment) at resource-group scope,
-#   4. optionally deploys the network landing pad (CREATE_NETWORK=true).
+#   4. optionally deploys the network landing pad (CREATE_NETWORK=true),
+#   5. optionally records flow logs for its VNet (CREATE_FLOW_LOGS=true).
 #
 # Configure via env vars:
 #   RG           existing resource group you own              (required)
@@ -60,6 +61,14 @@
 #                that runs its own gateway, as label=cidr pairs
 #                separated by commas. List every pair on every run
 #                (default: empty, which deletes any the VNet has)
+#   CREATE_FLOW_LOGS  true to record VNet flow logs for the landing pad
+#                into a storage account created for them. Needs
+#                CREATE_NETWORK=true. Bills per GB collected and
+#                stored                                          (default: false)
+#   FLOW_LOG_RETENTION_DAYS  days each flow record is kept, 1-365 (default: 365)
+#   NETWORK_WATCHER_NAME  the region's Network Watcher        (default: NetworkWatcher_<VNet region>)
+#   NETWORK_WATCHER_RG  its resource group. The flow log and its
+#                storage account are created there, never in RG (default: NetworkWatcherRG)
 #
 # The defaults grant what Ringleader needs for the features available today, so enabling one
 # later does not mean a second onboarding pass. Only the landing pad costs money.
@@ -184,6 +193,32 @@ TENANT_ID="$(az account show --query tenantId -o tsv)"
 echo ">> resource group: $RG"
 echo ">> issuer:         $ISSUER"
 echo ">> subject:        $SUBJECT"
+
+# Flow logs are off by default: they bill, and they grant Ringleader nothing. They go in the Network
+# Watcher's resource group rather than in RG, because Ringleader's role is scoped to RG and, with
+# ARTIFACT_STORAGE on, may read and delete every blob there, and on the default settings delete the
+# storage accounts too. Refused up front rather than
+# after the app, role and network are deployed.
+CREATE_FLOW_LOGS="${CREATE_FLOW_LOGS:-false}"
+FLOW_LOG_RETENTION_DAYS="${FLOW_LOG_RETENTION_DAYS:-365}"
+NETWORK_WATCHER_NAME="${NETWORK_WATCHER_NAME:-}"
+NETWORK_WATCHER_RG="${NETWORK_WATCHER_RG:-NetworkWatcherRG}"
+if [ "$CREATE_FLOW_LOGS" != "true" ] && [ "$CREATE_FLOW_LOGS" != "false" ]; then
+  echo "CREATE_FLOW_LOGS must be true or false, not '${CREATE_FLOW_LOGS}'" >&2
+  exit 1
+fi
+if [ "$CREATE_FLOW_LOGS" = "true" ] && [ "$CREATE_NETWORK" != "true" ]; then
+  echo "CREATE_FLOW_LOGS=true needs CREATE_NETWORK=true: this script records flow logs only for the VNet it creates." >&2
+  exit 1
+fi
+if [ "$CREATE_FLOW_LOGS" = "true" ] && [ "$(printf '%s' "$NETWORK_WATCHER_RG" | tr 'A-Z' 'a-z')" = "$(printf '%s' "$RG" | tr 'A-Z' 'a-z')" ]; then
+  echo "NETWORK_WATCHER_RG is RG, the resource group Ringleader's role reaches. The flow log's storage account would be one Ringleader can read and delete. Use a Network Watcher in a resource group of its own." >&2
+  exit 1
+fi
+if [ "$CREATE_FLOW_LOGS" = "true" ] && ! printf '%s' "$FLOW_LOG_RETENTION_DAYS" | grep -Eq '^([1-9]|[1-9][0-9]|[12][0-9][0-9]|3[0-5][0-9]|36[0-5])$'; then
+  echo "FLOW_LOG_RETENTION_DAYS must be a whole number from 1 to 365, not '${FLOW_LOG_RETENTION_DAYS}'" >&2
+  exit 1
+fi
 
 # 1. The Entra app (create if absent) + its service principal.
 APP_ID="$(az ad app list --display-name "$APP_NAME" --query '[0].appId' -o tsv)"
@@ -322,6 +357,39 @@ if [ "$CREATE_NETWORK" = "true" ]; then
     --resource-group "$RG" \
     --name ringleader-onboarding-network \
     --query 'properties.outputs.additionalGovernedSubnetIds.value[].id' -o tsv)"
+fi
+
+# 5. Flow logs for the landing pad's VNet, from the template the Terraform module also deploys, so
+#    both routes create the same storage account and flow log under the same names. It is deployed
+#    into the Network Watcher's resource group: Azure requires a flow log beside its watcher, and
+#    Ringleader's role does not reach that group. The watcher is looked up first, so a subscription
+#    without one stops here naming it. Unlike the Terraform route, setting CREATE_FLOW_LOGS=false
+#    later deletes nothing: remove the flow log and its storage account yourself if you want them gone.
+if [ "$CREATE_FLOW_LOGS" = "true" ]; then
+  VNET="$(az network vnet show -g "$RG" -n "${NAME_PREFIX}-vnet" --query '[id, location]' -o tsv)"
+  VNET_ID="$(echo "$VNET" | sed -n 1p)"
+  VNET_LOCATION="$(echo "$VNET" | sed -n 2p)"
+  NETWORK_WATCHER_NAME="${NETWORK_WATCHER_NAME:-NetworkWatcher_${VNET_LOCATION}}"
+  WATCHERS="$(az network watcher list --query '[].[resourceGroup, name, location]' -o tsv)"
+  WATCHER_LOCATION="$(awk -F '\t' -v g="$NETWORK_WATCHER_RG" -v n="$NETWORK_WATCHER_NAME" 'tolower($1) == tolower(g) && tolower($2) == tolower(n) { print $3 }' <<<"$WATCHERS")"
+  if [ -z "$WATCHER_LOCATION" ]; then
+    echo "no Network Watcher ${NETWORK_WATCHER_NAME} in resource group ${NETWORK_WATCHER_RG}. If step 4 just created the first VNet in ${VNET_LOCATION}, Azure may not have enabled its watcher yet: run this script again. Otherwise set NETWORK_WATCHER_NAME and NETWORK_WATCHER_RG to the watcher for ${VNET_LOCATION}; az network watcher list shows them." >&2
+    exit 1
+  fi
+  if [ "$WATCHER_LOCATION" != "$VNET_LOCATION" ]; then
+    echo "the Network Watcher ${NETWORK_WATCHER_NAME} is in ${WATCHER_LOCATION}, but the VNet is in ${VNET_LOCATION}. A flow log is recorded by the watcher for its VNet's own region." >&2
+    exit 1
+  fi
+  FLOW_LOG_DEPLOYMENT="${NAME_PREFIX}-flow-logs-${RG}"
+  echo ">> recording flow logs for ${NAME_PREFIX}-vnet through ${NETWORK_WATCHER_NAME}, kept ${FLOW_LOG_RETENTION_DAYS} days, in ${NETWORK_WATCHER_RG}"
+  az deployment group create \
+    --resource-group "$NETWORK_WATCHER_RG" \
+    --name "${FLOW_LOG_DEPLOYMENT:0:64}" \
+    --template-file "${SCRIPT_DIR}/azuredeploy-flowlogs.json" \
+    --parameters vnetId="$VNET_ID" location="$VNET_LOCATION" \
+                 networkWatcherName="$NETWORK_WATCHER_NAME" \
+                 retentionDays="$FLOW_LOG_RETENTION_DAYS" \
+    --query 'properties.provisioningState' -o tsv
 fi
 
 cat <<EOF

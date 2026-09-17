@@ -32,6 +32,7 @@ from check_route_parity import (
     AWS_CFN,
     AWS_TF,
     AZURE_ARM,
+    AZURE_ARM_FLOW_LOGS,
     AZURE_TF,
     GCP_SH,
     GCP_TF,
@@ -514,6 +515,28 @@ class AnAzureRouteCannotStopSharingTheOneActionList(Rejects):
         doc = json.loads(srcs[AZURE_ARM])
         del doc["parameters"]["enableArtifactStorage"]
         srcs[AZURE_ARM] = json.dumps(doc, indent=2)
+        self.assertRejected(srcs, "does not declare")
+
+
+class TheFlowLogTemplateIsSharedTheSameWay(Rejects):
+    def test_the_module_stops_deploying_the_flow_log_template(self):
+        self.assertRejected(
+            edited((AZURE_TF, 'file("${path.module}/../arm/azuredeploy-flowlogs.json")',
+                    'file("${path.module}/flowlogs.json")')),
+            "azuredeploy-flowlogs.json",
+        )
+
+    def test_a_flow_log_parameter_is_not_passed_by_terraform(self):
+        self.assertRejected(
+            edited((AZURE_TF, "    retentionDays      = { value = var.flow_log_retention_days }\n", "")),
+            "retentionDays",
+        )
+
+    def test_terraform_passes_a_flow_log_parameter_the_template_does_not_declare(self):
+        srcs = read_sources(REPO_ROOT)
+        doc = json.loads(srcs[AZURE_ARM_FLOW_LOGS])
+        del doc["parameters"]["retentionDays"]
+        srcs[AZURE_ARM_FLOW_LOGS] = json.dumps(doc, indent=2)
         self.assertRejected(srcs, "does not declare")
 
 

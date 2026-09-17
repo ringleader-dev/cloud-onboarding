@@ -499,3 +499,29 @@ variable "gateway_management_source_ranges" {
     listens on.
   EOT
 }
+
+# --- Flow logs for the subnets this module creates (OFF by default) --------------------------
+
+variable "create_flow_logs" {
+  type        = bool
+  default     = false
+  description = <<-EOT
+    Turn on VPC Flow Logs for every subnet this module creates: the workstations subnet, the
+    gateway and governed subnets when they are created, and every subnet in additional_regions.
+    Off by default. Needs create_network; a subnet you bring yourself is yours to log.
+
+    It is off because it bills and grants Ringleader nothing. Google bills flow logs per GiB
+    generated, and again per GiB stored in Cloud Logging, and the volume grows with the traffic
+    your workstations send. It is here because compliance scans such as Security Command
+    Center's flow log settings check, which follows CIS Google Cloud Foundations Benchmark 3.8,
+    expect flow logs on every subnet, and this module declares the subnets.
+
+    Each subnet uses the settings that check asks for: 5-second aggregation, every sampled entry
+    kept, and all metadata. The records land in the project's _Default log bucket, which keeps
+    them for 30 days. This module does not manage log buckets; the README gives the command that
+    keeps them longer.
+
+    No role this module grants Ringleader carries a Cloud Logging permission. The README says
+    what can still reach the records.
+  EOT
+}

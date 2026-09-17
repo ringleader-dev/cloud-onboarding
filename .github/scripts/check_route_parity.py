@@ -28,8 +28,10 @@ cloud's two paths are actually kept in step:
     `!If` and puts the other in its false branch names the same keys and never applies both
     together.
   * **azure** -- ONE implementation: the Terraform module deploys `../arm/azuredeploy.json`
-    verbatim, so the action list cannot drift. That property is what is checked -- that the
-    module still deploys that file, and still passes every parameter the template declares. An
+    verbatim, so the action list cannot drift. It also deploys `../arm/azuredeploy-flowlogs.json`
+    verbatim, so the flow log and its storage account cannot drift either. What is checked is that
+    the module still deploys each file from its own template deployment, and passes every parameter
+    each template declares. An
     unpassed parameter with a default is its own quiet failure: Azure materializes the default
     into the stored deployment while the file leaves it unset, and `terraform plan` then reports
     a change forever.
@@ -75,11 +77,19 @@ AWS_TF = "aws/terraform/main.tf"
 AWS_CFN = "aws/cloudformation/ringleader-onboarding.yaml"
 AZURE_TF = "azure/terraform/main.tf"
 AZURE_ARM = "azure/arm/azuredeploy.json"
+AZURE_ARM_FLOW_LOGS = "azure/arm/azuredeploy-flowlogs.json"
+
+# Every ARM template the Terraform module deploys verbatim, and the template deployment that deploys
+# it. Each is one implementation shared by both routes, so each is held to the same two properties.
+AZURE_TEMPLATES = (
+    (AZURE_ARM, "role"),
+    (AZURE_ARM_FLOW_LOGS, "flow_logs"),
+)
 
 # Every artifact this guard reads, so a test can hand it edited sources rather than editing the
 # repository -- the same shape check_published_literals.py uses, and for the same reason: a guard
 # whose teeth can only be proved by breaking the working tree does not get its teeth proved.
-PATHS = (GCP_TF, GCP_SH, AWS_TF, AWS_CFN, AZURE_TF, AZURE_ARM)
+PATHS = (GCP_TF, GCP_SH, AWS_TF, AWS_CFN, AZURE_TF, AZURE_ARM, AZURE_ARM_FLOW_LOGS)
 
 # The shell names this guard reads. Handed to `check_trust_pins`' closed grammar so a statement
 # that binds one of them by any means other than a plain assignment -- `read`, `printf -v`,
@@ -1076,23 +1086,47 @@ def check_azure(srcs: dict[str, str]) -> list[str]:
         )
         return problems
 
-    doc = json.loads(srcs[AZURE_ARM])
+    for template, resource in AZURE_TEMPLATES:
+        problems += _check_azure_template(tf_src, srcs, template, resource)
+    return problems
+
+
+def _check_azure_template(tf_src: str, srcs: dict[str, str], template: str, resource: str) -> list[str]:
+    """One template: its deployment deploys the file verbatim and passes every parameter it declares."""
+    doc = json.loads(srcs[template])
     declared = set(doc.get("parameters", {}))
     if not declared:
-        raise GuardError(f"{AZURE_ARM}: no `parameters` block; this guard is reading nothing.")
+        raise GuardError(f"{template}: no `parameters` block; this guard is reading nothing.")
 
-    m = re.search(r"parameters_content\s*=\s*jsonencode\(\{", tf_src)
+    head = re.search(r'resource\s+"azurerm_resource_group_template_deployment"\s+"' + re.escape(resource) + r'"\s*\{', tf_src)
+    if head is None:
+        raise GuardError(
+            f'{AZURE_TF}: no `resource "azurerm_resource_group_template_deployment" "{resource}"`.\n\n'
+            f"  That is the deployment of `{template}`. If it was renamed, move this guard with it."
+        )
+    block = brace_block(tf_src[head.end() - 1 :], f"template deployment {resource}")
+    problems: list[str] = []
+    wanted = 'file("${path.module}/../arm/' + template.rsplit("/", 1)[1] + '")'
+    if wanted not in block:
+        problems.append(
+            f"azure: `{resource}` in {AZURE_TF} no longer deploys `{template}` verbatim.\n\n"
+            "  That file is what the ARM route deploys too, and deploying it unchanged is the only\n"
+            "  reason the two routes cannot drift."
+        )
+        return problems
+
+    m = re.search(r"parameters_content\s*=\s*jsonencode\(\{", block)
     if m is None:
         raise GuardError(
-            f"{AZURE_TF}: no `parameters_content = jsonencode({{`.\n\n"
+            f"{AZURE_TF}: `{resource}` has no `parameters_content = jsonencode({{`.\n\n"
             "  That block is where the module passes the template's parameters. If it was rewritten,\n"
             "  move this guard with it."
         )
-    passed = set(re.findall(r"^\s*([A-Za-z][A-Za-z0-9_]*)\s*=\s*\{", brace_block(tf_src[m.end() - 1 :], "parameters_content"), re.M))
+    passed = set(re.findall(r"^\s*([A-Za-z][A-Za-z0-9_]*)\s*=\s*\{", brace_block(block[m.end() - 1 :], "parameters_content"), re.M))
 
     for name in sorted(declared - passed):
         problems.append(
-            f"azure: `{AZURE_ARM}` declares parameter `{name}` and {AZURE_TF} does not pass it.\n\n"
+            f"azure: `{template}` declares parameter `{name}` and {AZURE_TF} does not pass it.\n\n"
             "  Two failures at once. A customer on the Terraform route silently gets the template's\n"
             "  DEFAULT rather than the module's variable -- so a switch they set does nothing -- and\n"
             "  Azure materializes that default into the stored deployment while the file leaves it\n"
@@ -1100,7 +1134,7 @@ def check_azure(srcs: dict[str, str]) -> list[str]:
         )
     for name in sorted(passed - declared):
         problems.append(
-            f"azure: {AZURE_TF} passes parameter `{name}`, which `{AZURE_ARM}` does not declare.\n\n"
+            f"azure: {AZURE_TF} passes parameter `{name}`, which `{template}` does not declare.\n\n"
             "  ARM refuses an unknown parameter, so this is an apply that fails for every customer on\n"
             "  the Terraform route."
         )

@@ -190,3 +190,158 @@ run "the_admission_is_the_rule_it_promises" {
     error_message = "the gateway-management rule shares a priority with the VNet allow in the same NSG, which Azure refuses at apply time."
   }
 }
+
+# Flow logs are off by default, on purpose: they bill per GB collected and stored, and grant
+# Ringleader nothing, so a customer who never asked for them must not start paying. Asserted on the
+# deployment as well as on the variable, so a count that stops following the switch is caught too.
+run "flow_logs_stay_off_until_asked_for" {
+  command = plan
+
+  assert {
+    condition     = var.create_flow_logs == false
+    error_message = "create_flow_logs defaults to true. Flow logs bill per GB and grant Ringleader nothing, so every customer who re-applies would start paying for logs they never asked for."
+  }
+
+  assert {
+    condition     = length(azurerm_resource_group_template_deployment.flow_logs) == 0
+    error_message = "The flow log deployment is planned on the defaults, so a customer who never set create_flow_logs gets a changed plan and a new bill."
+  }
+}
+
+# Switched on, the flow log and its storage account are deployed outside the resource group
+# Ringleader's role reaches, from the template the ARM route deploys, keeping a year of records.
+run "flow_logs_land_outside_ringleaders_reach" {
+  command = plan
+
+  variables {
+    create_flow_logs = true
+  }
+
+  # Planned, so the VNet id is unknown unless it is given one; the parameters below are built from it.
+  override_resource {
+    target          = azurerm_virtual_network.workstations
+    override_during = plan
+    values          = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-defaults-test/providers/Microsoft.Network/virtualNetworks/ringleader-vnet" }
+  }
+
+  override_data {
+    target = data.azurerm_network_watcher.flow_logs[0]
+    values = { name = "NetworkWatcher_eastus", location = "eastus" }
+  }
+
+  assert {
+    condition     = azurerm_resource_group_template_deployment.flow_logs[0].resource_group_name == "NetworkWatcherRG"
+    error_message = "The flow log is not deployed into the Network Watcher's resource group. Azure requires a flow log beside its watcher, and a storage account in resource_group_name is one Ringleader's role may read and delete."
+  }
+
+  assert {
+    condition     = azurerm_resource_group_template_deployment.flow_logs[0].template_content == file("../arm/azuredeploy-flowlogs.json")
+    error_message = "The Terraform route does not deploy ../arm/azuredeploy-flowlogs.json verbatim, so the two routes can create different flow logs."
+  }
+
+  assert {
+    condition     = jsondecode(azurerm_resource_group_template_deployment.flow_logs[0].parameters_content).retentionDays.value == 365
+    error_message = "The flow log does not keep its records for 365 days by default."
+  }
+
+  assert {
+    condition     = jsondecode(azurerm_resource_group_template_deployment.flow_logs[0].parameters_content).networkWatcherName.value == "NetworkWatcher_eastus"
+    error_message = "The flow log is not recorded by the watcher Azure enables for the landing pad's region."
+  }
+}
+
+# Pointing the watcher's group at the group Ringleader's role reaches would put the records back
+# within its reach, so it is refused.
+run "flow_logs_in_ringleaders_resource_group_are_refused" {
+  command = plan
+
+  variables {
+    create_flow_logs                    = true
+    network_watcher_resource_group_name = "rg-defaults-test"
+  }
+
+  override_data {
+    target = data.azurerm_network_watcher.flow_logs[0]
+    values = { name = "NetworkWatcher_eastus", location = "eastus" }
+  }
+
+  expect_failures = [azurerm_resource_group_template_deployment.flow_logs]
+}
+
+# A watcher from another region cannot record this VNet's flows, so it is refused. Applied rather than
+# planned, because the watcher is read after the VNet it would record, and the VNet is new here.
+run "a_watcher_in_another_region_is_refused" {
+  command = apply
+
+  variables {
+    create_flow_logs     = true
+    network_watcher_name = "westeurope-watcher"
+  }
+
+  # A mocked provider invents ids the real provider refuses to parse on apply. These are
+  # scaffolding for the apply, not what the run is about.
+  override_resource {
+    target = azuread_application.workstations
+    values = { client_id = "00000000-0000-4000-8000-000000000001", id = "/applications/00000000-0000-4000-8000-000000000002" }
+  }
+
+  override_resource {
+    target = azurerm_virtual_network.workstations
+    values = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-defaults-test/providers/Microsoft.Network/virtualNetworks/ringleader-vnet" }
+  }
+
+  override_resource {
+    target = azurerm_subnet.workstations
+    values = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-defaults-test/providers/Microsoft.Network/virtualNetworks/ringleader-vnet/subnets/workstations" }
+  }
+
+  override_resource {
+    target = azurerm_subnet.gateway
+    values = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-defaults-test/providers/Microsoft.Network/virtualNetworks/ringleader-vnet/subnets/gateway" }
+  }
+
+  override_resource {
+    target = azurerm_subnet.governed
+    values = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-defaults-test/providers/Microsoft.Network/virtualNetworks/ringleader-vnet/subnets/governed" }
+  }
+
+  override_resource {
+    target = azurerm_network_security_group.workstations
+    values = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-defaults-test/providers/Microsoft.Network/networkSecurityGroups/ringleader-workstations-nsg" }
+  }
+
+  override_resource {
+    target = azurerm_network_security_group.gateway
+    values = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-defaults-test/providers/Microsoft.Network/networkSecurityGroups/ringleader-gateway-nsg" }
+  }
+
+  override_resource {
+    target = azurerm_nat_gateway.workstations
+    values = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-defaults-test/providers/Microsoft.Network/natGateways/ringleader-nat" }
+  }
+
+  override_resource {
+    target = azurerm_public_ip.nat
+    values = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-defaults-test/providers/Microsoft.Network/publicIPAddresses/ringleader-nat-pip" }
+  }
+
+  override_data {
+    target = data.azurerm_network_watcher.flow_logs[0]
+    values = { name = "westeurope-watcher", location = "westeurope" }
+  }
+
+  expect_failures = [data.azurerm_network_watcher.flow_logs]
+}
+
+# The switch cannot log a network this module did not create. It is refused, because a plan that
+# creates nothing would let a customer who set it for a compliance scan believe the VNet was logged.
+run "flow_logs_without_the_network_are_refused" {
+  command = plan
+
+  variables {
+    create_network   = false
+    create_flow_logs = true
+  }
+
+  expect_failures = [azurerm_resource_group_template_deployment.role]
+}

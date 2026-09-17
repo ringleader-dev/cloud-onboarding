@@ -65,6 +65,16 @@ resource "google_project_service" "compute" {
   project            = var.project_id
   service            = "compute.googleapis.com"
   disable_on_destroy = false
+
+  # Checked here because this resource is planned on every apply. Flow logs are declared on the
+  # subnets this module creates, so without them the switch would plan nothing, and a customer who
+  # set it for a compliance scan would believe the network was logged.
+  lifecycle {
+    precondition {
+      condition     = var.create_network || !var.create_flow_logs
+      error_message = "create_flow_logs is set, but create_network is false, so this module creates no subnet to record flow logs for. Turn on flow logs for your own subnet where it is declared, or unset create_flow_logs."
+    }
+  }
 }
 
 resource "google_project_service" "sts" {
@@ -576,6 +586,19 @@ resource "google_compute_network" "workstations" {
   }
 }
 
+# VPC Flow Logs, on every subnet this module creates, when create_flow_logs is set. The same three
+# values for all four resources below, and gcloud/network-landing-pad.sh passes them too. They are
+# the ones Security Command Center's flow log settings check asks for: 5-second aggregation, every
+# sampled entry kept, all metadata. That check follows CIS Google Cloud Foundations Benchmark 3.8.
+# Both routes write all three out: neither tool's default sampling rate is the 1.0 set here, and the
+# provider and gcloud default the metadata differently. The records go to Cloud Logging in this
+# project, and no role this module grants Ringleader carries a logging permission.
+locals {
+  flow_log_aggregation_interval = "INTERVAL_5_SEC"
+  flow_log_sampling             = 1.0
+  flow_log_metadata             = "INCLUDE_ALL_METADATA"
+}
+
 resource "google_compute_subnetwork" "workstations" {
   count                    = var.create_network ? 1 : 0
   project                  = var.project_id
@@ -584,6 +607,15 @@ resource "google_compute_subnetwork" "workstations" {
   network                  = google_compute_network.workstations[0].id
   ip_cidr_range            = local.subnet_cidr
   private_ip_google_access = true
+
+  dynamic "log_config" {
+    for_each = var.create_flow_logs ? [1] : []
+    content {
+      aggregation_interval = local.flow_log_aggregation_interval
+      flow_sampling        = local.flow_log_sampling
+      metadata             = local.flow_log_metadata
+    }
+  }
 }
 
 # A reserved, empty range beside the workstations subnet -- and it STAYS empty here.
@@ -607,6 +639,15 @@ resource "google_compute_subnetwork" "gateway" {
   network                  = google_compute_network.workstations[0].id
   ip_cidr_range            = local.gateway_subnet_cidr
   private_ip_google_access = true
+
+  dynamic "log_config" {
+    for_each = var.create_flow_logs ? [1] : []
+    content {
+      aggregation_interval = local.flow_log_aggregation_interval
+      flow_sampling        = local.flow_log_sampling
+      metadata             = local.flow_log_metadata
+    }
+  }
 }
 
 # An optional home for the WORKSTATIONS that gateway governs -- and the one place this module
@@ -630,6 +671,15 @@ resource "google_compute_subnetwork" "governed" {
   network                  = google_compute_network.workstations[0].id
   ip_cidr_range            = local.governed_subnet_cidr
   private_ip_google_access = true
+
+  dynamic "log_config" {
+    for_each = var.create_flow_logs ? [1] : []
+    content {
+      aggregation_interval = local.flow_log_aggregation_interval
+      flow_sampling        = local.flow_log_sampling
+      metadata             = local.flow_log_metadata
+    }
+  }
 }
 
 # Extra regions, in the SAME global VPC.
@@ -648,6 +698,15 @@ resource "google_compute_subnetwork" "additional" {
   network                  = google_compute_network.workstations[0].id
   ip_cidr_range            = each.value
   private_ip_google_access = true
+
+  dynamic "log_config" {
+    for_each = var.create_flow_logs ? [1] : []
+    content {
+      aggregation_interval = local.flow_log_aggregation_interval
+      flow_sampling        = local.flow_log_sampling
+      metadata             = local.flow_log_metadata
+    }
+  }
 }
 
 resource "google_compute_router" "additional" {

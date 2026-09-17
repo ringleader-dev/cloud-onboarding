@@ -92,6 +92,11 @@ output "additional_governed_subnet_ids" {
   description = "The subnets additional_governed_subnets created, keyed by your label. Each one is for ONE Ringleader namespace: name it as providerConfig.aws.subnetId on that namespace's workstations that carry an egress policy, and never give two namespaces the same one. governed_subnet_id is a separate subnet, for a namespace of its own."
 }
 
+output "flow_log_group_name" {
+  value       = var.create_network && var.create_flow_logs ? aws_cloudwatch_log_group.flow_logs[0].name : null
+  description = "The CloudWatch Logs group the VPC's flow logs are delivered to (only when create_flow_logs = true). Not for Ringleader: its role cannot read it."
+}
+
 output "private_route_table_id" {
   value       = var.create_network && var.create_nat_gateway ? aws_route_table.private[0].id : null
   description = "Route table sending 0.0.0.0/0 to the NAT gateway. Associate any subnet that should reach the internet without a public IP with it."

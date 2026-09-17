@@ -51,6 +51,14 @@
 #                pairs separated by commas. A pair's position is its
 #                slot, so leave a gap (a,,c) to remove one. "none"
 #                removes them all       (default: unset, which keeps the stack's)
+#   CREATE_FLOW_LOGS  true|false: record VPC flow logs for the VPC
+#                into a CloudWatch Logs group this stack creates.
+#                Bills per GB ingested and stored. Needs
+#                CREATE_NETWORK=true. false deletes the log group
+#                and its records               (default: unset, which keeps the stack's; off at creation)
+#   FLOW_LOG_RETENTION_DAYS  days the log group keeps records; one
+#                of the values CloudWatch Logs accepts
+#                                              (default: unset, which keeps the stack's; 365 at creation)
 #   VPC_CIDR     override the whole VPC range; empty derives it
 #                from REGION_INDEX                               (default: empty)
 #   SUBNET_CIDR  override the workstations subnet; empty derives
@@ -113,6 +121,12 @@ GATEWAY_SUBNET_CIDR="${GATEWAY_SUBNET_CIDR:-}"
 CREATE_GOVERNED_SUBNET="${CREATE_GOVERNED_SUBNET:-true}"
 GOVERNED_SUBNET_CIDR="${GOVERNED_SUBNET_CIDR:-}"
 ADDITIONAL_GOVERNED_SUBNETS="${ADDITIONAL_GOVERNED_SUBNETS:-}"
+# Flow logs are off when the stack is created: they bill and grant Ringleader nothing. Unlike the
+# switches above, these two are passed only when set, so a later run that does not mention them keeps
+# what the stack has. Turning flow logs off deletes the log group and every record in it, so only
+# CREATE_FLOW_LOGS=false does that.
+CREATE_FLOW_LOGS="${CREATE_FLOW_LOGS:-}"
+FLOW_LOG_RETENTION_DAYS="${FLOW_LOG_RETENTION_DAYS:-}"
 
 case "$ISSUER_URL" in
   https://*/) echo "ISSUER_URL must not end in a slash" >&2; exit 1 ;;
@@ -150,6 +164,7 @@ echo ">> secondary ssh cidr: ${SECONDARY_SSH_SOURCE_CIDR:-<none>}"
 echo ">> egress control:$EGRESS_CONTROL  vpc: ${EGRESS_VPC_ID:-<the one this stack creates>}"
 echo ">> gateway subnet:$CREATE_GATEWAY_SUBNET  governed subnet: $CREATE_GOVERNED_SUBNET  nat: $CREATE_NAT_GATEWAY"
 echo ">> additional governed subnets: ${ADDITIONAL_GOVERNED_SUBNETS:-<unchanged>}"
+echo ">> flow logs:     ${CREATE_FLOW_LOGS:-<unchanged>}  retention days: ${FLOW_LOG_RETENTION_DAYS:-<unchanged>}"
 
 # Substitute the one placeholder CloudFormation cannot parameterize (a condition KEY).
 # All four CIDR overrides are passed ONLY when set. `aws cloudformation deploy` keeps a stack's
@@ -173,6 +188,12 @@ if [ -n "$GATEWAY_SUBNET_CIDR" ]; then
 fi
 if [ -n "$GOVERNED_SUBNET_CIDR" ]; then
   CIDR_OVERRIDES+=("GovernedSubnetCidr=$GOVERNED_SUBNET_CIDR")
+fi
+if [ -n "$CREATE_FLOW_LOGS" ]; then
+  CIDR_OVERRIDES+=("CreateFlowLogs=$CREATE_FLOW_LOGS")
+fi
+if [ -n "$FLOW_LOG_RETENTION_DAYS" ]; then
+  CIDR_OVERRIDES+=("FlowLogRetentionDays=$FLOW_LOG_RETENTION_DAYS")
 fi
 
 # More governed subnets, one per namespace that runs its own gateway: a gateway steers a whole

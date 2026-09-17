@@ -75,6 +75,13 @@ variable "create_governed_subnet" {
   default = false
 }
 
+# Off by default: VPC Flow Logs bill per GiB and grant Ringleader nothing. Forwarded below, like the
+# rest.
+variable "create_flow_logs" {
+  type    = bool
+  default = false
+}
+
 module "ringleader" {
   source = "../.."
 
@@ -97,6 +104,8 @@ module "ringleader" {
   enable_egress_control  = var.enable_egress_control
   create_gateway_subnet  = var.create_gateway_subnet
   create_governed_subnet = var.create_governed_subnet
+
+  create_flow_logs = var.create_flow_logs
 }
 
 output "handoff" {

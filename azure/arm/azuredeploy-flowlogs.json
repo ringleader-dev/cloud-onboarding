@@ -1,0 +1,73 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "vnetId": {
+      "type": "String",
+      "metadata": {
+        "description": "Resource id of the landing pad's virtual network, whose flows this records."
+      }
+    },
+    "location": {
+      "type": "String",
+      "metadata": {
+        "description": "The virtual network's region. The storage account is created there, and the Network Watcher must be in it too."
+      }
+    },
+    "networkWatcherName": {
+      "type": "String",
+      "metadata": {
+        "description": "The Network Watcher for that region. Deploy this template into the resource group that holds it; Azure's automatic one is usually NetworkWatcher_<region> in NetworkWatcherRG."
+      }
+    },
+    "retentionDays": {
+      "type": "Int",
+      "metadata": {
+        "description": "How many days the storage account keeps each flow log record. deploy.sh and the Terraform module accept 1 to 365."
+      }
+    }
+  },
+  "variables": {
+    "storageAccountName": "[concat('flowlogs', uniqueString(parameters('vnetId')))]",
+    "flowLogName": "[concat(last(split(parameters('vnetId'), '/')), '-', uniqueString(parameters('vnetId')))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2023-05-01",
+      "name": "[variables('storageAccountName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Standard_LRS"
+      },
+      "kind": "StorageV2",
+      "properties": {
+        "minimumTlsVersion": "TLS1_2",
+        "supportsHttpsTrafficOnly": true,
+        "allowBlobPublicAccess": false
+      }
+    },
+    {
+      "type": "Microsoft.Network/networkWatchers/flowLogs",
+      "apiVersion": "2024-10-01",
+      "name": "[concat(parameters('networkWatcherName'), '/', variables('flowLogName'))]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+      ],
+      "properties": {
+        "targetResourceId": "[parameters('vnetId')]",
+        "storageId": "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]",
+        "enabled": true,
+        "retentionPolicy": {
+          "days": "[parameters('retentionDays')]",
+          "enabled": true
+        },
+        "format": {
+          "type": "JSON",
+          "version": 2
+        }
+      }
+    }
+  ]
+}

@@ -126,6 +126,16 @@ resource "azurerm_resource_group_template_deployment" "role" {
     enableArtifactStorage       = { value = var.enable_artifact_storage }
     artifactStorageAccountName  = { value = var.artifact_storage_account_name }
   })
+
+  # Checked here because this deployment is planned on every apply. Flow logs are declared on the
+  # VNet this module creates, so without one the switch would plan nothing, and a customer who set it
+  # for a compliance scan would believe the network was logged.
+  lifecycle {
+    precondition {
+      condition     = var.create_network || !var.create_flow_logs
+      error_message = "create_flow_logs is set, but create_network is false, so this module creates no VNet to record flow logs for. Turn on flow logs for your own VNet where it is declared, or unset create_flow_logs."
+    }
+  }
 }
 
 # --- Network landing pad, on by default (egress out; SSH in via your rule and Ringleader's) ---
@@ -526,4 +536,64 @@ resource "azurerm_subnet_network_security_group_association" "governed_additiona
   for_each                  = azurerm_subnet.governed_additional
   subnet_id                 = each.value.id
   network_security_group_id = azurerm_network_security_group.workstations[0].id
+}
+
+# --- Flow logs for the VNet, off unless create_flow_logs is set ------------------------------
+#
+# The VNet's traffic, recorded by Network Watcher and written to a storage account created for it.
+# These are the customer's audit record of the network, so none of it is placed where Ringleader's
+# role reaches. The custom role above is scoped to resource_group_name, and with
+# enable_artifact_storage on it may read and delete every blob in that group, and on the managed
+# width delete its storage accounts too.
+# So the flow log and its storage account are deployed into the Network Watcher's resource group, which
+# Azure requires for the flow log anyway, and where Ringleader holds nothing.
+#
+# Deployed from ../arm/azuredeploy-flowlogs.json, the same file the ARM route deploys, so the two
+# routes create the same storage account and flow log with the same names. It also keeps the
+# provider floor where it is: the native flow-log resource can target a VNet only from azurerm
+# 4.11. The template follows the four rules on the role deployment above for the same reason.
+#
+# The template does not look the watcher up, so it is read here first, and a subscription without
+# one fails naming the watcher. The read waits for the VNet: Azure enables a region's watcher when
+# a VNet is created there, so on the apply that creates the region's first VNet the watcher does not
+# exist at plan time. The default name is built from location written the way Azure writes region
+# names, lowercase with no spaces. Destroying the deployment, which is what turning create_flow_logs
+# off does, deletes the resources it created: the flow log and the storage account, with every
+# record in it.
+
+data "azurerm_network_watcher" "flow_logs" {
+  count               = var.create_network && var.create_flow_logs ? 1 : 0
+  name                = coalesce(var.network_watcher_name, "NetworkWatcher_${lower(replace(var.location, " ", ""))}")
+  resource_group_name = var.network_watcher_resource_group_name
+  depends_on          = [azurerm_virtual_network.workstations]
+
+  lifecycle {
+    postcondition {
+      condition     = lower(replace(self.location, " ", "")) == lower(replace(var.location, " ", ""))
+      error_message = "The Network Watcher ${self.name} is in ${self.location}, but the landing pad is in ${var.location}. A flow log is recorded by the watcher for its VNet's own region; set network_watcher_name to that one."
+    }
+  }
+}
+
+resource "azurerm_resource_group_template_deployment" "flow_logs" {
+  count               = var.create_network && var.create_flow_logs ? 1 : 0
+  name                = substr("${var.name_prefix}-flow-logs-${var.resource_group_name}", 0, 64)
+  resource_group_name = var.network_watcher_resource_group_name
+  deployment_mode     = "Incremental"
+
+  template_content = file("${path.module}/../arm/azuredeploy-flowlogs.json")
+
+  parameters_content = jsonencode({
+    vnetId             = { value = azurerm_virtual_network.workstations[0].id }
+    location           = { value = var.location }
+    networkWatcherName = { value = data.azurerm_network_watcher.flow_logs[0].name }
+    retentionDays      = { value = var.flow_log_retention_days }
+  })
+
+  lifecycle {
+    precondition {
+      condition     = lower(var.network_watcher_resource_group_name) != lower(var.resource_group_name)
+      error_message = "network_watcher_resource_group_name is resource_group_name, the group Ringleader's role reaches. The flow log's storage account would then be one Ringleader can read and delete. Use a Network Watcher in a resource group of its own."
+    }
+  }
 }

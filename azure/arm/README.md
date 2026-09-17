@@ -13,6 +13,7 @@ it in one idempotent run.
 |---|---|
 | [`azuredeploy.json`](azuredeploy.json) | ARM template: the custom least-privilege role definition + a role assignment, scoped to the resource group. Deploy at **resource-group scope**. Takes the service-principal **object id** as `principalId`. It is the single source of the action list — the [Terraform module](../terraform/) deploys this same file. |
 | [`azuredeploy-network.json`](azuredeploy-network.json) | ARM template: the **optional** landing pad (a VNet, the `workstations` subnet, a NAT gateway and an NSG per subnet), with inbound rules only for the CIDRs you name. Outputs `subnetId`, `governedSubnetId`, `additionalGovernedSubnetIds` and `gatewaySubnetId`. Deploy at resource-group scope, after `azuredeploy.json`. |
+| [`azuredeploy-flowlogs.json`](azuredeploy-flowlogs.json) | ARM template: the **optional** VNet flow log and the storage account it writes to. Deploy it into the **Network Watcher's resource group**, never into the one the role is scoped to. The [Terraform module](../terraform/) deploys this same file. |
 | [`azuredeploy.parameters.example.json`](azuredeploy.parameters.example.json) | Example parameters file. |
 | [`deploy.sh`](deploy.sh) | End-to-end wrapper: creates the app + SP + OIDC federated credential with `az`, then deploys the template. |
 
@@ -161,6 +162,19 @@ it may carry no `outputs` block and no parameter default it does not pass (see
 *Editing this template* below). A landing pad is useless without an output (you
 need the subnet id back), so the two cannot be one file. Two deployments keep
 both properties.
+
+## Optional flow logs
+
+Add `CREATE_FLOW_LOGS=true` and `deploy.sh` also deploys `azuredeploy-flowlogs.json` into the
+Network Watcher's resource group. It passes the VNet's id and region, the watcher's name, and
+`FLOW_LOG_RETENTION_DAYS` (365). The watcher defaults to `NetworkWatcher_<region>` in
+`NetworkWatcherRG`, and `NETWORK_WATCHER_NAME` and `NETWORK_WATCHER_RG` override it. `deploy.sh`
+looks the watcher up before it deploys. If the watcher does not exist or is in another region, it
+stops and names the watcher. It also refuses `NETWORK_WATCHER_RG=$RG`, because the role reaches that
+group. See [`../README.md`](../README.md#optional-flow-logs-for-the-vnet).
+
+The Terraform module deploys the same file, so it is held to the rules in *Editing this template*
+below as well. It carries no `outputs` block and no parameter default.
 
 ## Deploy the template by itself
 

@@ -701,7 +701,17 @@ data "aws_availability_zones" "available" {
 # The region the CALLER configured on its provider. This module declares no provider block, so
 # this is the only way it can learn where it is being applied -- which is what binds an index
 # in region_indexes to a region rather than to whichever tfvars file was reached for.
-data "aws_region" "current" {}
+data "aws_region" "current" {
+  # Checked here because this data source is read on every apply. Flow logs are declared on the
+  # VPC this module creates, so without one the switch would plan nothing, and a customer who set it
+  # for a compliance scan would believe the network was logged.
+  lifecycle {
+    precondition {
+      condition     = var.create_network || !var.create_flow_logs
+      error_message = "create_flow_logs is set, but create_network is false, so this module creates no VPC to record flow logs for. Turn on flow logs for your own VPC where it is declared, or unset create_flow_logs."
+    }
+  }
+}
 
 locals {
   # Read ONCE, deliberately: three call sites reading it separately would be three deprecation
@@ -1030,4 +1040,103 @@ resource "aws_subnet" "governed_additional" {
   availability_zone       = coalesce(var.availability_zone, data.aws_availability_zones.available[0].names[0])
   map_public_ip_on_launch = false
   tags                    = merge(var.tags, { Name = "ringleader-governed-${each.key}" })
+}
+
+# --- Flow logs for the VPC, off unless create_flow_logs is set --------------------------------
+#
+# All traffic in the VPC, accepted and rejected, recorded by AWS itself and delivered to a CloudWatch
+# Logs group this module creates. The group, the flow log and the role that delivers
+# into the group are the customer's audit record of the network, so none of them is Ringleader's:
+# the role Ringleader assumes holds no CloudWatch Logs permission, and this role cannot be assumed
+# by Ringleader at all. It is off by default because it bills, per GB ingested and stored, and
+# grants Ringleader nothing.
+#
+# The delivery role is the one other IAM role in this module, and the trust guard in this repository
+# holds it to its shape: the VPC Flow Logs service is its only principal, through its own trust
+# document, pinned to this account. It sits at the default path, outside the default
+# workstation_identity_path, and EC2 could not assume it anyway. name_prefix rather than name,
+# because an IAM role is global and a second region's landing pad declares a second one.
+
+resource "aws_cloudwatch_log_group" "flow_logs" {
+  count             = var.create_network && var.create_flow_logs ? 1 : 0
+  name              = "ringleader-workstations-flow-logs"
+  retention_in_days = var.flow_log_retention_days
+  tags              = merge(var.tags, { Name = "ringleader-workstations-flow-logs" })
+}
+
+# The confused-deputy conditions AWS recommends for this role: the service may assume it only for a
+# flow log in this account and region. The flow log's own id does not exist until after the role, so
+# the ARN ends in the wildcard AWS documents for that case.
+data "aws_iam_policy_document" "flow_logs_trust" {
+  count = var.create_network && var.create_flow_logs ? 1 : 0
+
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["vpc-flow-logs.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      values   = ["arn:${data.aws_partition.current.partition}:ec2:${local.region}:${data.aws_caller_identity.current.account_id}:vpc-flow-log/*"]
+    }
+  }
+}
+
+# The five actions AWS documents as the minimum for flow log delivery. Four are scoped to the one log
+# group and its streams. logs:DescribeLogGroups cannot be: it authorizes against no resource type, so
+# it takes "*". It lists log groups and their settings and reads no log events. A flow log whose role
+# lacks an action AWS lists reports only "Access error".
+data "aws_iam_policy_document" "flow_logs_delivery" {
+  count = var.create_network && var.create_flow_logs ? 1 : 0
+
+  statement {
+    effect  = "Allow"
+    actions = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents", "logs:DescribeLogStreams"]
+    resources = [
+      aws_cloudwatch_log_group.flow_logs[0].arn,
+      "${aws_cloudwatch_log_group.flow_logs[0].arn}:log-stream:*",
+    ]
+  }
+
+  statement {
+    effect    = "Allow"
+    actions   = ["logs:DescribeLogGroups"]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role" "flow_logs" {
+  count              = var.create_network && var.create_flow_logs ? 1 : 0
+  name_prefix        = "ringleader-flow-logs-"
+  description        = "Lets VPC Flow Logs deliver the ringleader-workstations VPC's flow records to its log group."
+  assume_role_policy = data.aws_iam_policy_document.flow_logs_trust[0].json
+  tags               = var.tags
+}
+
+resource "aws_iam_role_policy" "flow_logs" {
+  count  = var.create_network && var.create_flow_logs ? 1 : 0
+  name   = "deliver-flow-logs"
+  role   = aws_iam_role.flow_logs[0].id
+  policy = data.aws_iam_policy_document.flow_logs_delivery[0].json
+}
+
+resource "aws_flow_log" "workstations" {
+  count                = var.create_network && var.create_flow_logs ? 1 : 0
+  vpc_id               = aws_vpc.workstations[0].id
+  traffic_type         = "ALL"
+  log_destination_type = "cloud-watch-logs"
+  log_destination      = aws_cloudwatch_log_group.flow_logs[0].arn
+  iam_role_arn         = aws_iam_role.flow_logs[0].arn
+  tags                 = merge(var.tags, { Name = "ringleader-workstations" })
 }

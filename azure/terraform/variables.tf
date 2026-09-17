@@ -536,3 +536,65 @@ variable "subnet_prefix" {
     error_message = "subnet_prefix must be a CIDR block, e.g. 10.70.1.0/24."
   }
 }
+
+# --- Flow logs for the VNet this module creates (OFF by default) -----------------------------
+
+variable "create_flow_logs" {
+  type        = bool
+  default     = false
+  description = <<-EOT
+    Record virtual network flow logs for the VNet this module creates, written to a storage
+    account created for them. Off by default. Needs create_network; a network you bring yourself
+    is yours to log.
+
+    It is off because it bills and grants Ringleader nothing. In most regions Azure charges per GB
+    of flow logs collected beyond 5 GB a month per subscription, plus the storage. It is here
+    because compliance scans such as Azure Policy's "Audit flow logs configuration for every
+    virtual network" expect flow logs on every virtual network. These are VNet flow logs, not NSG
+    flow logs, which Azure no longer lets anyone create.
+
+    The flow log and its storage account are created in the Network Watcher's resource group, not
+    in resource_group_name. Ringleader's custom role is scoped to resource_group_name, and with
+    enable_artifact_storage on it may read and delete every blob there. The Network Watcher's
+    resource group is outside that scope, so Ringleader can neither read nor delete the records.
+    Whoever applies this needs to create resources in the Network Watcher's resource group as
+    well; see azure/README.md.
+
+    Turning it off again deletes the flow log and its storage account, with every record in it.
+  EOT
+}
+
+variable "flow_log_retention_days" {
+  type        = number
+  default     = 365
+  description = "How many days the storage account keeps each flow log record, when create_flow_logs is set. This module accepts 1 to 365."
+
+  validation {
+    condition     = floor(var.flow_log_retention_days) == var.flow_log_retention_days && var.flow_log_retention_days >= 1 && var.flow_log_retention_days <= 365
+    error_message = "flow_log_retention_days must be a whole number from 1 to 365."
+  }
+}
+
+variable "network_watcher_name" {
+  type        = string
+  default     = null
+  description = <<-EOT
+    The Network Watcher that records the flow log, when create_flow_logs is set. When unset, which
+    is the default, it is NetworkWatcher_<location>, the name Azure's automatic watcher usually
+    has. Set it if your subscription's watcher has another name, for example <location>-watcher
+    from the Azure CLI.
+
+    It must exist and be in location. Otherwise the plan or apply fails, naming it.
+  EOT
+}
+
+variable "network_watcher_resource_group_name" {
+  type        = string
+  default     = "NetworkWatcherRG"
+  description = <<-EOT
+    The resource group that holds network_watcher_name, when create_flow_logs is set. The flow log
+    and its storage account are created here too, because Azure requires a flow log to live beside
+    its Network Watcher. The default is the group Azure creates for its automatic watchers. It must
+    not be resource_group_name, the group Ringleader's role reaches.
+  EOT
+}

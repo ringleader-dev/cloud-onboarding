@@ -17,6 +17,7 @@ OIDC provider (or the role).
 | **IAM OIDC identity provider** | trusts Ringleader's per-org issuer (`<issuer>/org/<org-id>`) with client id `<issuer>/org/<org-id>/aws` |
 | **IAM role** (`ringleader-workstations`) | assumed via `sts:AssumeRoleWithWebIdentity`; trust pins **both** `aud` and `sub` to your org; permissions cover only the EC2 workstation lifecycle + the SSM public-parameter read that resolves an AMI |
 | _optional_ **VPC + public subnet + internet gateway + security group** | a landing pad: egress out (so a workstation can come up), inbound SSH from the CIDRs you name, and — only if you ask — a secondary SSH port |
+| _optional, off by default_ **VPC flow log + CloudWatch Logs group + delivery role** | a record of all traffic in that VPC, kept for 365 days by default. See [flow logs](#optional-flow-logs-for-the-vpc) |
 
 The permissions policy's **base** is exactly these four statements — no wildcard on any action:
 
@@ -472,6 +473,54 @@ a bucket policy is exactly that.
 `artifact_storage_grant` (`managed` or `named`) becomes the `Storage` object's `spec.grant`. On
 the named width `artifact_storage_bucket` becomes its `spec.bucket`; on the managed width
 Ringleader names the bucket itself, so ask it what it created rather than guessing.
+
+## Optional: flow logs for the VPC
+
+A VPC flow log records the IP traffic in the VPC: source and destination, ports, bytes, and whether
+security groups and network ACLs accepted or rejected it. Compliance scans such as AWS Security
+Hub's EC2.6 check, which follows the CIS AWS Foundations Benchmark, expect a flow log on every VPC.
+This onboarding can create one for the VPC it creates.
+
+Flow logs are off by default, because they cost money and Ringleader does not use them. To turn
+them on, set one variable and apply again:
+
+```hcl
+create_flow_logs = true
+```
+
+On the CloudFormation path, run `deploy.sh` with `CREATE_FLOW_LOGS=true`. Either way the apply adds
+resources and changes none you already have. If you bring your own network (`create_network =
+false`), the plan or the stack refuses the switch, because there is no VPC here to log.
+
+With the switch on, you get a flow log, a log group and a delivery role:
+
+- The flow log records all traffic in the VPC, accepted and rejected.
+- The CloudWatch Logs group, `ringleader-workstations-flow-logs`, keeps the records for
+  `flow_log_retention_days` (`FLOW_LOG_RETENTION_DAYS`), 365 by default. Unless its setting is
+  changed, AWS Security Hub's CloudWatch.16 check fails a log group kept for less than a year.
+- The IAM role delivers the records into that group. Only the VPC Flow Logs service can assume it,
+  and only for a flow log in this account and region.
+
+**`deploy.sh` keeps what the stack has.** A later run that sets neither `CREATE_FLOW_LOGS` nor
+`FLOW_LOG_RETENTION_DAYS` leaves both as they are. Only `CREATE_FLOW_LOGS=false` turns flow logs
+off.
+
+**What it costs.** AWS bills the records as vended logs in CloudWatch Logs. In us-east-1 that is
+$0.50 per GB ingested for the first 10 TB a month, and $0.03 per GB-month to store them compressed.
+The volume grows with the traffic your workstations send.
+
+**Who can read them.** Ringleader's role holds no CloudWatch Logs permission, so it can neither read
+nor delete the log group. The delivery role cannot be used to reach the records either: its trust
+policy admits only VPC Flow Logs, so no instance can run as it.
+
+**What the delivery role holds.** It holds the five actions AWS documents as the minimum for
+delivering flow logs to CloudWatch Logs. `logs:CreateLogGroup`, `logs:CreateLogStream`,
+`logs:PutLogEvents` and `logs:DescribeLogStreams` are scoped to the one log group and its streams.
+`logs:DescribeLogGroups` is granted on `*`, because IAM offers no narrower resource for it. It lists
+log groups and their settings, and reads no log events.
+
+**Turning them off again** deletes the flow log, the role, and the log group with every record in
+it.
 
 ## A second region: name it, do not renumber it
 
