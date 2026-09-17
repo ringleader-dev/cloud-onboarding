@@ -146,3 +146,74 @@ run "the_default_role_can_grow_a_root_volume_and_read_its_state" {
     error_message = "actions_granted does not list ec2:DescribeVolumesModifications on the defaults, so a later Ringleader that waits for a grow to reach completed would ask every customer to apply this module again."
   }
 }
+
+# Flow logs are the one network piece that is OFF by default, and on purpose: they bill for every GB
+# CloudWatch Logs ingests and stores, and they grant Ringleader nothing, so a customer who never asked
+# for them must not start paying. Asserted on the resources as well as the variable, so a count that
+# stops following the switch is caught too.
+run "flow_logs_stay_off_until_asked_for" {
+  command = plan
+
+  assert {
+    condition     = var.create_flow_logs == false
+    error_message = "create_flow_logs defaults to true. Flow logs bill per GB ingested and stored and grant Ringleader nothing, so every customer who re-applies would start paying for logs they never asked for."
+  }
+
+  assert {
+    condition     = length(aws_flow_log.workstations) == 0 && length(aws_cloudwatch_log_group.flow_logs) == 0 && length(aws_iam_role.flow_logs) == 0
+    error_message = "A flow log, its log group or its delivery role is planned on the defaults, so a customer who never set create_flow_logs gets a changed plan and a new bill."
+  }
+}
+
+# Switched on, the VPC gets a flow log for ALL traffic, into a log group that keeps a year, delivered
+# by a role only the VPC Flow Logs service can assume and that may write only to that group.
+run "flow_logs_record_every_connection_for_a_year" {
+  command = plan
+
+  variables {
+    create_flow_logs = true
+  }
+
+  override_data {
+    target = data.aws_iam_policy_document.flow_logs_trust[0]
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
+
+  override_data {
+    target = data.aws_iam_policy_document.flow_logs_delivery[0]
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
+
+  assert {
+    condition     = length(aws_flow_log.workstations) == 1 && aws_flow_log.workstations[0].traffic_type == "ALL"
+    error_message = "create_flow_logs = true does not plan one flow log recording ALL traffic. A flow log of ACCEPT or REJECT alone leaves half the connections out of the record a compliance scan asks for."
+  }
+
+  assert {
+    condition     = aws_flow_log.workstations[0].log_destination_type == "cloud-watch-logs"
+    error_message = "The flow log does not deliver to CloudWatch Logs, where its log group's retention is what keeps the records for a year."
+  }
+
+  assert {
+    condition     = aws_cloudwatch_log_group.flow_logs[0].retention_in_days == 365
+    error_message = "The flow log group does not keep its records for 365 days by default: got ${aws_cloudwatch_log_group.flow_logs[0].retention_in_days}."
+  }
+
+  assert {
+    condition     = aws_iam_role.flow_logs[0].path == null || aws_iam_role.flow_logs[0].path == "/"
+    error_message = "The delivery role is not at the default path. Under workstation_identity_path the iam:PassRole grant for workstation identities would reach it."
+  }
+}
+
+# The switch cannot log a network this module did not create. It is refused, because a plan that
+# creates nothing would let a customer who set it for a compliance scan believe the VPC was logged.
+run "flow_logs_without_the_network_are_refused" {
+  command = plan
+
+  variables {
+    create_network   = false
+    create_flow_logs = true
+  }
+
+  expect_failures = [data.aws_region.current]
+}

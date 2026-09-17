@@ -98,6 +98,28 @@ variable "vnet_address_space" {
   default = null
 }
 
+# Off by default: VNet flow logs bill per GB and grant Ringleader nothing. Forwarded below, like the
+# rest, with the retention and the watcher's name and group.
+variable "create_flow_logs" {
+  type    = bool
+  default = false
+}
+
+variable "flow_log_retention_days" {
+  type    = number
+  default = 365
+}
+
+variable "network_watcher_name" {
+  type    = string
+  default = null
+}
+
+variable "network_watcher_resource_group_name" {
+  type    = string
+  default = "NetworkWatcherRG"
+}
+
 # ONE identity serves every region. The first region creates it; set create_identity = false in
 # every region after that and pass the first one's two ids, or you get a second app registration
 # with its own client id that cannot act in the first region's resource group.
@@ -139,6 +161,11 @@ module "ringleader" {
   location           = var.location
   region_indexes     = var.region_indexes
   vnet_address_space = var.vnet_address_space
+
+  create_flow_logs                    = var.create_flow_logs
+  flow_log_retention_days             = var.flow_log_retention_days
+  network_watcher_name                = var.network_watcher_name
+  network_watcher_resource_group_name = var.network_watcher_resource_group_name
 
   # The identity half of a second region: reuse the first one's rather than minting another.
   create_identity              = var.create_identity

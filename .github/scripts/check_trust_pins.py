@@ -134,7 +134,6 @@ ORG_UID = "var.org_uid"
 # each function, the pin is held to a closed grammar -- a literal, an interpolation, a
 # reference -- the same "refuse rather than half-support" stance taken for `dynamic` blocks.
 CALL_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*\s*\(")
-ROLE_BLOCK_RE = re.compile(r'resource\s+"aws_iam_role"\s+"[^"]+"\s*\{')
 ASSUME_ROLE_POLICY_RE = re.compile(r"assume_role_policy\s*=\s*(\S+)")
 TRUST_DOCUMENT = "data.aws_iam_policy_document.trust.json"
 STATEMENT_RE = re.compile(r"statement\s*\{")
@@ -202,6 +201,25 @@ def brace_block(src: str, what: str) -> str:
     raise GuardError(f"unbalanced braces: could not find the end of {what}")
 
 
+# The role Ringleader federates into, by resource name. Every other role in the module must be a
+# SERVICE role from the allowlist below, or the module is refused.
+FEDERATED_ROLE = "ringleader"
+
+# The roles a module may declare beside Ringleader's, each held to the one AWS service allowed to
+# assume it: role resource name -> (the trust document it must name, that document's one principal).
+# A service principal can act for a resource in another account, which AWS calls the confused deputy
+# problem, so each statement must also pin aws:SourceAccount to this account with StringEquals. AWS
+# recommends aws:SourceArn as well; this guard does not check it.
+SERVICE_ROLES = {
+    "flow_logs": ("flow_logs_trust", "vpc-flow-logs.amazonaws.com"),
+}
+
+# The lines a service role's trust statement may carry outside its `principals` and `condition`
+# blocks. Anything else (`not_actions`, `not_principals`, a second spelling of a principal) is a
+# shape this guard does not judge, so it is refused.
+SERVICE_STATEMENT_ATTRS = ("sid", "effect", "actions")
+
+
 def terraform_wiring(src: str, path: str) -> None:
     """Assert the role Ringleader assumes is governed by the document this guard reads.
 
@@ -210,16 +228,33 @@ def terraform_wiring(src: str, path: str) -> None:
     `aws_iam_policy_document` added alongside it. The named block is then dead code, every
     check passes, `terraform validate` is happy (an unused data source is not an error), and
     every customer applying the module gets a role that trusts the whole fleet. So the guard
-    checks the WIRING first, and there must be exactly one role to wire.
+    checks the WIRING first.
+
+    Every other role is a second trust policy, and so a second way into the account. It is
+    accepted only when it is on SERVICE_ROLES and its trust document admits that one AWS service
+    and nothing else (`terraform_service_role`).
     """
-    roles = [m for m in ROLE_BLOCK_RE.finditer(src)]
-    if len(roles) != 1:
+    roles = hcl_resources(src, "aws_iam_role")
+    federated = [body for name, body in roles if name == FEDERATED_ROLE]
+    if len(federated) != 1:
         raise GuardError(
-            f"{path}: found {len(roles)} `aws_iam_role` resources, expected exactly 1.\n\n"
-            "Each role carries its own trust policy, and this guard checks the one document named\n"
-            "`trust`. A second role is a second way into the account that nothing here reads."
+            f"{path}: found {len(federated)} `aws_iam_role.{FEDERATED_ROLE}` resources, expected exactly 1.\n\n"
+            "That is the role Ringleader federates into, and this guard checks the trust document it\n"
+            "names. Renaming it leaves the guard reading nothing."
         )
-    body = brace_block(src[roles[0].end() - 1 :], f"{path}'s aws_iam_role")
+    for name, body in roles:
+        if name == FEDERATED_ROLE:
+            continue
+        if name not in SERVICE_ROLES:
+            raise GuardError(
+                f"{path}: found an `aws_iam_role.{name}` beside `aws_iam_role.{FEDERATED_ROLE}`.\n\n"
+                "Each role carries its own trust policy, and this guard checks the one document named\n"
+                "`trust`. A second role is a second way into the account that nothing here reads. If it\n"
+                "is a role one AWS service assumes, add it to SERVICE_ROLES, which checks its trust."
+            )
+        terraform_service_role(src, path, name, body)
+
+    body = federated[0]
     m = ASSUME_ROLE_POLICY_RE.search(body)
     if m is None:
         raise GuardError(
@@ -235,6 +270,84 @@ def terraform_wiring(src: str, path: str) -> None:
             "customers actually apply goes unread -- which is how an unpinned trust policy ships\n"
             "through a green build."
         )
+
+
+def terraform_service_role(src: str, path: str, name: str, body: str) -> None:
+    """Assert a service role trusts its one AWS service, through its own document, and nothing else."""
+    document, service = SERVICE_ROLES[name]
+    m = ASSUME_ROLE_POLICY_RE.search(body)
+    wants = (
+        f"data.aws_iam_policy_document.{document}.json",
+        f"data.aws_iam_policy_document.{document}[0].json",
+    )
+    if m is None or m.group(1) not in wants:
+        raise GuardError(
+            f"{path}: `aws_iam_role.{name}`'s `assume_role_policy` is "
+            f"{m.group(1) if m else 'missing'}, want {wants[0]}.\n\n"
+            f"That role may be assumed by {service} alone, and this guard reads the document that says\n"
+            "so. Pointed anywhere else, the `trust` document above included, it is a second way into\n"
+            "the account that nothing here reads."
+        )
+    blocks = list(re.finditer(r'data\s+"aws_iam_policy_document"\s+"' + re.escape(document) + r'"\s*\{', src))
+    if len(blocks) != 1:
+        raise GuardError(
+            f'{path}: found {len(blocks)} `data "aws_iam_policy_document" "{document}"` blocks, expected exactly 1.'
+        )
+    block = brace_block(src[blocks[0].end() - 1 :], f"{path}'s {document} document")
+
+    def refuse(what: str) -> GuardError:
+        return GuardError(
+            f"{path}: the `{document}` document {what}.\n\n"
+            f"It is the trust policy of `aws_iam_role.{name}`, which only {service} may assume. This guard\n"
+            "holds it to one shape: statements allowing sts:AssumeRole, each naming that one service\n"
+            "principal. Anything else could admit a principal this guard never reads."
+        )
+
+    if "dynamic" in block:
+        raise refuse("uses a `dynamic` block, which no text scan can evaluate")
+    statements = [brace_block(block[s.end() - 1 :], f"a statement of {document}") for s in STATEMENT_RE.finditer(block)]
+    if not statements:
+        raise refuse("has no `statement` block")
+    rest = block[1:-1]
+    for stmt in statements:
+        rest = rest.replace(stmt, "", 1)
+    for line in rest.split("\n"):
+        line = line.strip()
+        if line and line not in ("statement", "{", "}") and not re.match(r"^count\s*=", line):
+            raise refuse(f"carries `{line}` outside its statements, which can merge in statements this guard never reads")
+    for stmt in statements:
+        inner = stmt[1:-1]
+        principals = [brace_block(inner[p.end() - 1 :], "a principals block") for p in re.finditer(r"\bprincipals\s*\{", inner)]
+        conditions = [brace_block(inner[c.end() - 1 :], "a condition block") for c in CONDITION_RE.finditer(inner)]
+        if not principals:
+            raise refuse("has a statement naming no `principals`")
+        for block_ in principals + conditions:
+            inner = inner.replace(block_, "", 1)
+        for line in inner.split("\n"):
+            line = line.strip()
+            if not line or line in ("principals", "condition", "{", "}"):
+                continue
+            key = line.split("=", 1)[0].strip()
+            if key not in SERVICE_STATEMENT_ATTRS:
+                raise refuse(f"has a statement carrying `{line}`")
+        if hcl_attr(stmt, "actions") != '["sts:AssumeRole"]':
+            raise refuse(f"has a statement whose actions are {hcl_attr(stmt, 'actions')}, want [\"sts:AssumeRole\"]")
+        if not any(
+            hcl_attr(c, "test") == '"StringEquals"'
+            and hcl_attr(c, "variable") == '"aws:SourceAccount"'
+            and hcl_attr(c, "values") == "[data.aws_caller_identity.current.account_id]"
+            for c in conditions
+        ):
+            raise refuse(
+                "has a statement with no StringEquals condition pinning aws:SourceAccount to "
+                "data.aws_caller_identity.current.account_id, so the service could assume the role for another account"
+            )
+        for principal in principals:
+            if hcl_attr(principal, "type") != '"Service"' or hcl_attr(principal, "identifiers") != f'["{service}"]':
+                raise refuse(
+                    f"names the principal {hcl_attr(principal, 'type')} {hcl_attr(principal, 'identifiers')}, "
+                    f'want "Service" ["{service}"]'
+                )
 
 
 def split_top_level(expr: str) -> list[str]:
@@ -424,6 +537,91 @@ def _list_entries(lines: list[str], start: int) -> list[list[str]]:
     return entries
 
 
+# The role Ringleader federates into, and the service roles the template may declare beside it, each
+# with the one AWS service principal allowed to assume it. The Terraform twins are FEDERATED_ROLE and
+# SERVICE_ROLES; the two must name the same services.
+CFN_FEDERATED_ROLE = "RingleaderRole"
+CFN_SERVICE_ROLES = {
+    "FlowLogsRole": "vpc-flow-logs.amazonaws.com",
+}
+SOURCE_ACCOUNT_RE = re.compile(r"""^\s*(?:"aws:SourceAccount"|'aws:SourceAccount'|aws:SourceAccount)\s*:\s*!Ref\s+AWS::AccountId\s*$""")
+YAML_SCALAR_RE = re.compile(r"""^\s*([A-Za-z]+):\s*(?:"([^"]*)"|'([^']*)'|([^\s"'{}\[\]]+))\s*$""")
+
+
+def _cloudformation_resource(lines: list[str], index: int) -> str | None:
+    """The name of the `Resources:` entry that lines[index] sits in, or None outside `Resources:`."""
+    tops = [i for i in _find_key(lines, "Resources") if _indent(lines[i]) == 0]
+    if len(tops) != 1 or index < tops[0]:
+        return None
+    body = _child_block(lines, tops[0])
+    if not body:
+        return None
+    base = _indent(body[0])
+    owner = None
+    for line in lines[tops[0] + 1 : index]:
+        if _indent(line) == 0:
+            return None
+        if _indent(line) == base:
+            owner = line.strip().rstrip(":")
+    return owner
+
+
+def cloudformation_service_role(lines: list[str], anchor: int, path: str, owner: str) -> None:
+    """Assert a service role's trust document admits its one AWS service and nothing else.
+
+    Held to one shape rather than parsed: every statement allows `sts:AssumeRole`, its `Principal:`
+    is a block mapping of exactly one line, `Service: <that service>`, and its `Condition:` pins
+    `aws:SourceAccount` to `!Ref AWS::AccountId` with `StringEquals`. A second principal line, a
+    flow-style or conditional principal, and a `NotPrincipal` are all refused, because each can
+    admit someone this guard never reads.
+    """
+    service = CFN_SERVICE_ROLES[owner]
+
+    def refuse(what: str) -> GuardError:
+        return GuardError(
+            f"{path}: {owner}'s AssumeRolePolicyDocument {what}.\n\n"
+            f"Only {service} may assume {owner}. This guard holds its trust policy to statements allowing\n"
+            f"sts:AssumeRole whose Principal is the one line `Service: {service}`, because any other shape\n"
+            "could admit a principal nothing here reads."
+        )
+
+    doc = _child_block(lines, anchor)
+    keys = _find_key(doc, "Statement")
+    if len(keys) != 1:
+        raise refuse("has no `Statement:` block list this guard can read")
+    statements = _list_entries(doc, keys[0])
+    if not statements:
+        raise refuse("has no statements")
+    for entry in statements:
+        first = entry[0].replace("-", " ", 1)
+        entry = [first] + entry[1:]
+        base = min(_indent(line) for line in entry if line.strip())
+        top = [line for line in entry if _indent(line) == base or line is first]
+        names = [line.strip().split(":", 1)[0] for line in top if line.strip()]
+        if any(n not in ("Sid", "Effect", "Action", "Principal", "Condition") for n in names):
+            raise refuse(f"has a statement carrying {[n for n in names if n not in ('Sid', 'Effect', 'Action', 'Principal', 'Condition')]}")
+        action = [line for line in top if line.strip().startswith("Action:")]
+        m = YAML_SCALAR_RE.match(action[0]) if len(action) == 1 else None
+        if m is None or (m.group(2) or m.group(3) or m.group(4)) != "sts:AssumeRole":
+            raise refuse("has a statement whose Action is not the single scalar sts:AssumeRole")
+        principal = [i for i, line in enumerate(entry) if line.strip() == "Principal:"]
+        if len(principal) != 1:
+            raise refuse("has a statement whose Principal is not one block mapping")
+        body = _child_block(entry, principal[0])
+        m = YAML_SCALAR_RE.match(body[0]) if len(body) == 1 else None
+        if m is None or m.group(1) != "Service" or (m.group(2) or m.group(3) or m.group(4)) != service:
+            raise refuse(f"has a statement whose Principal is {[line.strip() for line in body]}, want [\"Service: {service}\"]")
+        condition = [i for i, line in enumerate(entry) if line.strip() == "Condition:"]
+        operators = _child_block(entry, condition[0]) if len(condition) == 1 else []
+        equals = [i for i, line in enumerate(operators) if line.strip() == "StringEquals:"]
+        pairs = _child_block(operators, equals[0]) if len(equals) == 1 else []
+        if not any(SOURCE_ACCOUNT_RE.match(line) for line in pairs):
+            raise refuse(
+                "has a statement whose Condition does not pin aws:SourceAccount to !Ref AWS::AccountId with "
+                "StringEquals, so the service could assume the role for another account"
+            )
+
+
 def cloudformation_conditions(src: str, path: str) -> tuple[list[Condition], int]:
     """Extract the role's AssumeRolePolicyDocument conditions, and its statement count.
 
@@ -438,7 +636,19 @@ def cloudformation_conditions(src: str, path: str) -> tuple[list[Condition], int
     """
     lines = [line for line in strip_yaml_comments(src).split("\n") if line.strip()]
 
-    anchors = _find_key(lines, "AssumeRolePolicyDocument")
+    anchors = []
+    for anchor in _find_key(lines, "AssumeRolePolicyDocument"):
+        owner = _cloudformation_resource(lines, anchor)
+        if owner == CFN_FEDERATED_ROLE:
+            anchors.append(anchor)
+        elif owner in CFN_SERVICE_ROLES:
+            cloudformation_service_role(lines, anchor, path, owner)
+        else:
+            raise GuardError(
+                f"{path}: found an AssumeRolePolicyDocument in `{owner}`, beside {CFN_FEDERATED_ROLE}'s.\n\n"
+                "A second role is a second trust policy, and this guard checks one. If it is a role one AWS\n"
+                "service assumes, add it to CFN_SERVICE_ROLES, which checks its trust. Do not leave it unread."
+            )
     if not anchors:
         raise GuardError(
             f"{path}: could not find the role's AssumeRolePolicyDocument.\n\n"

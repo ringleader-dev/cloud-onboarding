@@ -90,3 +90,11 @@ network_cidr = "10.80.0.0/16"
 # additional_regions = {
 #   "europe-west1" = "10.80.16.0/20"
 # }
+
+# OFF BY DEFAULT. Uncomment to turn it on.
+#
+# VPC Flow Logs on every subnet this module creates, with the settings Security Command Center's
+# flow log settings check asks for. Google bills them per GiB generated and stored. The records go
+# to Cloud Logging in this project, which keeps them 30 days unless you extend the _Default bucket's
+# retention; see gcp/README.md.
+# create_flow_logs = true

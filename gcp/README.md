@@ -533,6 +533,66 @@ policy — so it is worth doing at the time rather than discovering later.
 the named width `artifact_storage_bucket` becomes its `spec.bucket`; on the managed width
 Ringleader names the bucket itself, so ask it what it created rather than guessing.
 
+## Optional: flow logs for the subnets
+
+VPC Flow Logs record samples of the traffic on a subnet: source and destination, ports, bytes, and
+the VM at each end. Compliance scans such as Security Command Center's flow log settings check,
+which follows CIS Google Cloud Foundations Benchmark 3.8, expect them on every subnet. A subnet can
+carry its own flow log setting, so this onboarding can turn them on for the subnets it creates.
+
+Flow logs are off by default, because they cost money and Ringleader does not use them. To turn
+them on, set one variable and apply again:
+
+```hcl
+create_flow_logs = true
+```
+
+The apply changes the subnets in place and replaces none of them. If you bring your own subnet
+(`create_network = false`), the plan refuses the switch, because there is no subnet here to log.
+
+On the gcloud path, set `CREATE_FLOW_LOGS=true` for the run of `network-landing-pad.sh` that creates
+the subnets. The script cannot change a subnet it already created, so update an existing subnet in
+place. Run this for `ringleader-workstations`, and again with `ringleader-gateway` and
+`ringleader-governed` if you created them:
+
+```bash
+gcloud compute networks subnets update ringleader-workstations --project <p> --region <r> \
+  --enable-flow-logs --logging-aggregation-interval=interval-5-sec \
+  --logging-flow-sampling=1.0 --logging-metadata=include-all
+```
+
+Both paths log every subnet they create with the settings that check asks for,
+the Terraform module's `additional_regions` included: 5-second aggregation, every sampled log entry
+kept, and all metadata. Google chooses which packets to sample, and that is not a setting.
+
+**Where the records go.** Into Cloud Logging in this project, as the log
+`compute.googleapis.com/vpc_flows`. The project's `_Default` log bucket keeps them for 30 days. To
+keep them for a year, extend that bucket's retention:
+
+```bash
+gcloud logging buckets update _Default --project <p> --location=global --retention-days=365
+```
+
+That changes the retention of every log in the bucket, not only flow logs, and it applies going
+forward rather than to logs already gone.
+
+**What it costs.** Google bills flow logs as network telemetry: $0.25 per GiB generated for the
+first 10 TiB a month, and a one-time $0.25 per GiB to store them in a log bucket, which covers their
+first 30 days. Each GiB you keep past 30 days costs $0.01 a month. The volume grows with the traffic
+your workstations send.
+
+**Who can read them.** No role this onboarding grants Ringleader carries a Cloud Logging permission.
+Two grants can still reach the records:
+
+- `roles/iam.serviceAccountUser` lets Ringleader run a workstation as any service account in the
+  project. A service account that can read logs, such as a default compute service account that
+  still holds `roles/editor`, lets it read them too.
+- With `enable_workstation_identities` on, which is the default,
+  `roles/resourcemanager.projectIamAdmin` can grant any role in the project, one that reads logs
+  included.
+
+Both are reasons this onboarding asks for a project dedicated to Ringleader workstations.
+
 ## Address ranges: declare the block, do not inherit one
 
 This module carves every subnet out of one `/16`, and **it will not guess which one**:

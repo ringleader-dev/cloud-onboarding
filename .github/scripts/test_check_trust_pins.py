@@ -202,8 +202,8 @@ class ScanningNothingIsLoud(unittest.TestCase):
     def test_cloudformation_key_renamed(self):
         text = mutate(
             source(CLOUDFORMATION),
-            "      AssumeRolePolicyDocument:",
-            "      AssumeRolePolicy:",
+            "instances.\"\n      AssumeRolePolicyDocument:",
+            "instances.\"\n      AssumeRolePolicy:",
         )
         with self.assertRaises(GuardError) as raised:
             check_artifact(CLOUDFORMATION, text)
@@ -292,6 +292,130 @@ class TheGuardReadsTheDocumentTheRoleUses(unittest.TestCase):
         with self.assertRaises(GuardError) as raised:
             check_artifact(TERRAFORM, text)
         self.assertIn("assume_role_policy", str(raised.exception))
+
+
+class AServiceRoleAdmitsItsServiceAndNothingElse(unittest.TestCase):
+    """The flow-log delivery role is the one role allowed beside Ringleader's. Each of these edits
+    turns it into a second way into the account that the subject pin above never reads."""
+
+    def assertLoud(self, artifact, text, needle):
+        with self.assertRaises(GuardError) as raised:
+            check_artifact(artifact, text)
+        self.assertIn(needle, str(raised.exception))
+
+    def test_terraform_the_service_role_pointed_at_the_federated_trust(self):
+        text = mutate(
+            source(TERRAFORM),
+            "assume_role_policy = data.aws_iam_policy_document.flow_logs_trust[0].json",
+            "assume_role_policy = data.aws_iam_policy_document.trust.json",
+        )
+        self.assertLoud(TERRAFORM, text, "flow_logs_trust")
+
+    def test_terraform_the_service_role_trusts_a_federated_principal(self):
+        text = mutate(source(TERRAFORM), 'type        = "Service"', 'type        = "Federated"')
+        self.assertLoud(TERRAFORM, text, "vpc-flow-logs.amazonaws.com")
+
+    def test_terraform_the_service_role_trusts_another_service(self):
+        text = mutate(
+            source(TERRAFORM),
+            'identifiers = ["vpc-flow-logs.amazonaws.com"]',
+            'identifiers = ["vpc-flow-logs.amazonaws.com", "ec2.amazonaws.com"]',
+        )
+        self.assertLoud(TERRAFORM, text, "vpc-flow-logs.amazonaws.com")
+
+    def test_terraform_the_service_role_gains_a_second_principals_block(self):
+        text = mutate(
+            source(TERRAFORM),
+            '      identifiers = ["vpc-flow-logs.amazonaws.com"]\n    }\n',
+            '      identifiers = ["vpc-flow-logs.amazonaws.com"]\n    }\n\n'
+            "    principals {\n"
+            '      type        = "AWS"\n'
+            '      identifiers = ["*"]\n'
+            "    }\n",
+        )
+        self.assertLoud(TERRAFORM, text, "vpc-flow-logs.amazonaws.com")
+
+    def test_terraform_the_service_role_merges_in_another_document(self):
+        # A source document is merged into this one by the provider, so it can carry any statement.
+        text = mutate(
+            source(TERRAFORM),
+            'data "aws_iam_policy_document" "flow_logs_trust" {\n  count = var.create_network && var.create_flow_logs ? 1 : 0\n',
+            'data "aws_iam_policy_document" "flow_logs_trust" {\n  count = var.create_network && var.create_flow_logs ? 1 : 0\n'
+            "  source_policy_documents = [data.aws_iam_policy_document.trust.json]\n",
+        )
+        self.assertLoud(TERRAFORM, text, "source_policy_documents")
+
+    def test_terraform_the_service_role_is_assumed_with_web_identity(self):
+        text = mutate(
+            source(TERRAFORM),
+            '    actions = ["sts:AssumeRole"]\n\n    principals {\n      type        = "Service"',
+            '    actions = ["sts:AssumeRoleWithWebIdentity"]\n\n    principals {\n      type        = "Service"',
+        )
+        self.assertLoud(TERRAFORM, text, "sts:AssumeRole")
+
+    def test_terraform_the_service_role_loses_its_source_account_pin(self):
+        text = mutate(
+            source(TERRAFORM),
+            '    condition {\n      test     = "StringEquals"\n      variable = "aws:SourceAccount"\n'
+            "      values   = [data.aws_caller_identity.current.account_id]\n    }\n",
+            "",
+        )
+        self.assertLoud(TERRAFORM, text, "aws:SourceAccount")
+
+    def test_terraform_the_service_role_pins_another_account(self):
+        text = mutate(
+            source(TERRAFORM),
+            'variable = "aws:SourceAccount"\n      values   = [data.aws_caller_identity.current.account_id]',
+            'variable = "aws:SourceAccount"\n      values   = ["111122223333"]',
+        )
+        self.assertLoud(TERRAFORM, text, "aws:SourceAccount")
+
+    def test_cloudformation_the_service_role_loses_its_source_account_pin(self):
+        text = mutate(
+            source(CLOUDFORMATION),
+            '              StringEquals:\n                "aws:SourceAccount": !Ref AWS::AccountId\n',
+            "",
+        )
+        self.assertLoud(CLOUDFORMATION, text, "aws:SourceAccount")
+
+    def test_terraform_the_federated_role_renamed(self):
+        text = source(TERRAFORM).replace('resource "aws_iam_role" "ringleader" {', 'resource "aws_iam_role" "federated" {')
+        self.assertLoud(TERRAFORM, text, "aws_iam_role.ringleader")
+
+    def test_cloudformation_the_service_role_trusts_a_federated_principal(self):
+        text = mutate(
+            source(CLOUDFORMATION),
+            "              Service: vpc-flow-logs.amazonaws.com\n",
+            "              Federated: !Ref RingleaderOidcProvider\n",
+        )
+        self.assertLoud(CLOUDFORMATION, text, "FlowLogsRole")
+
+    def test_cloudformation_the_service_role_gains_a_second_principal(self):
+        text = mutate(
+            source(CLOUDFORMATION),
+            "              Service: vpc-flow-logs.amazonaws.com\n",
+            "              Service: vpc-flow-logs.amazonaws.com\n              AWS: \"*\"\n",
+        )
+        self.assertLoud(CLOUDFORMATION, text, "FlowLogsRole")
+
+    def test_cloudformation_the_service_role_is_assumed_with_web_identity(self):
+        text = mutate(
+            source(CLOUDFORMATION),
+            '              Service: vpc-flow-logs.amazonaws.com\n            Action: "sts:AssumeRole"\n',
+            '              Service: vpc-flow-logs.amazonaws.com\n            Action: "sts:AssumeRoleWithWebIdentity"\n',
+        )
+        self.assertLoud(CLOUDFORMATION, text, "sts:AssumeRole")
+
+    def test_cloudformation_a_role_outside_the_allowlist(self):
+        text = source(CLOUDFORMATION).replace("  FlowLogsRole:\n", "  SomeOtherRole:\n").replace(
+            "!GetAtt FlowLogsRole.Arn", "!GetAtt SomeOtherRole.Arn"
+        )
+        self.assertLoud(CLOUDFORMATION, text, "SomeOtherRole")
+
+    def test_the_service_roles_are_accepted_as_shipped(self):
+        for artifact in (TERRAFORM, CLOUDFORMATION):
+            with self.subTest(artifact.path):
+                self.assertEqual(check_artifact(artifact, source(artifact)), [])
 
 
 class CorrectFilesAreNotRejected(unittest.TestCase):
@@ -480,15 +604,16 @@ class APinMustEvaluateToThisOrg(unittest.TestCase):
     def test_flow_style_says_what_is_actually_wrong(self):
         # A shape the guard cannot read must not be reported as a missing pin.
         #
-        # Anchored on the line ABOVE as well, because `StringEquals:` alone is no longer unique in
-        # this template -- the PassRole statement carries one too, at a deeper indent that contains
-        # the shallower one as a substring.
+        # Anchored on the lines above and below as well, because `StringEquals:` alone is not unique in
+        # this template: the PassRole statement carries one at a deeper indent that contains the
+        # shallower one as a substring, and the flow-log role's trust carries another.
         text = mutate(
             source(CLOUDFORMATION),
-            '            Condition:\n              StringEquals:',
+            "            Condition:\n              StringEquals:\n                # deploy.sh replaces",
             '            Condition:\n'
             '              StringEquals: {"__OIDC_PROVIDER__:aud": !Ref Audience}\n'
-            "              _unused:",
+            "              _unused:\n"
+            "                # deploy.sh replaces",
         )
         with self.assertRaises(GuardError) as raised:
             check_artifact(CLOUDFORMATION, text)
@@ -512,8 +637,12 @@ class EverySpellingOfASecondStatementIsSeen(unittest.TestCase):
         '            Action: "sts:AssumeRoleWithWebIdentity"\n'
     )
 
+    # The federated role's own `Policies:` key, which follows its trust document. Named with the
+    # policy below it because the flow-log role has a `Policies:` key of its own.
+    POLICIES = "      Policies:\n        - PolicyName: ringleader-workstations\n"
+
     def test_a_bare_dash_second_statement_is_loud(self):
-        text = mutate(source(CLOUDFORMATION), "      Policies:", self.EVIL + "      Policies:")
+        text = mutate(source(CLOUDFORMATION), self.POLICIES, self.EVIL + self.POLICIES)
         with self.assertRaises(GuardError) as raised:
             check_artifact(CLOUDFORMATION, text)
         self.assertIn("statements", str(raised.exception))
@@ -521,8 +650,8 @@ class EverySpellingOfASecondStatementIsSeen(unittest.TestCase):
     def test_a_dash_space_second_statement_is_loud(self):
         text = mutate(
             source(CLOUDFORMATION),
-            "      Policies:",
-            self.EVIL.replace("          -\n            Sid:", "          - Sid:") + "      Policies:",
+            self.POLICIES,
+            self.EVIL.replace("          -\n            Sid:", "          - Sid:") + self.POLICIES,
         )
         with self.assertRaises(GuardError) as raised:
             check_artifact(CLOUDFORMATION, text)
@@ -548,7 +677,7 @@ class EverySpellingOfASecondStatementIsSeen(unittest.TestCase):
             "          -\n            Sid:", "          - Sid:"))):
             with self.subTest(label):
                 _, statements = cloudformation_conditions(
-                    mutate(source(CLOUDFORMATION), "      Policies:", entry + "      Policies:"),
+                    mutate(source(CLOUDFORMATION), self.POLICIES, entry + self.POLICIES),
                     "cfn",
                 )
                 self.assertEqual(statements, 2, f"a {label} entry was not counted")

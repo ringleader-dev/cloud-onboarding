@@ -493,6 +493,43 @@ variable "additional_governed_subnets" {
   }
 }
 
+# --- Flow logs for the VPC this module creates (OFF by default) -----------------------------
+
+variable "create_flow_logs" {
+  type        = bool
+  default     = false
+  description = <<-EOT
+    Record a VPC flow log for all traffic in the VPC this module creates, accepted and rejected,
+    delivered to a CloudWatch Logs group this module creates. Off by default. Needs
+    create_network; a network you bring yourself is yours to log.
+
+    It is off because it bills and grants Ringleader nothing. CloudWatch Logs charges for every
+    GB of flow log records it ingests and stores, and the volume grows with the traffic your
+    workstations send. It is here because compliance scans such as AWS Security Hub's EC2.6
+    check expect a flow log on every VPC, and this module declares the VPC.
+
+    The log group, the flow log and the role that delivers into the group are yours. Ringleader's
+    role holds no CloudWatch Logs permission, so it can neither read nor delete them. Only the
+    VPC Flow Logs service can assume the delivery role, and only for this account. The role may
+    write only to this one log group.
+  EOT
+}
+
+variable "flow_log_retention_days" {
+  type        = number
+  default     = 365
+  description = <<-EOT
+    How many days the flow log group keeps its records, when create_flow_logs is set. CloudWatch
+    Logs accepts only the values listed in the validation below. The default keeps a year: by
+    default, AWS Security Hub's CloudWatch.16 check fails a log group kept for less.
+  EOT
+
+  validation {
+    condition     = contains([1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653], var.flow_log_retention_days)
+    error_message = "flow_log_retention_days must be one of the values CloudWatch Logs accepts: 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288 or 3653."
+  }
+}
+
 variable "tags" {
   type        = map(string)
   default     = {}

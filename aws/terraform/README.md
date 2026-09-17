@@ -52,6 +52,8 @@ output "handoff" { value = module.ringleader_onboarding.handoff }
 | `gateway_subnet_cidr` | `null` (derived) | the 241st `/24` of `vpc_cidr` — `10.60.240.0/24` at index 0, well clear of `subnet_cidr`. Set it only to override |
 | `governed_subnet_cidr` | `null` (derived) | the 15th `/20` of `vpc_cidr` — `10.60.224.0/20` at index 0. Set it only to override |
 | `additional_governed_subnets` | `{}` | one more governed subnet per namespace that runs its own proxy, as a map of your label to a CIDR you write out. Each is built like the governed subnet and named `ringleader-governed-<label>`. See `aws/README.md` |
+| `create_flow_logs` | `false` | record a VPC flow log for all traffic in the VPC this module creates, into a CloudWatch Logs group, with a delivery role only VPC Flow Logs can assume. **Off by default**, because it bills per GB ingested and stored. Ringleader's role cannot read it. Needs `create_network`. See `aws/README.md` |
+| `flow_log_retention_days` | `365` | how many days that log group keeps its records. Must be a value CloudWatch Logs accepts: 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288 or 3653 |
 | `max_session_duration` | `3600` | ceiling on the life of the credentials Ringleader mints by assuming the role (AWS bounds: 3600–43200). 3600 is AWS's own default, so setting it changes nothing on an existing role |
 
 ## Outputs
@@ -60,7 +62,8 @@ output "handoff" { value = module.ringleader_onboarding.handoff }
 `additional_governed_subnet_ids` (keyed by your label), `gateway_subnet_id`, `security_group_id`,
 `inbound_only_security_group_id`, and `handoff` (all of them in one object). Hand `handoff` back
 to Ringleader. Plus `vpc_id`, `gateway_subnet_cidr` and
-`private_route_table_id` when the matching options are on. `vpc_cidr` and `subnet_cidr` report
+`private_route_table_id` when the matching options are on, and `flow_log_group_name` when
+`create_flow_logs` is. `vpc_cidr` and `subnet_cidr` report
 the ranges this region actually took — worth recording, since they are what the next region has
 to stay clear of.
 

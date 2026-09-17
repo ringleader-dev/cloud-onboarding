@@ -100,3 +100,15 @@ region_indexes = {
 # Bringing your own IPAM instead? Set vpc_cidr and the subnets are carved out of it;
 # region_indexes is then ignored and keeping every region distinct is yours to do.
 # vpc_cidr = "10.60.0.0/16"
+
+# ---------------------------------------------------------------------------------------
+# OFF BY DEFAULT. Uncomment to turn it on.
+# ---------------------------------------------------------------------------------------
+
+# A VPC flow log for all traffic in the landing pad's VPC, kept in a CloudWatch Logs group this
+# module creates. Compliance scans such as AWS Security Hub's EC2.6 check expect one. It bills per
+# GB ingested and stored, and Ringleader's role can neither read nor delete it.
+# create_flow_logs = true
+#
+# How many days the log group keeps the records. 365 unless you set it.
+# flow_log_retention_days = 731

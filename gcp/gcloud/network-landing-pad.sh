@@ -28,6 +28,9 @@
 #                (default: EMPTY -- none is created; see below)
 #   ALLOW_INTERNAL  1 to let workstations reach each other inside the subnet
 #                (default: 1; set 0 for the tighter posture)
+#   CREATE_FLOW_LOGS  true to turn on VPC Flow Logs for every subnet this script
+#                creates. They bill per GiB; see FLOW LOGS below
+#                (default: false)
 #
 # ADDRESSING -- 10.80.x, and why it is not 10.60.x.
 #
@@ -43,6 +46,22 @@
 #
 # The Terraform module derives all three from one network_cidr and refuses to guess it; here
 # they are three separate variables because the script cannot do CIDR arithmetic.
+#
+# FLOW LOGS: off unless you ask for them.
+#
+# CREATE_FLOW_LOGS=true records VPC Flow Logs on every subnet this script creates, with the settings
+# Security Command Center's flow log settings check asks for: 5-second aggregation, every sampled
+# entry kept, all metadata. That check follows CIS Google Cloud Foundations Benchmark 3.8. The
+# Terraform module's create_flow_logs sets the same three. Google bills flow logs per GiB
+# generated, and again per GiB stored in Cloud Logging, whose _Default bucket keeps them for 30 days.
+# No role onboard.sh grants Ringleader carries a Cloud Logging permission; gcp/README.md says what
+# else can reach them. This script cannot re-create a subnet, so to turn flow logs on for one that
+# already exists, update it in place. Run this for ringleader-workstations, and again with
+# ringleader-gateway and ringleader-governed if you created them:
+#
+#   gcloud compute networks subnets update ringleader-workstations --project <p> --region <r> \
+#     --enable-flow-logs --logging-aggregation-interval=interval-5-sec \
+#     --logging-flow-sampling=1.0 --logging-metadata=include-all
 #
 # REACHABILITY -- the part that decides whether your workstations are USABLE.
 #
@@ -164,11 +183,22 @@ if [ "$GOVERNED_CIDR" = "none" ]; then
   GOVERNED_CIDR=""
 fi
 ALLOW_INTERNAL="${ALLOW_INTERNAL:-1}"
+CREATE_FLOW_LOGS="${CREATE_FLOW_LOGS:-false}"
+# Passed unquoted to every `subnets create` below, so it splits into four flags, or into nothing when
+# flow logs are off. The three values are written out because gcloud's own defaults keep half of the
+# sampled entries and exclude metadata, which is not what the Terraform module sets.
+FLOW_LOG_FLAGS=""
+if [[ "$CREATE_FLOW_LOGS" == "true" ]]; then
+  FLOW_LOG_FLAGS="--enable-flow-logs --logging-aggregation-interval=interval-5-sec --logging-flow-sampling=1.0 --logging-metadata=include-all"
+elif [[ "$CREATE_FLOW_LOGS" != "false" ]]; then
+  echo "CREATE_FLOW_LOGS must be true or false, not '${CREATE_FLOW_LOGS}'" >&2
+  exit 1
+fi
 
 gcloud compute networks create ringleader-vpc --project "$PROJECT" --subnet-mode custom
 gcloud compute networks subnets create ringleader-workstations --project "$PROJECT" \
   --network ringleader-vpc --region "$REGION" --range "$CIDR" \
-  --enable-private-ip-google-access
+  --enable-private-ip-google-access $FLOW_LOG_FLAGS
 # A reserved, empty range -- created only if you ask, and it STAYS empty here.
 #
 # Ringleader's hostname-level egress control points workstations at a proxy that resolves names
@@ -181,13 +211,13 @@ gcloud compute networks subnets create ringleader-workstations --project "$PROJE
 if [[ -n "$GATEWAY_CIDR" ]]; then
   gcloud compute networks subnets create ringleader-gateway --project "$PROJECT" \
     --network ringleader-vpc --region "$REGION" --range "$GATEWAY_CIDR" \
-    --enable-private-ip-google-access
+    --enable-private-ip-google-access $FLOW_LOG_FLAGS
   echo ">> reserved range ringleader-gateway created at ${GATEWAY_CIDR} (stays empty; the gateway VM runs in the workstations subnet)"
 fi
 if [[ -n "$GOVERNED_CIDR" ]]; then
   gcloud compute networks subnets create ringleader-governed --project "$PROJECT" \
     --network ringleader-vpc --region "$REGION" --range "$GOVERNED_CIDR" \
-    --enable-private-ip-google-access
+    --enable-private-ip-google-access $FLOW_LOG_FLAGS
   echo ">> governed subnet ringleader-governed created at ${GOVERNED_CIDR}"
 fi
 
@@ -312,6 +342,9 @@ fi
 #   gcloud compute networks subnets create ringleader-workstations-<region> \
 #     --project <p> --network ringleader-vpc --region <region> --range <non-overlapping cidr> \
 #     --enable-private-ip-google-access
+#
+# If you set CREATE_FLOW_LOGS=true, add the four flags in FLOW_LOG_FLAGS above to that subnet.
+#
 #   gcloud compute routers create ringleader-router-<region> \
 #     --project <p> --region <region> --network ringleader-vpc
 #   gcloud compute routers nats create ringleader-nat-<region> \

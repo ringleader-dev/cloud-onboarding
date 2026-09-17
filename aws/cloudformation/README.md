@@ -97,6 +97,16 @@ proxy: `AdditionalGovernedSubnet1Label` and `AdditionalGovernedSubnet1Cidr` thro
 `ADDITIONAL_GOVERNED_SUBNETS`, and each filled slot outputs `AdditionalGovernedSubnet<n>Id`. See
 [`../README.md`](../README.md#one-governed-subnet-per-namespace-that-runs-a-proxy).
 
+`CreateFlowLogs` (`false`) records a VPC flow log for all traffic in the stack's VPC, into a
+CloudWatch Logs group that keeps the records for `FlowLogRetentionDays` (`365`). It also creates the
+role that delivers them, which only VPC Flow Logs can assume. It is off by default, because it bills
+per GB and grants Ringleader nothing. The stack refuses it without `CreateNetwork=true`. `deploy.sh`
+exposes the two as `CREATE_FLOW_LOGS` and `FLOW_LOG_RETENTION_DAYS`, and passes each only when you
+set it, so a later run keeps what the stack has. The delivery role
+holds `logs:CreateLogGroup`, `CreateLogStream`, `PutLogEvents` and `DescribeLogStreams` on that one
+group and its streams, and `logs:DescribeLogGroups` on `*`, which IAM cannot scope. See
+[`../README.md`](../README.md#optional-flow-logs-for-the-vpc).
+
 Deploy with `--capabilities CAPABILITY_NAMED_IAM` (the role has a fixed name).
 
 ### About the `Thumbprint` default
@@ -123,7 +133,8 @@ THUMBPRINT=$(echo | openssl s_client -servername oidc-app.ringleader.dev \
 
 `TargetRoleArn`, `OidcProviderArn`, and — with `CreateNetwork=true` — `SubnetId`,
 `SecurityGroupId` and `VpcId`; plus `InboundOnlySecurityGroupId` while egress control is on.
-With the proxy subnet on, also `GatewaySubnetId`; with a NAT gateway, `PrivateRouteTableId`.
+With the proxy subnet on, also `GatewaySubnetId`; with a NAT gateway, `PrivateRouteTableId`; with
+flow logs, `FlowLogGroupName`, which is for you and not for Ringleader.
 Hand the role ARN, region, and (if created) subnet + security group back to Ringleader —
 plus `GatewaySubnetId`, which goes on the `EgressGateway` as `spec.subnet` rather than on a
 workstation, and `GovernedSubnetId` for the workstations that carry an egress policy. Each filled

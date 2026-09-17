@@ -64,6 +64,11 @@ workstation is governed by carrying that tag and an untagged neighbour on the sa
 untouched. Set `GOVERNED_CIDR=10.80.224.0/20` if you want the governed fleet in its own range
 anyway — see [`../README.md`](../README.md#gcp-needs-no-subnet-for-the-workstations-that-proxy-governs).
 
+`CREATE_FLOW_LOGS=true` turns on VPC Flow Logs for every subnet `network-landing-pad.sh` creates.
+It is off by default, because Google bills flow logs per GiB. The script cannot change a subnet it
+already created, so the script's header gives the `subnets update` command for an existing one. See
+[`../README.md`](../README.md#optional-flow-logs-for-the-subnets).
+
 Adding a region later is one more subnet in the same VPC — a GCP VPC is global — plus its
 own Cloud Router and Cloud NAT, which are regional. `network-landing-pad.sh` prints the
 exact commands at the end of its run, and the Terraform module does it for you via

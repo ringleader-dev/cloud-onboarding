@@ -467,6 +467,67 @@ the named width, hand back `artifact_storage_account_name` **and** the container
 write to; on the managed width Ringleader creates both itself, so ask it what it created rather
 than guessing.
 
+## Optional: flow logs for the VNet
+
+Virtual network flow logs record the traffic through the VNet: source and destination, ports, bytes,
+and whether a network security group allowed it. Compliance scans such as Azure Policy's *Audit
+flow logs configuration for every virtual network* expect flow logs on every virtual network. This
+onboarding can create them for the VNet it creates. They are VNet flow logs, not NSG flow logs:
+Azure stopped accepting new NSG flow logs on June 30, 2025, and retires the rest on September 30,
+2027.
+
+Flow logs are off by default, because they cost money and Ringleader does not use them. To turn
+them on, set one variable and apply again:
+
+```hcl
+create_flow_logs = true
+```
+
+On the ARM path, run `deploy.sh` with `CREATE_FLOW_LOGS=true`. Either way the apply adds resources
+and changes none you already have. If you bring your own network (`create_network = false`), both
+paths refuse the switch, because there is no VNet here to log.
+
+With the switch on, you get a storage account and a flow log:
+
+- The storage account is named `flowlogs` plus a suffix derived from the VNet's id, and is in the
+  VNet's region.
+- The flow log is on your region's Network Watcher. It writes the VNet's traffic into that account
+  and deletes each record after `flow_log_retention_days` (`FLOW_LOG_RETENTION_DAYS`), 365 by
+  default.
+
+Both go in the Network Watcher's resource group, not in the one you onboard. Ringleader's custom
+role is scoped to the resource group you onboard. With `enable_artifact_storage` on, which is the
+default, it can read and delete every blob there, and on the default settings delete the storage
+accounts too. The Network Watcher's resource group is outside that scope, so Ringleader can neither
+read nor delete the records. Azure requires a flow log to be in its Network Watcher's resource group
+too. Both paths refuse a Network Watcher's resource group that is the one you onboard.
+
+Before you apply, check that your region has a Network Watcher and that you can create resources in
+its resource group:
+
+- Azure enables a Network Watcher in a region when a VNet is first created there, unless the
+  subscription opted out. Azure's automatic watcher is usually named `NetworkWatcher_<region>`, in
+  `NetworkWatcherRG`, which is what both paths look for. A watcher created with the Azure CLI is
+  named `<region>-watcher` instead, and `az network watcher list` shows yours. If yours differs, set
+  `network_watcher_name` and `network_watcher_resource_group_name` (`NETWORK_WATCHER_NAME` and
+  `NETWORK_WATCHER_RG`). If there is no watcher, the apply or `deploy.sh` stops and names the one it
+  looked for.
+- If this apply creates the first VNet in the region, the watcher does not exist until the VNet
+  does. The Terraform module reads the watcher after it creates the VNet. If the apply or
+  `deploy.sh` still reports no watcher, run it again.
+- Contributor on the Network Watcher's resource group is enough to create the resources. Network
+  Contributor is not, because a flow log needs the storage account's key actions. The subscription
+  also needs the `Microsoft.Insights` resource provider registered:
+  `az provider register --namespace Microsoft.Insights`.
+
+**What it costs.** In most regions, $0.50 per GB of flow logs collected after 5 GB free each month
+per subscription, plus the blob storage the records take.
+
+**Turning them off again** works differently on the two paths. On the Terraform path,
+`create_flow_logs = false` deletes the flow log and the storage account, with every record in it.
+`deploy.sh` does not delete them: a later run with `CREATE_FLOW_LOGS=false` leaves both in place, and
+you delete them yourself if you want them gone.
+
 ## A second region: name it, do not renumber it
 
 An Azure VNet is regional. A second region means a second VNet joined by **global VNet
