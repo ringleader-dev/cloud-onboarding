@@ -248,7 +248,7 @@ first policy:
   decide on their own, which **widens** inbound. Without one, it admits only TCP 22 and 2222 from
   outside the VNet. Move those rules onto the subnet NSG first. Ringleader adds a rule there, but
   never edits or deletes one you wrote.
-- **Leave priorities 4090 to 4096 free in the subnet NSG.** Ringleader adds one inbound allow rule
+- **Leave priorities 3000 to 3999 free in the subnet NSG.** Ringleader adds one inbound allow rule
   of its own there, at the lowest free priority in that range, so its workstations are reachable
   without you widening the group. The rule admits TCP 22 and 2222 from any address. Its
   destination is an application security group that Ringleader creates in your resource group and

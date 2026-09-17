@@ -118,7 +118,7 @@
       "type": "Bool",
       "defaultValue": false,
       "metadata": {
-        "description": "False, the default, creates the workstations network security group. True leaves the group that is already there alone and deploys only its rules. Deploying a network security group sets its whole rule list, so redeploying a group that already exists deletes every rule added since, including the inbound rule Ringleader adds to admit its own workstations at a priority between 4090 and 4096. deploy.sh looks the group up and passes this for you. Each rule below is its own child resource either way, so changing sshSourceCidr and re-running still lands."
+        "description": "False, the default, creates the workstations network security group. True leaves the group that is already there alone and deploys only its rules. Deploying a network security group sets its whole rule list, so redeploying a group that already exists deletes every rule added since, including the inbound rule Ringleader adds to admit its own workstations at a priority between 3000 and 3999. deploy.sh looks the group up and passes this for you. Each rule below is its own child resource either way, so changing sshSourceCidr and re-running still lands."
       }
     },
     "gatewayNsgExists": {
@@ -251,7 +251,7 @@
       }
     },
     {
-      "comments": "The workstations subnet's security group, and the governed subnet's. Its rules are child resources below rather than a securityRules list here, because a list is deployed as a WHOLE: setting it deletes every rule this template does not name, and Ringleader writes one of its own in this group to admit its workstations, at a priority between 4090 and 4096. Leave that range free. A child resource adds and updates only itself, so re-running this template leaves Ringleader's rule in place -- as long as the group itself is not redeployed, which is what workstationsNsgExists is for.",
+      "comments": "The workstations subnet's security group, and the governed subnet's. Its rules are child resources below rather than a securityRules list here, because a list is deployed as a WHOLE: setting it deletes every rule this template does not name, and Ringleader writes one of its own in this group to admit its workstations, at a priority between 3000 and 3999. Leave that range free. A child resource adds and updates only itself, so re-running this template leaves Ringleader's rule in place -- as long as the group itself is not redeployed, which is what workstationsNsgExists is for.",
       "condition": "[not(parameters('workstationsNsgExists'))]",
       "type": "Microsoft.Network/networkSecurityGroups",
       "apiVersion": "2023-11-01",

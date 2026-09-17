@@ -134,7 +134,7 @@ and 2222 from outside the VNet. Keep inbound narrowing here rather than on a NIC
 outbound `Deny` here: it cannot tighten a policy and it can break one. See
 [`../README.md`](../README.md#two-nsgs-at-two-layers--and-which-one-is-yours).
 
-**Leave priorities 4090 to 4096 free in both groups.** In the workstations group, Ringleader adds
+**Leave priorities 3000 to 3999 free in both groups.** In the workstations group, Ringleader adds
 one inbound allow rule in that range, admitting the SSH ports to the workstations it creates. In
 the gateway group it will add one admitting the management ports to the gateway VM. Ringleader
 never edits or deletes a rule this template created. Every rule here is deployed as its own
