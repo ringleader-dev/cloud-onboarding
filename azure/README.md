@@ -598,6 +598,12 @@ With it on you get the endpoint, the private DNS zone `privatelink.blob.core.win
 to this VNet, and the zone group that keeps the account's blob name resolving to the endpoint's
 address. All three go in the Network Watcher's resource group, beside the storage account.
 
+**The zone is shared, and that is deliberate.** Every landing pad in that resource group uses the
+one `privatelink.blob.core.windows.net`, because Azure resolves that name from a single zone and a
+second one would be ignored. Each pad adds its own link to it, named for the VNet and a hash of
+the VNet's id so two pads whose VNets share a name do not collide. If you already have that zone,
+this adopts it and changes none of its records. Nothing here ever deletes it.
+
 The subnet they need is separate, and it is carved as soon as you turn flow logs on, whether or
 not you ask for an endpoint. It takes the `/24` above the gateway range, it is empty until an
 endpoint lands in it, and Azure bills nothing for an empty subnet. The endpoint gets a subnet of
