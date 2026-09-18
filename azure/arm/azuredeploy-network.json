@@ -100,6 +100,20 @@
         "description": "Optional override for the governed subnet. Empty derives the 15th /20 of the VNet range (10.70.224.0/20 at index 0), immediately below the gateway /24 at the top of the VNet, so the two egress-control ranges stay together and the workstations prefix is free to grow. Set it only to override, and then it must sit inside the VNet range."
       }
     },
+    "createFlowLogPrivateEndpointSubnet": {
+      "type": "Bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Carve the subnet the flow log storage account's private endpoint goes in. Set it whenever flow logs are on, not only when the endpoint is: a subnet dropped from this template is deleted, and Azure refuses that while a private endpoint's interface is still in it."
+      }
+    },
+    "flowLogPrivateEndpointSubnetCidr": {
+      "type": "String",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Range for that subnet. Empty derives the /24 above the gateway range, out of the VNet's own /16."
+      }
+    },
     "additionalGovernedSubnets": {
       "type": "Object",
       "defaultValue": {},
@@ -215,8 +229,19 @@
         "input": "[if(contains(variables('subnetRouteTableIds'), variables('effectiveSubnets')[copyIndex('subnetsKeepingRouteTables')].name), union(variables('effectiveSubnets')[copyIndex('subnetsKeepingRouteTables')], createObject('properties', union(variables('effectiveSubnets')[copyIndex('subnetsKeepingRouteTables')].properties, createObject('routeTable', createObject('id', variables('subnetRouteTableIds')[variables('effectiveSubnets')[copyIndex('subnetsKeepingRouteTables')].name]))))), variables('effectiveSubnets')[copyIndex('subnetsKeepingRouteTables')])]"
       }
     ],
-    "effectiveSubnets": "[concat(variables('workstationSubnets'), if(parameters('createGatewaySubnet'), variables('gatewaySubnets'), createArray()), if(parameters('createGovernedSubnet'), variables('governedSubnets'), createArray()), variables('additionalGovernedSubnetList'))]",
-    "subnetRouteTableIds": "[toObject(parameters('subnetRouteTables'), lambda('table', lambdaVariables('table').name), lambda('table', lambdaVariables('table').id))]"
+    "effectiveSubnets": "[concat(variables('workstationSubnets'), if(parameters('createGatewaySubnet'), variables('gatewaySubnets'), createArray()), if(parameters('createGovernedSubnet'), variables('governedSubnets'), createArray()), if(parameters('createFlowLogPrivateEndpointSubnet'), variables('flowLogPrivateEndpointSubnets'), createArray()), variables('additionalGovernedSubnetList'))]",
+    "subnetRouteTableIds": "[toObject(parameters('subnetRouteTables'), lambda('table', lambdaVariables('table').name), lambda('table', lambdaVariables('table').id))]",
+    "flowLogPrivateEndpointSubnetPrefix": "[if(empty(parameters('flowLogPrivateEndpointSubnetCidr')), cidrSubnet(variables('vnetAddressSpace'), 24, 241), parameters('flowLogPrivateEndpointSubnetCidr'))]",
+    "flowLogPrivateEndpointSubnetName": "flowlog-endpoint",
+    "flowLogPrivateEndpointSubnets": [
+      {
+        "name": "[variables('flowLogPrivateEndpointSubnetName')]",
+        "properties": {
+          "addressPrefix": "[variables('flowLogPrivateEndpointSubnetPrefix')]",
+          "privateEndpointNetworkPolicies": "Disabled"
+        }
+      }
+    ]
   },
   "resources": [
     {
@@ -401,6 +426,13 @@
       "value": "[if(parameters('createGatewaySubnet'), resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('gatewaySubnetName')), '')]",
       "metadata": {
         "description": "The subnet the egress gateway VM runs in, or empty if createGatewaySubnet was false. Hand it back as spec.subnet on the Edge -- Ringleader builds no gateway until you do, because a gateway placed in the subnet it steers routes its own egress into itself. NOT governedSubnetId, which is the workstations'."
+      }
+    },
+    "flowLogPrivateEndpointSubnetId": {
+      "type": "String",
+      "value": "[if(parameters('createFlowLogPrivateEndpointSubnet'), resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('flowLogPrivateEndpointSubnetName')), '')]",
+      "metadata": {
+        "description": "The subnet the flow log storage account's private endpoint goes in, or empty if it was not carved."
       }
     }
   }

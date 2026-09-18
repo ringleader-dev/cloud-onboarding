@@ -224,6 +224,14 @@ run "flow_logs_land_outside_ringleaders_reach" {
     values          = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-defaults-test/providers/Microsoft.Network/virtualNetworks/ringleader-vnet" }
   }
 
+  # The deployment's parameters carry this subnet's id, so without an id the whole jsonencode is
+  # unknown at plan time and every assertion on it is unevaluable.
+  override_resource {
+    target          = azurerm_subnet.flow_log_private_endpoint
+    override_during = plan
+    values          = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-defaults-test/providers/Microsoft.Network/virtualNetworks/ringleader-vnet/subnets/flowlog-endpoint" }
+  }
+
   override_data {
     target = data.azurerm_network_watcher.flow_logs[0]
     values = { name = "NetworkWatcher_eastus", location = "eastus" }
@@ -256,6 +264,137 @@ run "flow_logs_land_outside_ringleaders_reach" {
   assert {
     condition     = length(jsondecode(azurerm_resource_group_template_deployment.flow_logs[0].parameters_content).logReaderIpRules.value) == 0
     error_message = "The flow log storage account admits a reader address by default, so turning flow logs on opens the records to somewhere the customer never named."
+  }
+}
+
+# A private endpoint is the one thing in this module that bills by the hour, so a customer who
+# turned flow logs on and said nothing more must not be paying for one. The subnet is the tell: it
+# is carved only alongside the endpoint, so its absence proves neither exists.
+run "the_flow_log_private_endpoint_stays_off_until_asked_for" {
+  command = plan
+
+  variables {
+    create_flow_logs = true
+  }
+
+  # Planned, so the VNet id is unknown unless it is given one; the parameters below are built from it.
+  override_resource {
+    target          = azurerm_virtual_network.workstations
+    override_during = plan
+    values          = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-defaults-test/providers/Microsoft.Network/virtualNetworks/ringleader-vnet" }
+  }
+
+  # The deployment's parameters carry this subnet's id, so without an id the whole jsonencode is
+  # unknown at plan time and every assertion on it is unevaluable.
+  override_resource {
+    target          = azurerm_subnet.flow_log_private_endpoint
+    override_during = plan
+    values          = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-defaults-test/providers/Microsoft.Network/virtualNetworks/ringleader-vnet/subnets/flowlog-endpoint" }
+  }
+
+  override_data {
+    target = data.azurerm_network_watcher.flow_logs[0]
+    values = { name = "NetworkWatcher_eastus", location = "eastus" }
+  }
+
+  assert {
+    condition     = var.create_flow_log_private_endpoint == false
+    error_message = "create_flow_log_private_endpoint defaults to true, so every customer who turns flow logs on starts paying for an endpoint they never asked for."
+  }
+
+  assert {
+    condition     = jsondecode(azurerm_resource_group_template_deployment.flow_logs[0].parameters_content).privateEndpointSubnetId.value != ""
+    error_message = "The flow log deployment is given no subnet for a private endpoint, so turning the endpoint on later would place it nowhere."
+  }
+
+  assert {
+    condition     = jsondecode(azurerm_resource_group_template_deployment.flow_logs[0].parameters_content).createFlowLogPrivateEndpoint.value == false
+    error_message = "The flow log deployment asks for a private endpoint on the defaults."
+  }
+}
+
+# Asking for the endpoint has to carve the subnet it lives in, in the same apply. The template
+# resolves that subnet from the VNet id by NAME, so a missing one is a deployment that fails at the
+# customer rather than a plan that fails here.
+run "the_private_endpoint_brings_its_own_subnet" {
+  command = plan
+
+  variables {
+    create_flow_logs                 = true
+    create_flow_log_private_endpoint = true
+  }
+
+  # Planned, so the VNet id is unknown unless it is given one; the parameters below are built from it.
+  override_resource {
+    target          = azurerm_virtual_network.workstations
+    override_during = plan
+    values          = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-defaults-test/providers/Microsoft.Network/virtualNetworks/ringleader-vnet" }
+  }
+
+  # The deployment's parameters carry this subnet's id, so without an id the whole jsonencode is
+  # unknown at plan time and every assertion on it is unevaluable.
+  override_resource {
+    target          = azurerm_subnet.flow_log_private_endpoint
+    override_during = plan
+    values          = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-defaults-test/providers/Microsoft.Network/virtualNetworks/ringleader-vnet/subnets/flowlog-endpoint" }
+  }
+
+  override_data {
+    target = data.azurerm_network_watcher.flow_logs[0]
+    values = { name = "NetworkWatcher_eastus", location = "eastus" }
+  }
+
+  assert {
+    condition     = length(azurerm_subnet.flow_log_private_endpoint) == 1
+    error_message = "Asking for the private endpoint carved no subnet for it, so the endpoint would be placed nowhere."
+  }
+
+  assert {
+    condition     = jsondecode(azurerm_resource_group_template_deployment.flow_logs[0].parameters_content).createFlowLogPrivateEndpoint.value == true
+    error_message = "The flow log deployment was not asked for the private endpoint the module was."
+  }
+
+  assert {
+    condition     = one(azurerm_subnet.flow_log_private_endpoint[*].address_prefixes[0]) == "10.70.241.0/24"
+    error_message = "The private endpoint's subnet is not the /24 above the gateway range, so it no longer matches the ARM route or the table in azure/README.md."
+  }
+}
+
+# The subnet has to outlive the endpoint's own switch. ARM's incremental mode never deletes a
+# resource whose condition turns false, so turning the endpoint off leaves its interface in this
+# subnet -- and Azure refuses to delete a subnet that still holds one. A subnet tied to the
+# endpoint's switch would therefore fail the apply that turned it off.
+run "the_endpoints_subnet_outlives_the_endpoints_switch" {
+  command = plan
+
+  variables {
+    create_flow_logs                 = true
+    create_flow_log_private_endpoint = false
+  }
+
+  # Planned, so the VNet id is unknown unless it is given one; the parameters below are built from it.
+  override_resource {
+    target          = azurerm_virtual_network.workstations
+    override_during = plan
+    values          = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-defaults-test/providers/Microsoft.Network/virtualNetworks/ringleader-vnet" }
+  }
+
+  # The deployment's parameters carry this subnet's id, so without an id the whole jsonencode is
+  # unknown at plan time and every assertion on it is unevaluable.
+  override_resource {
+    target          = azurerm_subnet.flow_log_private_endpoint
+    override_during = plan
+    values          = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-defaults-test/providers/Microsoft.Network/virtualNetworks/ringleader-vnet/subnets/flowlog-endpoint" }
+  }
+
+  override_data {
+    target = data.azurerm_network_watcher.flow_logs[0]
+    values = { name = "NetworkWatcher_eastus", location = "eastus" }
+  }
+
+  assert {
+    condition     = length(azurerm_subnet.flow_log_private_endpoint) == 1
+    error_message = "The endpoint's subnet is gone once the endpoint is switched off, so a customer turning it off asks Azure to delete a subnet that still holds the endpoint's interface, and the apply fails."
   }
 }
 

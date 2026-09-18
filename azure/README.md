@@ -580,6 +580,41 @@ onboarding turns on. You may start seeing 403s from Network Watcher in the accou
 once the firewall is on, which Azure documents as its normal behavior: it tries a key first, and
 falls back to a token when that is refused.
 
+### Reading them from inside the region
+
+The list above cannot help a reader in the storage account's own region, and a private endpoint
+is how you admit one. It gives the account an address inside this landing pad's VNet, so a
+collector or a virtual machine there reaches the records over Azure's backbone and never over the
+public endpoint the firewall guards:
+
+```hcl
+create_flow_log_private_endpoint = true
+```
+
+On the ARM path that is `CREATE_FLOW_LOG_PRIVATE_ENDPOINT=true`. It is off by default because a
+private endpoint bills hourly plus per GB, where everything else in this section is free.
+
+With it on you get the endpoint, the private DNS zone `privatelink.blob.core.windows.net` linked
+to this VNet, and the zone group that keeps the account's blob name resolving to the endpoint's
+address. All three go in the Network Watcher's resource group, beside the storage account.
+
+The subnet they need is separate, and it is carved as soon as you turn flow logs on, whether or
+not you ask for an endpoint. It takes the `/24` above the gateway range, it is empty until an
+endpoint lands in it, and Azure bills nothing for an empty subnet. The endpoint gets a subnet of
+its own rather than sharing the workstations' one, because everything in a subnet can reach a
+private endpoint in it at the network layer, and these records are the audit trail of what those
+workstations did.
+
+Turn it on if a compliance scan asks for private endpoints on storage accounts by name, which
+several do.
+
+**Turning it off again does not remove the endpoint.** The endpoint is deployed by an ARM
+template, and ARM's incremental mode never deletes a resource it stops declaring, so setting
+`create_flow_log_private_endpoint = false` leaves the endpoint, the zone and the link in place and
+still billing. Delete them yourself, and delete the zone only once nothing else resolves through
+it. Setting `create_flow_logs = false` is the clean path: that removes the whole deployment, the
+endpoint with it, and then the storage account and every record in it.
+
 ## A second region: name it, do not renumber it
 
 An Azure VNet is regional. A second region means a second VNet joined by **global VNet
@@ -617,11 +652,15 @@ cannot read the other region's state. Keep one map, shared.
 Every subnet is carved out of whichever `/16` the VNet took, so there is nothing else to keep
 in step:
 
-| index | region | `vnet_address_space` | `subnet_prefix` | `governed_subnet_prefix` | `gateway_subnet_prefix` |
-|---|---|---|---|---|---|
-| `0` | first | `10.70.0.0/16` | `10.70.1.0/24` | `10.70.224.0/20` | `10.70.240.0/24` |
-| `1` | second | `10.71.0.0/16` | `10.71.1.0/24` | `10.71.224.0/20` | `10.71.240.0/24` |
-| `2` | third | `10.72.0.0/16` | `10.72.1.0/24` | `10.72.224.0/20` | `10.72.240.0/24` |
+| index | region | `vnet_address_space` | `subnet_prefix` | `governed_subnet_prefix` | `gateway_subnet_prefix` | `flow_log_private_endpoint_subnet_prefix` |
+|---|---|---|---|---|---|---|
+| `0` | first | `10.70.0.0/16` | `10.70.1.0/24` | `10.70.224.0/20` | `10.70.240.0/24` | `10.70.241.0/24` |
+| `1` | second | `10.71.0.0/16` | `10.71.1.0/24` | `10.71.224.0/20` | `10.71.240.0/24` | `10.71.241.0/24` |
+| `2` | third | `10.72.0.0/16` | `10.72.1.0/24` | `10.72.224.0/20` | `10.72.240.0/24` | `10.72.241.0/24` |
+
+The last column is carved whenever `create_flow_logs` is set, and stays empty until you ask for a
+private endpoint. The range is reserved either way, so turning that switch on later renumbers
+nothing.
 
 Index `0` is what this module has always created, so an existing single-region landing pad
 plans as a **no-op** once you name its location at `0` — nothing is renumbered by adopting
@@ -635,7 +674,7 @@ individual subnet still works too.
 
 **The ARM template enforces the same allocation**, through a `regionIndex` parameter that has
 no default: the deployment is refused with `Missing input parameters: regionIndex` until you
-say which region this is, and the four CIDR parameters become overrides that derive from it
+say which region this is, and the five CIDR parameters become overrides that derive from it
 when unset. The two paths produce byte-identical ranges for the same index, so the table above
 is the authority for both. An existing deployment keeps every range it has by passing
 `regionIndex=0`.

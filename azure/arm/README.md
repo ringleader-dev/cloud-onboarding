@@ -171,7 +171,18 @@ Add `CREATE_FLOW_LOGS=true` and `deploy.sh` also deploys `azuredeploy-flowlogs.j
 Network Watcher's resource group. It passes the VNet's id and region, the watcher's name,
 `FLOW_LOG_RETENTION_DAYS` (365), and `FLOW_LOG_READER_IPS` (none), the addresses allowed to read the
 blobs. `deploy.sh` checks each of those is shaped like an IPv4 address or a CIDR range; Azure
-refuses the rest. The watcher defaults to `NetworkWatcher_<region>` in
+refuses the rest.
+
+`CREATE_FLOW_LOG_PRIVATE_ENDPOINT=true` additionally reaches that account over a private endpoint
+in the VNet, with its private DNS zone and the link. Setting it without `CREATE_FLOW_LOGS` is
+refused, since there would be no account to reach.
+
+The endpoint's subnet is carved by the network deployment whenever flow logs are on, not when the
+endpoint is, and `deploy.sh` passes its id from that deployment's `flowLogPrivateEndpointSubnetId`
+output into the flow log one. Both halves of that matter. A subnet dropped from the network
+template is deleted, Azure refuses to delete one holding a private endpoint's interface, and ARM
+leaves the endpoint in place when its condition turns false, so a subnet that followed the
+endpoint's own switch would fail the very apply that turned it off. The watcher defaults to `NetworkWatcher_<region>` in
 `NetworkWatcherRG`, and `NETWORK_WATCHER_NAME` and `NETWORK_WATCHER_RG` override it. `deploy.sh`
 looks the watcher up before it deploys. If the watcher does not exist or is in another region, it
 stops and names the watcher. It also refuses `NETWORK_WATCHER_RG=$RG`, because the role reaches that

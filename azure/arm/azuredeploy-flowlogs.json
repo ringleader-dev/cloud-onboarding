@@ -32,11 +32,27 @@
       "metadata": {
         "description": "Public IPv4 addresses or CIDR ranges allowed to read the flow log blobs. Empty admits no reader: the firewall denies every network except Azure trusted services, which is the exception Network Watcher writes through."
       }
+    },
+    "createFlowLogPrivateEndpoint": {
+      "type": "Bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Reach the flow log storage account over a private endpoint in the landing pad's VNet. Off by default: a private endpoint bills hourly plus per GB. Needs createFlowLogPrivateEndpointSubnet on the network template."
+      }
+    },
+    "privateEndpointSubnetId": {
+      "type": "String",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource id of the subnet the private endpoint goes in, from the network template's flowLogPrivateEndpointSubnetId output. Required when createFlowLogPrivateEndpoint is set."
+      }
     }
   },
   "variables": {
     "storageAccountName": "[concat('flowlogs', uniqueString(parameters('vnetId')))]",
-    "flowLogName": "[concat(last(split(parameters('vnetId'), '/')), '-', uniqueString(parameters('vnetId')))]"
+    "flowLogName": "[concat(last(split(parameters('vnetId'), '/')), '-', uniqueString(parameters('vnetId')))]",
+    "privateEndpointName": "[concat(variables('storageAccountName'), '-pe')]",
+    "blobPrivateDnsZoneName": "privatelink.blob.core.windows.net"
   },
   "resources": [
     {
@@ -80,6 +96,75 @@
           "type": "JSON",
           "version": 2
         }
+      }
+    },
+    {
+      "condition": "[parameters('createFlowLogPrivateEndpoint')]",
+      "type": "Microsoft.Network/privateEndpoints",
+      "apiVersion": "2024-05-01",
+      "name": "[variables('privateEndpointName')]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+      ],
+      "properties": {
+        "subnet": {
+          "id": "[parameters('privateEndpointSubnetId')]"
+        },
+        "privateLinkServiceConnections": [
+          {
+            "name": "[variables('privateEndpointName')]",
+            "properties": {
+              "privateLinkServiceId": "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]",
+              "groupIds": [
+                "blob"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "condition": "[parameters('createFlowLogPrivateEndpoint')]",
+      "type": "Microsoft.Network/privateDnsZones",
+      "apiVersion": "2024-06-01",
+      "name": "[variables('blobPrivateDnsZoneName')]",
+      "location": "global"
+    },
+    {
+      "condition": "[parameters('createFlowLogPrivateEndpoint')]",
+      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+      "apiVersion": "2024-06-01",
+      "name": "[concat(variables('blobPrivateDnsZoneName'), '/', last(split(parameters('vnetId'), '/')))]",
+      "location": "global",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateDnsZones', variables('blobPrivateDnsZoneName'))]"
+      ],
+      "properties": {
+        "virtualNetwork": {
+          "id": "[parameters('vnetId')]"
+        },
+        "registrationEnabled": false
+      }
+    },
+    {
+      "condition": "[parameters('createFlowLogPrivateEndpoint')]",
+      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+      "apiVersion": "2024-05-01",
+      "name": "[concat(variables('privateEndpointName'), '/default')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateEndpoints', variables('privateEndpointName'))]",
+        "[resourceId('Microsoft.Network/privateDnsZones', variables('blobPrivateDnsZoneName'))]"
+      ],
+      "properties": {
+        "privateDnsZoneConfigs": [
+          {
+            "name": "blob",
+            "properties": {
+              "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('blobPrivateDnsZoneName'))]"
+            }
+          }
+        ]
       }
     }
   ]

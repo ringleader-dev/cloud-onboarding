@@ -593,6 +593,30 @@ variable "flow_log_reader_ip_rules" {
   EOT
 }
 
+variable "flow_log_private_endpoint_subnet_prefix" {
+  type        = string
+  default     = null
+  description = "Range for the flow log private endpoint's subnet. Null derives the /24 above the gateway range, out of this landing pad's own /16, which is what every region gets unless you allocate ranges yourself."
+}
+
+variable "create_flow_log_private_endpoint" {
+  type        = bool
+  default     = false
+  description = <<-EOT
+    Reach the flow log storage account over a private endpoint in this landing pad's VNet, when
+    create_flow_logs is set.
+
+    Off by default, because a private endpoint bills hourly plus per GB. With it on, the module
+    carries a subnet for the endpoint, the endpoint itself, and the private DNS zone that resolves
+    the account's blob name to it, so a reader inside the VNet reaches the records over Azure's
+    backbone and never over the public endpoint.
+
+    Turn it on if a reader runs INSIDE the storage account's region. flow_log_reader_ip_rules
+    cannot admit one: Azure's IP rules have no effect on requests originating in that region. Turn
+    it on too if a compliance scan asks for private endpoints on storage accounts by name.
+  EOT
+}
+
 variable "network_watcher_name" {
   type        = string
   default     = null
