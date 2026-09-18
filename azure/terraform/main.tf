@@ -127,13 +127,18 @@ resource "azurerm_resource_group_template_deployment" "role" {
     artifactStorageAccountName  = { value = var.artifact_storage_account_name }
   })
 
-  # Checked here because this deployment is planned on every apply. Flow logs are declared on the
-  # VNet this module creates, so without one the switch would plan nothing, and a customer who set it
-  # for a compliance scan would believe the network was logged.
+  # Both checked here because this deployment is planned on every apply. Each switch below declares
+  # nothing of its own when its dependency is unset, so a customer who set one for a compliance scan
+  # would otherwise get a clean plan and believe they had the thing they asked for.
   lifecycle {
     precondition {
       condition     = var.create_network || !var.create_flow_logs
       error_message = "create_flow_logs is set, but create_network is false, so this module creates no VNet to record flow logs for. Turn on flow logs for your own VNet where it is declared, or unset create_flow_logs."
+    }
+
+    precondition {
+      condition     = var.create_flow_logs || !var.create_flow_log_private_endpoint
+      error_message = "create_flow_log_private_endpoint is set, but create_flow_logs is false, so there is no flow log storage account to reach privately. Turn flow logs on, or unset create_flow_log_private_endpoint."
     }
   }
 }
@@ -170,6 +175,11 @@ locals {
   subnet_prefix          = var.subnet_prefix != null ? var.subnet_prefix : cidrsubnet(local.vnet_address_space, 8, 1)
   governed_subnet_prefix = var.governed_subnet_prefix != null ? var.governed_subnet_prefix : cidrsubnet(local.vnet_address_space, 4, 14)
   gateway_subnet_prefix  = var.gateway_subnet_prefix != null ? var.gateway_subnet_prefix : cidrsubnet(local.vnet_address_space, 8, 240)
+
+  # The /24 immediately above the gateway range, for the flow log storage account's private
+  # endpoint. Carved only when create_flow_log_private_endpoint is set, so a pad that never asks
+  # for one takes no range it does not use. The ARM route derives the same offset.
+  flow_log_private_endpoint_subnet_prefix = var.flow_log_private_endpoint_subnet_prefix != null ? var.flow_log_private_endpoint_subnet_prefix : cidrsubnet(local.vnet_address_space, 8, 241)
 }
 
 resource "azurerm_virtual_network" "workstations" {
@@ -255,6 +265,30 @@ resource "azurerm_subnet" "gateway" {
   resource_group_name  = var.resource_group_name
   virtual_network_name = azurerm_virtual_network.workstations[0].name
   address_prefixes     = [local.gateway_subnet_prefix]
+}
+
+# Where the flow log storage account's private endpoint lands, when one is asked for.
+#
+# Its own subnet rather than the workstations' one: a private endpoint is reachable at the network
+# layer by everything in its subnet, and the records are the customer's audit trail of what those
+# workstations did. Private endpoint network policies are off because Azure requires that of a
+# subnet holding one.
+#
+# CARVED WHENEVER FLOW LOGS ARE ON, not only when the endpoint is. A subnet costs nothing and an
+# empty one is harmless, while destroying this one is not: the endpoint lives in an ARM deployment,
+# ARM's incremental mode never deletes a resource whose condition turns false, so turning the
+# endpoint off LEAVES its interface in this subnet. Tying the subnet to the endpoint's own switch
+# would then ask Azure to delete a subnet still in use, which it refuses, failing the apply.
+# Turning create_flow_logs off is the clean path: the deployment is destroyed, which takes the
+# endpoint with it, and only then does this subnet go.
+resource "azurerm_subnet" "flow_log_private_endpoint" {
+  count                = var.create_network && var.create_flow_logs ? 1 : 0
+  name                 = "flowlog-endpoint"
+  resource_group_name  = var.resource_group_name
+  virtual_network_name = azurerm_virtual_network.workstations[0].name
+  address_prefixes     = [local.flow_log_private_endpoint_subnet_prefix]
+
+  private_endpoint_network_policies = "Disabled"
 }
 
 resource "azurerm_network_security_group" "gateway" {
@@ -591,6 +625,9 @@ resource "azurerm_resource_group_template_deployment" "flow_logs" {
     networkWatcherName = { value = data.azurerm_network_watcher.flow_logs[0].name }
     retentionDays      = { value = var.flow_log_retention_days }
     logReaderIpRules   = { value = var.flow_log_reader_ip_rules }
+
+    createFlowLogPrivateEndpoint = { value = var.create_flow_log_private_endpoint }
+    privateEndpointSubnetId      = { value = one(azurerm_subnet.flow_log_private_endpoint[*].id) }
   })
 
   lifecycle {

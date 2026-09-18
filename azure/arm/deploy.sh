@@ -71,6 +71,10 @@
 #                account's firewall denies every network except
 #                these and Azure trusted services, so without one
 #                nothing outside Azure can read a record       (default: none)
+#   CREATE_FLOW_LOG_PRIVATE_ENDPOINT  reach the flow log
+#                storage account over a private endpoint in the
+#                VNet, so a reader inside its region can read the
+#                records. Bills hourly plus per GB            (default: false)
 #   NETWORK_WATCHER_NAME  the region's Network Watcher        (default: NetworkWatcher_<VNet region>)
 #   NETWORK_WATCHER_RG  its resource group. The flow log and its
 #                storage account are created there, never in RG (default: NetworkWatcherRG)
@@ -205,10 +209,22 @@ echo ">> subject:        $SUBJECT"
 # after the app, role and network are deployed.
 CREATE_FLOW_LOGS="${CREATE_FLOW_LOGS:-false}"
 FLOW_LOG_RETENTION_DAYS="${FLOW_LOG_RETENTION_DAYS:-365}"
+CREATE_FLOW_LOG_PRIVATE_ENDPOINT="${CREATE_FLOW_LOG_PRIVATE_ENDPOINT:-false}"
 NETWORK_WATCHER_NAME="${NETWORK_WATCHER_NAME:-}"
 NETWORK_WATCHER_RG="${NETWORK_WATCHER_RG:-NetworkWatcherRG}"
 if [ "$CREATE_FLOW_LOGS" != "true" ] && [ "$CREATE_FLOW_LOGS" != "false" ]; then
   echo "CREATE_FLOW_LOGS must be true or false, not '${CREATE_FLOW_LOGS}'" >&2
+  exit 1
+fi
+if [ "$CREATE_FLOW_LOG_PRIVATE_ENDPOINT" != "true" ] && [ "$CREATE_FLOW_LOG_PRIVATE_ENDPOINT" != "false" ]; then
+  echo "CREATE_FLOW_LOG_PRIVATE_ENDPOINT must be true or false, not '${CREATE_FLOW_LOG_PRIVATE_ENDPOINT}'" >&2
+  exit 1
+fi
+# The endpoint needs the subnet, and the subnet is carved by the network deployment. Asking for one
+# without the network is a request this script cannot satisfy, so it is refused here rather than
+# half-applied.
+if [ "$CREATE_FLOW_LOG_PRIVATE_ENDPOINT" = "true" ] && [ "$CREATE_FLOW_LOGS" != "true" ]; then
+  echo "CREATE_FLOW_LOG_PRIVATE_ENDPOINT is set but CREATE_FLOW_LOGS is not, so there is no flow log storage account to reach privately." >&2
   exit 1
 fi
 if [ "$CREATE_FLOW_LOGS" = "true" ] && [ "$CREATE_NETWORK" != "true" ]; then
@@ -365,12 +381,13 @@ if [ "$CREATE_NETWORK" = "true" ]; then
                  createGatewaySubnet="$CREATE_GATEWAY_SUBNET" \
                  gatewaySubnetCidr="$GATEWAY_SUBNET_CIDR" \
                  createGovernedSubnet="$CREATE_GOVERNED_SUBNET" \
+                 createFlowLogPrivateEndpointSubnet="$CREATE_FLOW_LOGS" \
                  governedSubnetCidr="$GOVERNED_SUBNET_CIDR" \
                  additionalGovernedSubnets="$ADDITIONAL_GOVERNED_SUBNETS_JSON" \
                  subnetRouteTables="$SUBNET_ROUTE_TABLES" \
                  workstationsNsgExists="$WORKSTATIONS_NSG_EXISTS" \
                  gatewayNsgExists="$GATEWAY_NSG_EXISTS" \
-    --query '[properties.outputs.subnetId.value, properties.outputs.governedSubnetId.value, properties.outputs.gatewaySubnetId.value]' -o tsv)"
+    --query '[properties.outputs.subnetId.value, properties.outputs.governedSubnetId.value, properties.outputs.gatewaySubnetId.value, properties.outputs.flowLogPrivateEndpointSubnetId.value]' -o tsv)"
   SUBNET_ID="$(echo "$NETWORK_OUTPUTS" | sed -n 1p)"
   GOVERNED_SUBNET_ID="$(echo "$NETWORK_OUTPUTS" | sed -n 2p)"
   # The gateway subnet is printed for the same reason the other two are: it is a value the
@@ -378,6 +395,9 @@ if [ "$CREATE_NETWORK" = "true" ]; then
   # out, an operator on this path never learns the id -- and Ringleader builds no gateway VM at
   # all until an Edge names it.
   GATEWAY_SUBNET_ID="$(echo "$NETWORK_OUTPUTS" | sed -n 3p)"
+  # The subnet the flow log storage account's private endpoint goes in. Carved whenever flow logs
+  # are on, so it is here to pass whether or not an endpoint was asked for.
+  FLOW_LOG_PE_SUBNET_ID="$(echo "$NETWORK_OUTPUTS" | sed -n 4p)"
   ADDITIONAL_GOVERNED_SUBNET_IDS="$(az deployment group show \
     --resource-group "$RG" \
     --name ringleader-onboarding-network \
@@ -415,6 +435,8 @@ if [ "$CREATE_FLOW_LOGS" = "true" ]; then
                  networkWatcherName="$NETWORK_WATCHER_NAME" \
                  retentionDays="$FLOW_LOG_RETENTION_DAYS" \
                  logReaderIpRules="$FLOW_LOG_READER_IPS_JSON" \
+                 createFlowLogPrivateEndpoint="$CREATE_FLOW_LOG_PRIVATE_ENDPOINT" \
+                 privateEndpointSubnetId="${FLOW_LOG_PE_SUBNET_ID:-}" \
     --query 'properties.provisioningState' -o tsv
 fi
 
