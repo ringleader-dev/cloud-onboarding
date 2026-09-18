@@ -493,14 +493,22 @@ them on, set one variable and apply again:
 create_flow_logs = true
 ```
 
-On the ARM path, run `deploy.sh` with `CREATE_FLOW_LOGS=true`. Either way the apply adds resources
-and changes none you already have. If you bring your own network (`create_network = false`), both
-paths refuse the switch, because there is no VNet here to log.
+On the ARM path, run `deploy.sh` with `CREATE_FLOW_LOGS=true`. If you bring your own network
+(`create_network = false`), both paths refuse the switch, because there is no VNet here to log.
+
+For a landing pad that has never recorded flow logs, the apply adds resources and changes none you
+already have. **If this landing pad already records flow logs, one thing changes**: that storage
+account's network rules, which are described below. Read *Reading the records* before you apply,
+because anything of yours that reads a record from outside Azure stops being able to until you list
+the address it reads from.
 
 With the switch on, you get a storage account and a flow log:
 
 - The storage account is named `flowlogs` plus a suffix derived from the VNet's id, and is in the
-  VNet's region.
+  VNet's region. Its firewall denies every network except the addresses you list and Azure trusted
+  services, which is the exception Network Watcher writes through. An authenticated caller from an
+  address you have not listed is denied like anyone else. Blob data was already closed to anonymous
+  callers and stays closed.
 - The flow log is on your region's Network Watcher. It writes the VNet's traffic into that account
   and deletes each record after `flow_log_retention_days` (`FLOW_LOG_RETENTION_DAYS`), 365 by
   default.
@@ -537,6 +545,40 @@ per subscription, plus the blob storage the records take.
 `create_flow_logs = false` deletes the flow log and the storage account, with every record in it.
 `deploy.sh` does not delete them: a later run with `CREATE_FLOW_LOGS=false` leaves both in place, and
 you delete them yourself if you want them gone.
+
+### Reading the records
+
+Nothing outside Azure can read a record until you say where it reads from, because the firewall
+that keeps everyone else out keeps you out too. List the address:
+
+```hcl
+flow_log_reader_ip_rules = ["203.0.113.4"]
+```
+
+On the ARM path that is `FLOW_LOG_READER_IPS`, comma-separated. Each entry is one public IPv4
+address or a CIDR range. Azure refuses a private range (anything under RFC 1918, so addresses
+starting 10, 172.16 to 172.31, and 192.168), and refuses a `/31` or `/32` prefix, for which you
+write the single address instead.
+
+Three things about that list are worth knowing before you rely on it:
+
+- **It cannot admit a reader inside the storage account's own region.** Azure's IP rules have no
+  effect on requests originating in that region, because those arrive on private Azure addresses
+  that a public-address rule cannot match, so listing the address does nothing and the reader is
+  still denied. Admitting one takes a virtual network rule, which this onboarding does not manage.
+  This list is for a machine outside the region.
+- **It governs the data, not the resource.** Listing containers in the portal keeps working, unless
+  something else blocks it, because a firewall rule applies to reading blobs and not to the
+  management API. Reading a record is what it stops.
+- **Add the address here, not on the storage account.** A rule you add by hand is removed the next
+  time you apply, because this onboarding declares the account's network rules and an apply
+  restores what it declares.
+
+Leave the list empty until you need to read a record. Flow logs are written either way: Azure
+Network Watcher reaches the account through the trusted-services exception, which is what this
+onboarding turns on. You may start seeing 403s from Network Watcher in the account's activity log
+once the firewall is on, which Azure documents as its normal behavior: it tries a key first, and
+falls back to a token when that is refused.
 
 ## A second region: name it, do not renumber it
 

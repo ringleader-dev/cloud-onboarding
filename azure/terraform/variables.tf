@@ -573,6 +573,26 @@ variable "flow_log_retention_days" {
   }
 }
 
+variable "flow_log_reader_ip_rules" {
+  type        = list(string)
+  default     = []
+  description = <<-EOT
+    Public IP addresses or CIDR ranges allowed to read the flow log blobs, when create_flow_logs
+    is set.
+
+    The storage account's firewall denies every network except these addresses and Azure trusted
+    services, which is the exception Network Watcher writes through. It denies you on the same
+    rule, so reading a record from a browser, the CLI or a collector outside Azure needs the
+    address it reads from listed here. Add it here rather than on the account, because a rule added
+    by hand is removed the next time this module is applied.
+
+    Each entry is one public IPv4 address or a CIDR range. Azure refuses a private range and
+    refuses a /31 or /32 prefix, for which you write the single address instead. A reader inside
+    the storage account's own region cannot be admitted this way at all, because Azure's IP rules
+    have no effect on requests originating in that region. See azure/README.md.
+  EOT
+}
+
 variable "network_watcher_name" {
   type        = string
   default     = null

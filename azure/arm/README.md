@@ -168,8 +168,10 @@ both properties.
 ## Optional flow logs
 
 Add `CREATE_FLOW_LOGS=true` and `deploy.sh` also deploys `azuredeploy-flowlogs.json` into the
-Network Watcher's resource group. It passes the VNet's id and region, the watcher's name, and
-`FLOW_LOG_RETENTION_DAYS` (365). The watcher defaults to `NetworkWatcher_<region>` in
+Network Watcher's resource group. It passes the VNet's id and region, the watcher's name,
+`FLOW_LOG_RETENTION_DAYS` (365), and `FLOW_LOG_READER_IPS` (none), the addresses allowed to read the
+blobs. `deploy.sh` checks each of those is shaped like an IPv4 address or a CIDR range; Azure
+refuses the rest. The watcher defaults to `NetworkWatcher_<region>` in
 `NetworkWatcherRG`, and `NETWORK_WATCHER_NAME` and `NETWORK_WATCHER_RG` override it. `deploy.sh`
 looks the watcher up before it deploys. If the watcher does not exist or is in another region, it
 stops and names the watcher. It also refuses `NETWORK_WATCHER_RG=$RG`, because the role reaches that

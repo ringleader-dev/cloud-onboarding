@@ -248,6 +248,15 @@ run "flow_logs_land_outside_ringleaders_reach" {
     condition     = jsondecode(azurerm_resource_group_template_deployment.flow_logs[0].parameters_content).networkWatcherName.value == "NetworkWatcher_eastus"
     error_message = "The flow log is not recorded by the watcher Azure enables for the landing pad's region."
   }
+
+  # The account's firewall denies every network except Azure trusted services, so the allowlist is
+  # what decides who may read a record. Empty is the only safe default: a customer who turns flow
+  # logs on and says nothing should get an account no reader outside Azure can reach, not one open
+  # to an address they forgot.
+  assert {
+    condition     = length(jsondecode(azurerm_resource_group_template_deployment.flow_logs[0].parameters_content).logReaderIpRules.value) == 0
+    error_message = "The flow log storage account admits a reader address by default, so turning flow logs on opens the records to somewhere the customer never named."
+  }
 }
 
 # Pointing the watcher's group at the group Ringleader's role reaches would put the records back
