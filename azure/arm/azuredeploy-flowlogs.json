@@ -52,7 +52,8 @@
     "storageAccountName": "[concat('flowlogs', uniqueString(parameters('vnetId')))]",
     "flowLogName": "[concat(last(split(parameters('vnetId'), '/')), '-', uniqueString(parameters('vnetId')))]",
     "privateEndpointName": "[concat(variables('storageAccountName'), '-pe')]",
-    "blobPrivateDnsZoneName": "privatelink.blob.core.windows.net"
+    "blobPrivateDnsZoneName": "privatelink.blob.core.windows.net",
+    "vnetLinkName": "[concat(last(split(parameters('vnetId'), '/')), '-', uniqueString(parameters('vnetId')))]"
   },
   "resources": [
     {
@@ -135,7 +136,7 @@
       "condition": "[parameters('createFlowLogPrivateEndpoint')]",
       "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
       "apiVersion": "2024-06-01",
-      "name": "[concat(variables('blobPrivateDnsZoneName'), '/', last(split(parameters('vnetId'), '/')))]",
+      "name": "[concat(variables('blobPrivateDnsZoneName'), '/', variables('vnetLinkName'))]",
       "location": "global",
       "dependsOn": [
         "[resourceId('Microsoft.Network/privateDnsZones', variables('blobPrivateDnsZoneName'))]"
