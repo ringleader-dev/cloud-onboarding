@@ -25,6 +25,13 @@
       "metadata": {
         "description": "How many days the storage account keeps each flow log record. deploy.sh and the Terraform module accept 1 to 365."
       }
+    },
+    "logReaderIpRules": {
+      "type": "Array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Public IPv4 addresses or CIDR ranges allowed to read the flow log blobs. Empty admits no reader: the firewall denies every network except Azure trusted services, which is the exception Network Watcher writes through."
+      }
     }
   },
   "variables": {
@@ -44,7 +51,13 @@
       "properties": {
         "minimumTlsVersion": "TLS1_2",
         "supportsHttpsTrafficOnly": true,
-        "allowBlobPublicAccess": false
+        "allowBlobPublicAccess": false,
+        "networkAcls": {
+          "defaultAction": "Deny",
+          "bypass": "AzureServices",
+          "ipRules": "[map(parameters('logReaderIpRules'), lambda('r', createObject('value', lambdaVariables('r'), 'action', 'Allow')))]",
+          "virtualNetworkRules": []
+        }
       }
     },
     {

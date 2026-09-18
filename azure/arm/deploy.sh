@@ -66,6 +66,11 @@
 #                CREATE_NETWORK=true. Bills per GB collected and
 #                stored                                          (default: false)
 #   FLOW_LOG_RETENTION_DAYS  days each flow record is kept, 1-365 (default: 365)
+#   FLOW_LOG_READER_IPS  comma-separated public IPs or CIDR
+#                ranges allowed to read the flow log blobs. The
+#                account's firewall denies every network except
+#                these and Azure trusted services, so without one
+#                nothing outside Azure can read a record       (default: none)
 #   NETWORK_WATCHER_NAME  the region's Network Watcher        (default: NetworkWatcher_<VNet region>)
 #   NETWORK_WATCHER_RG  its resource group. The flow log and its
 #                storage account are created there, never in RG (default: NetworkWatcherRG)
@@ -217,6 +222,27 @@ fi
 if [ "$CREATE_FLOW_LOGS" = "true" ] && ! printf '%s' "$FLOW_LOG_RETENTION_DAYS" | grep -Eq '^([1-9]|[1-9][0-9]|[12][0-9][0-9]|3[0-5][0-9]|36[0-5])$'; then
   echo "FLOW_LOG_RETENTION_DAYS must be a whole number from 1 to 365, not '${FLOW_LOG_RETENTION_DAYS}'" >&2
   exit 1
+fi
+
+# The reader allowlist, built into the JSON array the template takes. Empty stays an empty array,
+# which admits no reader: Network Watcher reaches the account through the Azure trusted services
+# exception and needs no rule of its own.
+FLOW_LOG_READER_IPS="${FLOW_LOG_READER_IPS:-}"
+FLOW_LOG_READER_IPS_JSON="[]"
+if [ -n "$FLOW_LOG_READER_IPS" ]; then
+  FLOW_LOG_READER_IPS_JSON=""
+  READER_REST="${FLOW_LOG_READER_IPS},"
+  while [ -n "$READER_REST" ]; do
+    entry="${READER_REST%%,*}"
+    READER_REST="${READER_REST#*,}"
+    entry="$(printf '%s' "$entry" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    if ! printf '%s' "$entry" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?$'; then
+      echo "FLOW_LOG_READER_IPS entry '$entry' is not an IPv4 address or CIDR range, e.g. 203.0.113.4 or 203.0.113.0/24" >&2
+      exit 1
+    fi
+    FLOW_LOG_READER_IPS_JSON="${FLOW_LOG_READER_IPS_JSON:+$FLOW_LOG_READER_IPS_JSON,}\"$entry\""
+  done
+  FLOW_LOG_READER_IPS_JSON="[${FLOW_LOG_READER_IPS_JSON}]"
 fi
 
 # 1. The Entra app (create if absent) + its service principal.
@@ -388,6 +414,7 @@ if [ "$CREATE_FLOW_LOGS" = "true" ]; then
     --parameters vnetId="$VNET_ID" location="$VNET_LOCATION" \
                  networkWatcherName="$NETWORK_WATCHER_NAME" \
                  retentionDays="$FLOW_LOG_RETENTION_DAYS" \
+                 logReaderIpRules="$FLOW_LOG_READER_IPS_JSON" \
     --query 'properties.provisioningState' -o tsv
 fi
 

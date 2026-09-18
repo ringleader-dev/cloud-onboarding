@@ -590,6 +590,7 @@ resource "azurerm_resource_group_template_deployment" "flow_logs" {
     location           = { value = var.location }
     networkWatcherName = { value = data.azurerm_network_watcher.flow_logs[0].name }
     retentionDays      = { value = var.flow_log_retention_days }
+    logReaderIpRules   = { value = var.flow_log_reader_ip_rules }
   })
 
   lifecycle {
