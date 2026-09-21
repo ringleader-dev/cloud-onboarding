@@ -625,6 +625,48 @@ still billing. Delete them yourself, and delete the zone only once nothing else 
 it. Setting `create_flow_logs = false` is the clean path: that removes the whole deployment, the
 endpoint with it, and then the storage account and every record in it.
 
+**Two landing pads cannot deploy their endpoints at the same time.** Azure serializes writes to
+that one zone. When two pads deploy against it at once, one of them fails with a `Conflict` inside
+a `DeploymentFailed`:
+
+```
+"code": "Conflict",
+"message": "Another operation is pending for requested object. Operation group
+  '...|privateDnsZones|privatelink.blob.core.windows.net' already has 1 operations like
+  '/operations/type/UpsertPrivateDnsZone/...' queued."
+```
+
+The operation type names whichever object lost: the zone, this VNet's link to it, or the record
+that points the account's blob name at the endpoint. Whichever it was, the deployment stopped
+before it finished. Records keep arriving throughout, because Network Watcher writes them through
+the trusted-services exception. What breaks is reading them from inside the VNet, because the blob
+name resolves to the account's public address and the firewall refuses it.
+
+Run the deployment again once the other pad has finished, which restores whichever part is missing.
+On the ARM route that is `deploy.sh` with the same variables as the run that failed. Without
+`CREATE_FLOW_LOGS=true` it deploys no flow logs at all, and without
+`CREATE_FLOW_LOG_PRIVATE_ENDPOINT=true` it deploys them but declares no endpoint, zone or link. On the
+Terraform route a plain `terraform apply` can report no changes while the pad is still incomplete,
+so make the template run again:
+
+1. Set `create_flow_log_private_endpoint` to `false` and apply.
+2. Set it back to `true` and apply again.
+
+Nothing is deleted on the way, because ARM's incremental mode leaves a resource it stops declaring
+in place. The zone should then hold a link for this VNet, and a record for this pad's storage
+account, which is the `flowlogs` name derived from the VNet's id above. If the zone itself lost the
+race, both commands say so rather than returning an empty table:
+
+```bash
+az network private-dns link vnet list -o table \
+  -g NetworkWatcherRG -z privatelink.blob.core.windows.net
+az network private-dns record-set a list -o table \
+  -g NetworkWatcherRG -z privatelink.blob.core.windows.net
+```
+
+Pass your own group to `-g` if you moved the Network Watcher
+(`network_watcher_resource_group_name`, `NETWORK_WATCHER_RG`).
+
 ## A second region: name it, do not renumber it
 
 An Azure VNet is regional. A second region means a second VNet joined by **global VNet
@@ -832,10 +874,13 @@ control-plane actions.
 VNet link are all derived from the VNet's id, so they never collide. The private DNS zone is
 different: `privatelink.blob.core.windows.net` is the name Azure requires for blob private
 endpoints, so it cannot be renamed, and both organizations' deployments declare that one zone in
-the Network Watcher's resource group. That is shared state rather than a collision, and it has one
-consequence: on the Terraform route, the first organization turning `create_flow_logs` off destroys
-its deployment, which tries to take the shared zone with it while the second organization is still
-resolving through it. Point one of them at a Network Watcher resource group of its own
+the Network Watcher's resource group. That is shared state rather than a collision, and it has two
+consequences. Two organizations that both set `create_flow_log_private_endpoint`
+(`CREATE_FLOW_LOG_PRIVATE_ENDPOINT`) cannot deploy at the same time, which
+*[Reading them from inside the region](#reading-them-from-inside-the-region)* covers. And on the
+Terraform route, the first organization turning `create_flow_logs` off destroys its deployment,
+which tries to take the shared zone with it while the second organization is still resolving
+through it. Point one of them at a Network Watcher resource group of its own
 (`network_watcher_resource_group_name`, `NETWORK_WATCHER_RG`) if you want them independent, and
 turn flow logs off in a shared group only when nothing else is using the zone.
 
