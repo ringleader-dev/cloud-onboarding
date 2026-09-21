@@ -168,6 +168,36 @@ variable "enable_artifact_storage" {
   EOT
 }
 
+variable "artifact_storage_bucket_prefix" {
+  type        = string
+  default     = ""
+  description = <<-EOT
+    A short label of your own that Ringleader's managed artifact buckets must carry in their name,
+    narrowing the grant from every bucket named ringleader-* to only those named
+    ringleader-<this>*. Empty -- the default -- keeps today's wider bound, so a landing pad that
+    does not set it is unchanged.
+
+    Set it when one account serves several Ringleader organizations. The managed width is bounded
+    by a name prefix and nothing else, so on the default both organizations' grants reach each
+    other's buckets.
+
+    Exactly eight lowercase letters or digits, or empty. The length is fixed on purpose: the bound
+    is a PREFIX match, so labels of differing length could overlap -- `acme` would cover every
+    `acmedev` bucket -- and two labels of the same length never can. The first eight characters of
+    your Ringleader organization id are a good choice.
+
+    BOTH organizations need a label for this to separate them. One set on the second alone narrows
+    the second's grant and leaves the first's reaching every bucket named ringleader-*, the
+    second's included. Name the bucket on each Storage object ringleader-<label>... to match:
+    Ringleader is not told the label, so a bucket named otherwise is one the grant cannot reach.
+  EOT
+
+  validation {
+    condition     = can(regex("^([a-z0-9]{8})?$", var.artifact_storage_bucket_prefix))
+    error_message = "artifact_storage_bucket_prefix must be empty or exactly eight lowercase letters or digits. The length is fixed because the grant's bound is a PREFIX match: two labels of differing length can overlap (acme would cover every acmedev bucket) and two of the same length never can."
+  }
+}
+
 variable "artifact_storage_bucket" {
   type        = string
   default     = ""
@@ -527,6 +557,23 @@ variable "flow_log_retention_days" {
   validation {
     condition     = contains([1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653], var.flow_log_retention_days)
     error_message = "flow_log_retention_days must be one of the values CloudWatch Logs accepts: 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288 or 3653."
+  }
+}
+
+variable "flow_log_group_name" {
+  type        = string
+  default     = "ringleader-workstations-flow-logs"
+  description = <<-EOT
+    Name of the CloudWatch Logs group the flow log delivers into, when create_flow_logs is set.
+
+    A log group name is unique per account and region. Two Ringleader organizations onboarding
+    into one account and region must therefore give the second a name of its own, or its apply
+    fails on a group that already exists. Leave it alone on the first.
+  EOT
+
+  validation {
+    condition     = can(regex("^[a-zA-Z0-9_./#-]{1,512}$", var.flow_log_group_name))
+    error_message = "flow_log_group_name must be a valid CloudWatch Logs group name (1-512 chars of [a-zA-Z0-9_./#-])."
   }
 }
 

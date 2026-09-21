@@ -31,6 +31,12 @@
 #   ARTIFACT_STORAGE_BUCKET a bucket YOU created, to take the narrower "named" width
 #                 instead of letting Ringleader create its own  (default: empty, managed)
 #   ARTIFACT_STORAGE_ROLE   id of that custom role             (default: ringleaderArtifactStorage)
+#   ARTIFACT_STORAGE_BUCKET_PREFIX  a short label of your own that the
+#                 managed width's buckets must carry in their name, narrowing
+#                 the grant from every ringleader-* bucket to only
+#                 ringleader-<this>*. Set it when one PROJECT serves several
+#                 Ringleader organizations, so neither reaches the other's
+#                 buckets                                      (default: empty, the wider bound)
 #
 # The defaults grant what Ringleader needs for the features available today, so enabling one
 # later does not mean a second onboarding pass. Step 2b is the broadest of them -- read it
@@ -47,6 +53,16 @@ PROVIDER="${PROVIDER:-oidc}"
 EGRESS_ROLE="${EGRESS_ROLE:-ringleaderEgressControl}"
 IDENTITY_ROLE="${IDENTITY_ROLE:-ringleaderManagedIdentities}"
 ARTIFACT_STORAGE_ROLE="${ARTIFACT_STORAGE_ROLE:-ringleaderArtifactStorage}"
+# Appended after MANAGED_BUCKET_PREFIX in the IAM condition below. Empty keeps the bound this
+# script has always written, so a re-run that does not set it changes nothing. It bounds what the
+# grant REACHES and not what may be created: storage.buckets.create is authorized against the
+# project and cannot carry a name condition, so the provisioning role stays project-wide.
+ARTIFACT_STORAGE_BUCKET_PREFIX="${ARTIFACT_STORAGE_BUCKET_PREFIX:-}"
+if [ -n "$ARTIFACT_STORAGE_BUCKET_PREFIX" ] &&
+   ! printf '%s' "$ARTIFACT_STORAGE_BUCKET_PREFIX" | grep -Eq '^[a-z0-9]{8}$'; then
+  echo "ARTIFACT_STORAGE_BUCKET_PREFIX must be exactly eight lowercase letters or digits. The length is fixed because the grant's bound is a PREFIX match: two labels of differing length can overlap (acme would cover every acmedev bucket) and two of the same length never can." >&2
+  exit 1
+fi
 ARTIFACT_STORAGE_BUCKET="${ARTIFACT_STORAGE_BUCKET:-}"
 SA_EMAIL="${SA}@${PROJECT}.iam.gserviceaccount.com"
 
@@ -56,6 +72,10 @@ SA_EMAIL="${SA}@${PROJECT}.iam.gserviceaccount.com"
 # every bucket create fails with a 403 that looks like a Ringleader bug. Not an override, on
 # purpose -- it is not the operator's to choose.
 MANAGED_BUCKET_PREFIX="ringleader-"
+# The bound the managed width's IAM condition is written against. Declared HERE, below the
+# prefix it reads: this script runs under `set -u`, so a forward reference is not a wrong
+# value, it is an abort before anything is created.
+MANAGED_BUCKET_BOUND="${MANAGED_BUCKET_PREFIX}${ARTIFACT_STORAGE_BUCKET_PREFIX}"
 
 # Guardrails: a wrong issuer or organization id bakes a subtly-broken trust into your cloud.
 case "$ISSUER_URL" in
@@ -313,11 +333,47 @@ if [[ "${ARTIFACT_STORAGE:-1}" == "1" ]]; then
     # An object's resource name is projects/_/buckets/<bucket>/objects/<object>, so one prefix
     # test covers the bucket and everything in it, and a request against any other resource --
     # including the project itself -- fails the test and is refused.
-    gcloud projects add-iam-policy-binding "$PROJECT" \
-      --member "serviceAccount:${SA_EMAIL}" \
-      --role "projects/${PROJECT}/roles/${ARTIFACT_STORAGE_ROLE}" \
-      --condition="title=Ringleader-managed artifact buckets only,description=Only buckets whose name starts with ${MANAGED_BUCKET_PREFIX} and the objects in them,expression=resource.name.startsWith(\"projects/_/buckets/${MANAGED_BUCKET_PREFIX}\")" >/dev/null
-    echo ">> granted $ARTIFACT_STORAGE_ROLE  (artifact storage, buckets named ${MANAGED_BUCKET_PREFIX}* only)"
+    # `gcloud` keys a binding by its CONDITION and is additive, so a run that CHANGES
+    # ARTIFACT_STORAGE_BUCKET_PREFIX would leave the previous condition's binding in place beside
+    # the new one. The grant is the UNION of the two, so the WIDER bound would survive while this
+    # script printed the narrower one -- the same failure the width switch below exists to prevent,
+    # and the reason `--all` is used there.
+    #
+    # So the old binding is removed first, but ONLY when it differs from the one being written.
+    # Removing and re-adding on every run would leave the account with no artifact-storage grant
+    # between the two calls, and this script is documented as safe to re-run -- an unchanged
+    # re-run must not open a window in which Ringleader cannot reach the bucket.
+    WANT_BOUND_EXPR="resource.name.startsWith(\"projects/_/buckets/${MANAGED_BUCKET_PREFIX}${ARTIFACT_STORAGE_BUCKET_PREFIX}\")"
+    BOUND_FILTER="bindings.role=projects/${PROJECT}/roles/${ARTIFACT_STORAGE_ROLE} bindings.members=serviceAccount:${SA_EMAIL}"
+    HAVE_BOUND_EXPR="$(gcloud projects get-iam-policy "$PROJECT" --flatten="bindings[].members" --filter="$BOUND_FILTER" --format="value(bindings.condition.expression)")"
+    if [ "$HAVE_BOUND_EXPR" = "$WANT_BOUND_EXPR" ]; then
+      echo ">> ${ARTIFACT_STORAGE_ROLE} is already bound to ${MANAGED_BUCKET_BOUND}* -- leaving it"
+    else
+      # "There was no such binding" is the normal case on a first run and is not a failure; the
+      # pattern requires the word BINDING for the reason set out below.
+      if [ -n "$HAVE_BOUND_EXPR" ]; then
+        BOUND_LOG="$(mktemp)"
+        if ! gcloud projects remove-iam-policy-binding "$PROJECT" \
+              --member "serviceAccount:${SA_EMAIL}" \
+              --role "projects/${PROJECT}/roles/${ARTIFACT_STORAGE_ROLE}" --all >"$BOUND_LOG" 2>&1; then
+          if ! grep -qiE 'binding[s]?.*(not found|does not exist)' "$BOUND_LOG"; then
+            cat "$BOUND_LOG" >&2
+            rm -f "$BOUND_LOG"
+            echo "!! could not replace the project-level ${ARTIFACT_STORAGE_ROLE} binding" >&2
+            echo "!! stopping: continuing would add the bound you asked for BESIDE the one already" >&2
+            echo "!! there, and report the narrower of the two" >&2
+            exit 1
+          fi
+        fi
+        rm -f "$BOUND_LOG"
+        echo ">> removed the previous ${ARTIFACT_STORAGE_ROLE} bound (it named a different prefix)"
+      fi
+      gcloud projects add-iam-policy-binding "$PROJECT" \
+        --member "serviceAccount:${SA_EMAIL}" \
+        --role "projects/${PROJECT}/roles/${ARTIFACT_STORAGE_ROLE}" \
+        --condition="title=Ringleader-managed artifact buckets only,description=Only buckets whose name starts with ${MANAGED_BUCKET_BOUND} and the objects in them,expression=${WANT_BOUND_EXPR}" >/dev/null
+      echo ">> granted $ARTIFACT_STORAGE_ROLE  (artifact storage, buckets named ${MANAGED_BUCKET_BOUND}* only)"
+    fi
 
     if gcloud iam roles describe "${ARTIFACT_STORAGE_ROLE}Provision" --project "$PROJECT" >/dev/null 2>&1; then
       gcloud iam roles update "${ARTIFACT_STORAGE_ROLE}Provision" --project "$PROJECT" \

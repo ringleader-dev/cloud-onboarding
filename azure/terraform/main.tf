@@ -24,6 +24,15 @@
 # so it can be referenced from another repository. See examples/standalone for a
 # ready-to-apply root configuration.
 
+# The tenant the app registration below lives in -- the same value `az account show --query
+# tenantId` prints for an operator whose two providers point at one tenant. It reads the azuread
+# provider's own token, calls nothing and needs no permission. It is azuread rather than azurerm
+# deliberately: the app registration is an azuread resource, and the handoff hands back the tenant
+# whose federated credential Ringleader presents its assertion to, which is that one. It is here so
+# the handoff carries every value CloudAccount.spec.azure requires, rather than sending the
+# operator to the CLI for one of them.
+data "azuread_client_config" "current" {}
+
 locals {
   # The per-org issuer Ringleader signs with. Azure pins the issuer byte-exactly, so this
   # must match exactly; the audience is Microsoft's documented value.
@@ -43,9 +52,10 @@ locals {
 # then deploys the role and the landing pad into its own group and grants them to the identity you
 # already have. See ../README.md#a-second-region-name-it-do-not-renumber-it.
 #
-# Applying twice into ONE resource group is not the way around it. It collides on the role
-# deployment below, whose name is a fixed literal, and it would still mint the second app -- nothing
-# about an app registration is scoped by group or location.
+# Applying twice into ONE resource group is not the way around it. It would still mint the second
+# app -- nothing about an app registration is scoped by group or location -- and the second apply
+# has to rename the role deployment, the role and the landing pad's resources as well, through
+# deployment_name, role_name and name_prefix. See ../README.md#serving-a-second-organization.
 resource "azuread_application" "workstations" {
   count            = var.create_identity ? 1 : 0
   display_name     = var.app_display_name
@@ -595,7 +605,9 @@ resource "azurerm_subnet_network_security_group_association" "governed_additiona
 # exist at plan time. The default name is built from location written the way Azure writes region
 # names, lowercase with no spaces. Destroying the deployment, which is what turning create_flow_logs
 # off does, deletes the resources it created: the flow log and the storage account, with every
-# record in it.
+# record in it, and -- when create_flow_log_private_endpoint was set -- the endpoint and the
+# privatelink.blob.core.windows.net zone, which is SHARED with every other landing pad in the
+# watcher's resource group. See ../README.md#serving-a-second-organization.
 
 data "azurerm_network_watcher" "flow_logs" {
   count               = var.create_network && var.create_flow_logs ? 1 : 0

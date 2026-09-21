@@ -450,8 +450,8 @@ resource "google_project_iam_member" "artifact_storage" {
 
   condition {
     title       = "Ringleader-managed artifact buckets only"
-    description = "Only buckets whose name starts with ${local.managed_bucket_prefix}, and the objects in them."
-    expression  = "resource.name.startsWith(\"projects/_/buckets/${local.managed_bucket_prefix}\")"
+    description = "Only buckets whose name starts with ${local.managed_bucket_prefix}${var.artifact_storage_bucket_prefix}, and the objects in them."
+    expression  = "resource.name.startsWith(\"projects/_/buckets/${local.managed_bucket_prefix}${var.artifact_storage_bucket_prefix}\")"
   }
 
   depends_on = [google_project_service.cloudresourcemanager]

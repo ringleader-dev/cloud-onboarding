@@ -32,6 +32,14 @@
 #                + NSG landing pad. Its NAT gateway and public IP
 #                bill per hour                                 (default: true)
 #   NAME_PREFIX  prefix for the landing pad's resources        (default: ringleader)
+#   ROLE_DEPLOYMENT_NAME / NETWORK_DEPLOYMENT_NAME
+#                names of the two ARM deployment records whose names
+#                are otherwise fixed. An ARM deployment is a named
+#                object in the resource group, so two Ringleader
+#                organizations sharing ONE resource group each need
+#                their own pair. The third record, for flow logs,
+#                already carries NAME_PREFIX and the group name
+#                          (defaults: azuredeploy, ringleader-onboarding-network)
 #   REGION_INDEX which /16 this region's landing pad takes:     (REQUIRED when
 #                the VNet gets 10.(70 + REGION_INDEX).0.0/16      CREATE_NETWORK=true)
 #                and every subnet is carved out of it. Give your
@@ -103,6 +111,14 @@ ISSUER_URL="${ISSUER_URL:?set ISSUER_URL to the Ringleader issuer origin, e.g. h
 ORG_UID="${ORG_UID:?set ORG_UID to your Ringleader organization id, a UUID}"
 APP_NAME="${APP_NAME:-ringleader-workstations}"
 ROLE_NAME="${ROLE_NAME:-Ringleader Workstation Operator}"
+# Two of the three ARM deployment records this script creates; the flow-log one further down
+# derives its name from NAME_PREFIX and the resource group already. Both defaults reproduce what
+# this script has always created --
+# azuredeploy is what az derives from azuredeploy.json when no --name is given. They matter only
+# when one resource group holds two landing pads: a deployment name is scoped to the resource
+# group, and the network outputs are read back by name further down.
+ROLE_DEPLOYMENT_NAME="${ROLE_DEPLOYMENT_NAME:-azuredeploy}"
+NETWORK_DEPLOYMENT_NAME="${NETWORK_DEPLOYMENT_NAME:-ringleader-onboarding-network}"
 CREATE_NETWORK="${CREATE_NETWORK:-true}"
 NAME_PREFIX="${NAME_PREFIX:-ringleader}"
 VNET_CIDR="${VNET_CIDR:-}"
@@ -295,6 +311,7 @@ echo ">> federated credential set (issuer=${ISSUER}, subject=${SUBJECT})"
 # 3. The custom role + assignment, scoped to the resource group (ARM).
 az deployment group create \
   --resource-group "$RG" \
+  --name "$ROLE_DEPLOYMENT_NAME" \
   --template-file "${SCRIPT_DIR}/azuredeploy.json" \
   --parameters principalId="$SP_OBJECT_ID" roleName="$ROLE_NAME" \
                enableWorkstationIdentities="$ENABLE_IDENTITIES" \
@@ -367,7 +384,7 @@ if [ "$CREATE_NETWORK" = "true" ]; then
 
   NETWORK_OUTPUTS="$(az deployment group create \
     --resource-group "$RG" \
-    --name ringleader-onboarding-network \
+    --name "$NETWORK_DEPLOYMENT_NAME" \
     --template-file "${SCRIPT_DIR}/azuredeploy-network.json" \
     --parameters namePrefix="$NAME_PREFIX" \
                  `# regionIndex has no default in the template, so it must always be passed. The` \
@@ -400,7 +417,7 @@ if [ "$CREATE_NETWORK" = "true" ]; then
   FLOW_LOG_PE_SUBNET_ID="$(echo "$NETWORK_OUTPUTS" | sed -n 4p)"
   ADDITIONAL_GOVERNED_SUBNET_IDS="$(az deployment group show \
     --resource-group "$RG" \
-    --name ringleader-onboarding-network \
+    --name "$NETWORK_DEPLOYMENT_NAME" \
     --query 'properties.outputs.additionalGovernedSubnetIds.value[].id' -o tsv)"
 fi
 

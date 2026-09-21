@@ -8,6 +8,11 @@ output "service_principal_object_id" {
   description = "The service principal's object id, which the role assignment names. Record it: it is what a SECOND region passes as existing_principal_object_id."
 }
 
+output "tenant_id" {
+  value       = data.azuread_client_config.current.tenant_id
+  description = "Hand back to Ringleader: the Entra tenant the app registration lives in, read from the azuread provider that creates it."
+}
+
 output "subscription_id" {
   value       = var.subscription_id
   description = "Hand back to Ringleader: the subscription your workstations run in."
@@ -91,8 +96,7 @@ output "artifact_storage_account_name" {
 
 output "handoff" {
   description = <<-EOT
-    Everything to hand back to Ringleader, in one place. Add your tenant id
-    (az account show --query tenantId -o tsv).
+    Everything to hand back to Ringleader, in one place.
 
     THREE subnet ids beside any additional ones, and they are not interchangeable: a workstation that carries an egress
     policy goes in governed_subnet_id, every other one in subnet_id, and gateway_subnet_id
@@ -102,6 +106,7 @@ output "handoff" {
   EOT
   value = {
     target_app_client_id           = local.target_client_id
+    tenant_id                      = data.azuread_client_config.current.tenant_id
     subscription_id                = var.subscription_id
     resource_group_name            = var.resource_group_name
     subnet_id                      = var.create_network ? azurerm_subnet.workstations[0].id : null

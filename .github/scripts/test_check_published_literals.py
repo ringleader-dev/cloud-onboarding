@@ -27,6 +27,7 @@ from pathlib import Path
 from check_published_literals import (
     AWS_CFN,
     AWS_TF,
+    AWS_VARS,
     GCP_ONBOARD_SH,
     AZURE_ARM,
     AZURE_SH,
@@ -190,14 +191,25 @@ class GatewayTagWiring(Rejects):
         self.assertRejected(
             edited((GCP_SH, '--rules tcp,udp,icmp --source-ranges "$WORKSTATION_RANGES" --target-tags "$GATEWAY_TAG"',
                     f'--rules tcp,udp,icmp --source-ranges "$WORKSTATION_RANGES" --target-tags "{GATEWAY_TAG}"')),
-            "ringleader-allow-gateway",
+            "${NAME_PREFIX}-allow-gateway",
         )
 
     def test_the_shell_rule_is_renamed(self):
         self.assertRejected(
-            edited((GCP_SH, "gcloud compute firewall-rules create ringleader-allow-gateway --project",
-                    "gcloud compute firewall-rules create ringleader-allow-egress-gateway --project")),
-            "firewall-rules create ringleader-allow-gateway",
+            edited((GCP_SH, 'gcloud compute firewall-rules create "${NAME_PREFIX}-allow-gateway" --project',
+                    'gcloud compute firewall-rules create "${NAME_PREFIX}-allow-egress-gateway" --project')),
+            'firewall-rules create "${NAME_PREFIX}-allow-gateway"',
+        )
+
+    def test_the_shell_rule_hardcodes_its_name(self):
+        # A name written out instead of built from NAME_PREFIX. The rule still deploys, and it
+        # still admits the right tag, so nothing here is visibly wrong -- but a second Ringleader
+        # organization can no longer apply this script into the same project, which is the whole
+        # reason these names carry the prefix.
+        self.assertRejected(
+            edited((GCP_SH, 'gcloud compute firewall-rules create "${NAME_PREFIX}-allow-gateway" --project',
+                    "gcloud compute firewall-rules create ringleader-allow-gateway --project")),
+            'firewall-rules create "${NAME_PREFIX}-allow-gateway"',
         )
 
 
@@ -512,9 +524,9 @@ class TheManagementRuleWiring(Rejects):
 
     def test_the_shell_rule_is_renamed(self):
         self.assertRejected(
-            edited((GCP_SH, "gcloud compute firewall-rules create ringleader-allow-gateway-management --project",
-                    "gcloud compute firewall-rules create ringleader-allow-mgmt --project")),
-            "ringleader-allow-gateway-management",
+            edited((GCP_SH, 'gcloud compute firewall-rules create "${NAME_PREFIX}-allow-gateway-management" --project',
+                    'gcloud compute firewall-rules create "${NAME_PREFIX}-allow-mgmt" --project')),
+            "${NAME_PREFIX}-allow-gateway-management",
         )
 
 
@@ -775,12 +787,13 @@ class TheArmGroupsKeepARuleTheyDidNotDeclare(Rejects):
 
 
 class ARuleNameThatPrefixesAnotherIsNotThatRule(unittest.TestCase):
-    """`ringleader-allow-gateway` and `ringleader-allow-gateway-management` are two rules.
+    """`allow-gateway` and `allow-gateway-management` are two rules, and one name prefixes the other.
 
-    Matched with a trailing `\\b`, the first name is found inside the second -- a hyphen is a
-    non-word character -- and the shell wiring check then reports two invocations of a rule that
-    has one. It fails on a correct artifact, and the cheapest way out is renaming the new rule
-    rather than reading the file properly, so it is pinned here instead.
+    Matched with a trailing `\\b`, the first is found inside the second -- a hyphen is a non-word
+    character -- and the shell wiring check then reports two invocations of a rule that has one. It
+    fails on a correct artifact, and the cheapest way out is renaming the new rule rather than
+    reading the file properly, so it is pinned here instead. The closing quote in `sh_rule_create`
+    now separates them as well, which makes this two independent defences rather than one.
     """
 
     def test_the_shipped_script_is_not_miscounted(self):
@@ -790,8 +803,8 @@ class ARuleNameThatPrefixesAnotherIsNotThatRule(unittest.TestCase):
         # The lookahead narrows the match; it must not stop the check seeing a real second
         # invocation, whose flags are what the customer would actually get.
         one = (
-            'gcloud compute firewall-rules create ringleader-allow-gateway --project "$PROJECT" \\\n'
-            "  --network ringleader-vpc --direction INGRESS --action allow \\\n"
+            'gcloud compute firewall-rules create "${NAME_PREFIX}-allow-gateway" --project "$PROJECT" \\\n'
+            '  --network "$VPC" --direction INGRESS --action allow \\\n'
             '  --rules tcp,udp,icmp --source-ranges "$WORKSTATION_RANGES" --target-tags "$GATEWAY_TAG"'
         )
         src = mutate(sources()[GCP_SH], one, one + "\n" + one)
@@ -825,10 +838,11 @@ class TheManagedBucketPrefixCannotDrift(Rejects):
 
     def test_renamed_in_the_cloudformation_only(self):
         self.assertRejected(
-            edited((AWS_CFN, 'arn:${AWS::Partition}:s3:::ringleader-*/*',
-                    'arn:${AWS::Partition}:s3:::rl-*/*')),
+            edited((AWS_CFN, 'arn:${AWS::Partition}:s3:::ringleader-${ArtifactStorageBucketPrefix}*/*',
+                    'arn:${AWS::Partition}:s3:::rl-${ArtifactStorageBucketPrefix}*/*')),
             "not one",
         )
+
 
     def test_renamed_everywhere_still_fails(self):
         # The pair that matters most: every site agrees with the others and no longer with the
@@ -842,17 +856,221 @@ class TheManagedBucketPrefixCannotDrift(Rejects):
         # The shape every value-only guard misses: the pin still reads "ringleader-", and the
         # condition it is supposed to bound now names something else.
         self.assertRejected(
-            edited((GCP_TF, 'resource.name.startsWith(\\"projects/_/buckets/${local.managed_bucket_prefix}\\")',
+            edited((GCP_TF, 'resource.name.startsWith(\\"projects/_/buckets/${local.managed_bucket_prefix}${var.artifact_storage_bucket_prefix}\\")',
                     'resource.name.startsWith(\\"projects/_/buckets/\\")')),
-            "does not interpolate the declared prefix",
+            "by reference and not by coincidence",
         )
 
     def test_the_aws_arn_stops_referencing_the_local(self):
         self.assertRejected(
-            edited((AWS_TF, '"arn:${data.aws_partition.current.partition}:s3:::${local.managed_bucket_prefix}*",',
+            edited((AWS_TF, '"arn:${data.aws_partition.current.partition}:s3:::${local.managed_bucket_prefix}${var.artifact_storage_bucket_prefix}*",',
                     '"arn:${data.aws_partition.current.partition}:s3:::ringleader-*",')),
-            "does not interpolate the declared prefix",
+            "by reference and not by coincidence",
         )
+
+
+class TheLandingPadNamePrefixDefaultCannotDrift(Rejects):
+    """A variable's DEFAULT is what both GCP routes ship, so moving one splits the two routes.
+
+    The names it builds were literals until the script took NAME_PREFIX, and a literal was pinned by
+    being matched. A variable is not, so the default needs its own pin: move it on either route and
+    every other check here stays green, because each route remains internally consistent while the
+    two no longer build the same landing pad.
+    """
+
+    def test_moved_in_the_script_only(self):
+        self.assertRejected(
+            edited((GCP_SH, 'NAME_PREFIX="${NAME_PREFIX:-ringleader}"', 'NAME_PREFIX="${NAME_PREFIX:-rl}"')),
+            "name prefix default",
+        )
+
+    def test_moved_in_the_terraform_only(self):
+        self.assertRejected(
+            edited((GCP_VARS, 'variable "name_prefix" {\n  type        = string\n  default     = "ringleader"',
+                    'variable "name_prefix" {\n  type        = string\n  default     = "rl"')),
+            "name prefix default",
+        )
+
+
+class ARebindOfANamePinIsRefused(Rejects):
+    """The closed grammar protects only the names it is given, and bash has more than one binder.
+
+    A rebind after the pinned assignment wins at runtime while every reader -- this guard included
+    -- sees the value it was declared with. `printf -v` and a loop variable are the two spellings
+    that look like ordinary commands.
+    """
+
+    def test_name_prefix_rebound_by_printf(self):
+        self.assertRejected(
+            edited((GCP_SH, 'NAME_PREFIX="${NAME_PREFIX:-ringleader}"',
+                    'NAME_PREFIX="${NAME_PREFIX:-ringleader}"\nprintf -v NAME_PREFIX %s rl')),
+            "NAME_PREFIX",
+        )
+
+    def test_the_artifact_bound_rebound_by_a_loop_variable(self):
+        self.assertRejected(
+            edited((GCP_ONBOARD_SH, 'ARTIFACT_STORAGE_BUCKET_PREFIX="${ARTIFACT_STORAGE_BUCKET_PREFIX:-}"',
+                    'ARTIFACT_STORAGE_BUCKET_PREFIX="${ARTIFACT_STORAGE_BUCKET_PREFIX:-}"\n'
+                    'for ARTIFACT_STORAGE_BUCKET_PREFIX in ""; do true; done')),
+            "ARTIFACT_STORAGE_BUCKET_PREFIX",
+        )
+
+
+class ALandingPadNameHardcodedBackIsRefused(Rejects):
+    """The eleven names were literals until the script took NAME_PREFIX; a literal was pinned by
+    being matched, and a variable reference is not. Writing one back out leaves every other check
+    green while a second organization collides on that one resource at its own apply."""
+
+    def test_the_vpc_name_written_out(self):
+        self.assertRejected(
+            edited((GCP_SH, 'VPC="${NAME_PREFIX}-vpc"', 'VPC="ringleader-vpc"')),
+            "does not build `VPC`",
+        )
+
+    def test_the_router_name_written_out(self):
+        self.assertRejected(
+            edited((GCP_SH, 'ROUTER="${NAME_PREFIX}-router"', 'ROUTER="ringleader-router"')),
+            "does not build `ROUTER`",
+        )
+
+
+class ALandingPadNameWrittenOutAnywhereIsRefused(Rejects):
+    """A name pinned at its declaration and written out at its USE is not pinned.
+
+    The six names are read at `gcloud` calls far from where they are declared, so these are the
+    mutations that read correctly at both ends and attach a second organization's apply to the
+    first organization's resources.
+    """
+
+    def test_the_router_named_at_the_nat_create(self):
+        self.assertRejected(
+            edited((GCP_SH, '--router "$ROUTER"', "--router ringleader-router")),
+            "`ringleader-router` is written out",
+        )
+
+    def test_the_vpc_named_at_a_rule_create(self):
+        self.assertRejected(
+            edited((GCP_SH, '--network "$VPC" --direction INGRESS --action allow --rules tcp:22',
+                    "--network ringleader-vpc --direction INGRESS --action allow --rules tcp:22")),
+            "`ringleader-vpc` is written out",
+        )
+
+    def test_the_subnet_named_at_the_final_describe(self):
+        self.assertRejected(
+            edited((GCP_SH, 'subnets describe "$SUBNET"', "subnets describe ringleader-workstations")),
+            "`ringleader-workstations` is written out",
+        )
+
+    def test_a_name_reassigned_after_its_pinned_declaration(self):
+        self.assertRejected(
+            edited((GCP_SH, 'SUBNET="${NAME_PREFIX}-workstations"',
+                    'SUBNET="${NAME_PREFIX}-workstations"\nVPC="ringleader-vpc"')),
+            "`ringleader-vpc` is written out",
+        )
+
+
+class TheArtifactLabelLengthRuleCannotBeRelaxed(Rejects):
+    """The label separates two organizations only because every label is the same length.
+
+    The rule lives at four sites and a relaxation at any one reintroduces the overlap for the
+    customers who took that route, while every other check here stays green.
+    """
+
+    def test_relaxed_in_the_aws_terraform(self):
+        self.assertRejected(
+            edited((AWS_VARS, '"^([a-z0-9]{8})?$"', '"^[a-z0-9]*$"')),
+            "the artifact label validation",
+        )
+
+    def test_relaxed_in_the_gcp_terraform(self):
+        self.assertRejected(
+            edited((GCP_VARS, '"^([a-z0-9]{8})?$"', '"^[a-z0-9]*$"')),
+            "the artifact label validation",
+        )
+
+    def test_relaxed_in_the_cloudformation_allowed_pattern(self):
+        self.assertRejected(
+            edited((AWS_CFN, '"^([a-z0-9]{8})?$"', '"^[a-z0-9]*$"')),
+            "AllowedPattern",
+        )
+
+    def test_relaxed_in_the_gcloud_script(self):
+        self.assertRejected(
+            edited((GCP_ONBOARD_SH, "'^[a-z0-9]{8}$'", "'^[a-z0-9]*$'")),
+            "the artifact label check",
+        )
+
+
+class AWiderBoundBesideTheNarrowedOneIsRefused(Rejects):
+    """A grant is the UNION of its statements, so the widest bound is what the customer applied.
+
+    Checking that the narrowed bound is PRESENT cannot see a second, wider one added beside it: the
+    pad then reads as narrowed in review and grants the wide thing. Both routes that express the
+    bound in their own language are held to one bound, the way the CloudFormation reader already is.
+    """
+
+    def test_an_extra_unnarrowed_arn_in_the_aws_terraform(self):
+        one = '"arn:${data.aws_partition.current.partition}:s3:::${local.managed_bucket_prefix}${var.artifact_storage_bucket_prefix}*",'
+        wide = '"arn:${data.aws_partition.current.partition}:s3:::${local.managed_bucket_prefix}*",'
+        self.assertRejected(
+            edited((AWS_TF, one, one + "\n    " + wide)),
+            "the artifact-storage ARN patterns",
+        )
+
+    def test_a_widening_or_clause_in_the_gcp_condition(self):
+        one = 'resource.name.startsWith(\\"projects/_/buckets/${local.managed_bucket_prefix}${var.artifact_storage_bucket_prefix}\\")'
+        wide = ' || resource.name.startsWith(\\"projects/_/buckets/${local.managed_bucket_prefix}\\")'
+        self.assertRejected(
+            edited((GCP_TF, one, one + wide)),
+            "the artifact-storage IAM condition",
+        )
+
+
+class ThePerOrganizationNarrowingCannotDrift(Rejects):
+    """A narrowing applied to some of the grant's statements and not others is not a narrowing.
+
+    The managed width is bounded by a bucket-NAME pattern and nothing else, so one account serving
+    two Ringleader organizations has each grant reaching the other's buckets until the pattern
+    carries something per-organization. That makes the narrowing load-bearing wherever it is set,
+    and half-applied is the shape that reads as narrowed while granting the wider thing -- which is
+    what a customer has already applied by the time anyone notices.
+    """
+
+    def test_dropped_from_the_cloudformation_object_statement(self):
+        self.assertRejected(
+            edited((AWS_CFN, 'arn:${AWS::Partition}:s3:::ringleader-${ArtifactStorageBucketPrefix}*/*',
+                    'arn:${AWS::Partition}:s3:::ringleader-*/*')),
+            "not one narrowing",
+        )
+
+    def test_dropped_from_the_cloudformation_provisioning_statement(self):
+        self.assertRejected(
+            edited((AWS_CFN, 'Resource: !Sub "arn:${AWS::Partition}:s3:::ringleader-${ArtifactStorageBucketPrefix}*"',
+                    'Resource: !Sub "arn:${AWS::Partition}:s3:::ringleader-*"')),
+            "not one narrowing",
+        )
+
+    def test_dropped_from_the_aws_terraform_arn(self):
+        self.assertRejected(
+            edited((AWS_TF, 's3:::${local.managed_bucket_prefix}${var.artifact_storage_bucket_prefix}*',
+                    's3:::${local.managed_bucket_prefix}*')),
+            "the artifact-storage ARN patterns",
+        )
+
+    def test_dropped_from_the_gcp_terraform_condition(self):
+        self.assertRejected(
+            edited((GCP_TF, 'projects/_/buckets/${local.managed_bucket_prefix}${var.artifact_storage_bucket_prefix}',
+                    'projects/_/buckets/${local.managed_bucket_prefix}')),
+            "the artifact-storage IAM condition",
+        )
+
+    def test_dropped_from_the_gcloud_script_condition(self):
+        self.assertRejected(
+            edited((GCP_ONBOARD_SH, 'projects/_/buckets/${MANAGED_BUCKET_PREFIX}${ARTIFACT_STORAGE_BUCKET_PREFIX}',
+                    'projects/_/buckets/${MANAGED_BUCKET_PREFIX}')),
+            "the artifact-storage IAM condition",
+        )
+
 
 
 class AMissingFileIsLoud(unittest.TestCase):

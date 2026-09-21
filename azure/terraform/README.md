@@ -50,10 +50,10 @@ Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standal
 
 ## Outputs
 
-`handoff` bundles `target_app_client_id`, `subscription_id`, `resource_group_name`, and the
-subnet ids (`subnet_id`, `governed_subnet_id`, `gateway_subnet_id`, and
-`additional_governed_subnet_ids` keyed by your label) when `create_network` is on. Add your
-**tenant id** (`az account show --query tenantId -o tsv`) and hand all of it back to Ringleader.
+`handoff` bundles `target_app_client_id`, `tenant_id`, `subscription_id`, `resource_group_name`,
+and the subnet ids (`subnet_id`, `governed_subnet_id`, `gateway_subnet_id`, and
+`additional_governed_subnet_ids` keyed by your label) when `create_network` is on. Hand all of it
+back to Ringleader.
 None of the subnets are interchangeable. A workstation carrying an egress policy goes in
 `governed_subnet_id`, every other one in `subnet_id`, and `gateway_subnet_id` goes on the
 `Edge` itself as `spec.subnet`. Each additional governed subnet is for one namespace's

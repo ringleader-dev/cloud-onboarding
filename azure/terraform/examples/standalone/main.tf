@@ -19,6 +19,48 @@ terraform {
   }
 }
 
+# --- Serving a second organization from this resource group -------------------------------
+#
+# Each of these defaults to the same constant the module has always used, so leaving them unset
+# changes nothing. A SECOND Ringleader organization onboarding into this same resource group sets them,
+# because the names below are unique within it. See ../../../README.md#serving-a-second-organization.
+
+variable "app_display_name" {
+  type        = string
+  default     = "ringleader-workstations"
+  description = "Entra does not make display names unique, so a second one here is a trap rather than an error."
+}
+
+variable "role_name" {
+  type        = string
+  default     = "Ringleader Workstation Operator"
+  description = "A custom role's display name is unique per Entra directory, whatever scope it is assignable at."
+}
+
+variable "deployment_name" {
+  type        = string
+  default     = "ringleader-onboarding"
+  description = "An ARM deployment is a named object in the resource group."
+}
+
+variable "name_prefix" {
+  type        = string
+  default     = "ringleader"
+  description = "Names the VNet, its subnets and the NSGs."
+}
+
+variable "artifact_storage_account_name" {
+  type        = string
+  default     = ""
+  description = "A storage account YOU created, to take the named width. It narrows what Ringleader may do, dropping the account and container management actions, and NOT which account it may reach: the blob data actions are granted at the resource group either way."
+}
+
+variable "enable_artifact_storage" {
+  type        = bool
+  default     = true
+  description = "Let Ringleader hold artifact payloads in a storage account in THIS resource group. On by default. Setting it false is one of the two ways two organizations sharing a resource group keep their payloads apart; the other is giving each its own resource group."
+}
+
 provider "azurerm" {
   subscription_id = var.subscription_id
   features {}
@@ -171,6 +213,14 @@ module "ringleader" {
   create_identity              = var.create_identity
   existing_client_id           = var.existing_client_id
   existing_principal_object_id = var.existing_principal_object_id
+
+  # The names a second organization in this resource group must change; see above.
+  enable_artifact_storage       = var.enable_artifact_storage
+  artifact_storage_account_name = var.artifact_storage_account_name
+  app_display_name              = var.app_display_name
+  role_name                     = var.role_name
+  deployment_name               = var.deployment_name
+  name_prefix                   = var.name_prefix
 }
 
 output "handoff" {

@@ -602,7 +602,11 @@ address. All three go in the Network Watcher's resource group, beside the storag
 one `privatelink.blob.core.windows.net`, because Azure resolves that name from a single zone and a
 second one would be ignored. Each pad adds its own link to it, named for the VNet and a hash of
 the VNet's id so two pads whose VNets share a name do not collide. If you already have that zone,
-this adopts it and changes none of its records. Nothing here ever deletes it.
+this adopts it and changes none of its records. Setting `CREATE_FLOW_LOGS=false` on the ARM route
+later deletes nothing, this zone included. Terraform is different: turning `create_flow_logs` off
+destroys the deployment and the resources it created, and the zone is one of them. It is shared,
+so see [Serving a second organization](#serving-a-second-organization) before you turn it off in a
+resource group that is not the only one using it.
 
 The subnet they need is separate, and it is carved as soon as you turn flow logs on, whether or
 not you ask for an endpoint. It takes the `/24` above the gateway range, it is empty until an
@@ -709,10 +713,11 @@ role into **its own** resource group and assigns it to the identity you already 
 region's landing pad. `terraform destroy` in that region then removes that region's grant and
 leaves the identity — which is what you want, because another region is still using it.
 
-**Applying twice into one resource group is not a way around this.** It collides on the role
-deployment, whose name is the fixed literal `ringleader-onboarding`, and it would mint the second
-app anyway: nothing about an app registration is scoped by group or by location, so the identity
-problem is untouched by where you point the apply.
+**Applying twice into one resource group is not a way around this.** It would mint the second app
+anyway: nothing about an app registration is scoped by group or by location, so the identity
+problem is untouched by where you point the apply. The second apply also has to rename the role,
+the deployment records and the landing pad's resources, through `role_name`, `deployment_name` and
+`name_prefix`. See [Serving a second organization](#serving-a-second-organization).
 
 **Already applied twice and have two identities?** Nothing needs rebuilding — grant the first
 region's principal the second region's role, and hand Ringleader back only the first client id:
@@ -743,12 +748,103 @@ landing pad. They mock both providers and only ever `plan`, so they need no cred
 $ cd azure/terraform && terraform init && terraform test
 ```
 
+## Serving a second organization
+
+One Azure subscription can hold the workstations of several Ringleader organizations. Nothing about
+the trust is shared: each organization gets its own issuer and subject, and the federated credential
+pins both.
+
+> **Sharing a resource group is not a boundary between the two, and nothing below makes it one.**
+> The custom role is assigned at the resource group, and inside it the role can write and delete
+> virtual machines and disks. So one organization's Ringleader can delete the other's workstations,
+> or detach a data disk of theirs and attach it to a machine of its own and read what is on it.
+> With egress control on, which is the default, it can also rewrite the network security rules the
+> other organization's policies compile into.
+>
+> What the table below gives you is a second apply that works: names that do not collide. It does
+> not give you isolation. **A resource group per organization is the answer, and it is this
+> module's recommended shape anyway** -- the role is scoped to one group precisely so that the
+> group is the blast radius.
+
+**What the second apply needs depends on whether it gets its own resource group.** Almost
+everything this module creates is scoped to the resource group, so the answer is short in the case
+the module recommends anyway.
+
+**A second organization in its own resource group needs two things renamed: `role_name`, and
+`app_display_name` on the ARM route.** Both are tenant-wide, so a resource group of its own
+protects neither. A custom role's *display* name has to be unique across the whole Entra directory,
+however narrow the scope it is assignable at, so the second apply is refused with
+`RoleDefinitionWithSameNameExists` even though the two roles would be distinct objects. And an app
+registration belongs to the tenant as well, which is what makes the ARM route's reuse of it
+dangerous rather than untidy: see *the app registration is where the two routes differ* below.
+
+Everything else is group-scoped: the VNet, its subnets, the NSGs and the deployment records in this
+group collide with nothing outside it. The ARM route makes two of those and Terraform one, the
+flow-log record being created in the Network Watcher's resource group instead, and that one already
+carries this group's name.
+
+The role refusal lands after the app registration and, on the ARM route, the federated credential
+already exist, so set both names before the second organization's first apply rather than after it
+fails.
+
+**Two organizations sharing one resource group need their own names for everything.** Set all of
+these:
+
+| What | Terraform | ARM (`deploy.sh`) | Why |
+|---|---|---|---|
+| The app registration | `app_display_name` | `APP_NAME` | see below: on the ARM route the name is what the script matches on |
+| The custom role | `role_name` | `ROLE_NAME` | a custom role's display name is unique per Entra directory, as above |
+| The role deployment record | `deployment_name` | `ROLE_DEPLOYMENT_NAME` | an ARM deployment is a named object in the group |
+| The network deployment record | n/a | `NETWORK_DEPLOYMENT_NAME` | as above. Terraform deploys the network itself and needs none |
+| The landing pad's resources | `name_prefix` | `NAME_PREFIX` | the VNet, its subnets and the NSGs are named per group |
+| The address range | `region_indexes`, or `vnet_address_space` | `REGION_INDEX`, or `VNET_CIDR` | two VNets on one range can never be peered |
+
+Two more things are worth knowing rather than setting.
+
+**The app registration is where the two routes differ, and the ARM route is the dangerous one.**
+An app registration belongs to the tenant, not to a resource group or a subscription, so neither
+route is protected by giving the second organization its own group. Terraform creates a second
+registration: Entra does not make display names unique, so you end up with two called
+`ringleader-workstations` and telling them apart means reading their client ids. `deploy.sh` does
+something worse. It looks the app up **by display name**, reuses the one it finds, and then deletes
+and recreates the federated credential `ringleader-oidc` with the second organization's issuer and
+subject. That destroys the first organization's trust, before the run reaches anything that could
+fail. Set `app_display_name` (`APP_NAME`) on the second organization's first command.
+
+**Artifact storage is the one grant a shared resource group really does share, and naming an
+account does not narrow it.** `enable_artifact_storage` is on by default, and the custom role is
+assigned at the resource group, so with it on the role is permitted to read, write and delete every
+blob in that group. Two organizations in one group are therefore each permitted the other's sealed
+agent-session transcripts and workflow file outputs. Setting `artifact_storage_account_name`
+(`ARTIFACT_STORAGE_ACCOUNT`) does not fix it: the account name narrows what Ringleader may DO, by
+dropping the account and container management actions, and not which account it may reach, because
+the blob data actions are granted at the group. One remedy separates two organizations, and it is the one
+this module is built around: give each its own resource group. Setting `enable_artifact_storage`
+to false (`ARTIFACT_STORAGE=0`) keeps payload blobs out of a shared group and nothing else -- the
+role's compute and disk actions are group-scoped either way, so it does not make two organizations
+unable to reach each other.
+
+Azure has no equivalent of the other clouds' `artifact_storage_bucket_prefix`, and deliberately
+declares none: its bound is the resource group, and Azure offers no name-prefix condition on these
+control-plane actions.
+
+**Flow logs with a private endpoint share one DNS zone.** The storage account, the flow log and the
+VNet link are all derived from the VNet's id, so they never collide. The private DNS zone is
+different: `privatelink.blob.core.windows.net` is the name Azure requires for blob private
+endpoints, so it cannot be renamed, and both organizations' deployments declare that one zone in
+the Network Watcher's resource group. That is shared state rather than a collision, and it has one
+consequence: on the Terraform route, the first organization turning `create_flow_logs` off destroys
+its deployment, which tries to take the shared zone with it while the second organization is still
+resolving through it. Point one of them at a Network Watcher resource group of its own
+(`network_watcher_resource_group_name`, `NETWORK_WATCHER_RG`) if you want them independent, and
+turn flow logs off in a shared group only when nothing else is using the zone.
+
 ## What you return to Ringleader
 
 | Value | How to get it |
 |---|---|
 | **app client id** | printed by `deploy.sh` / `terraform output` |
-| **tenant id** | `az account show --query tenantId -o tsv` |
+| **tenant id** | printed by `deploy.sh` / `terraform output handoff` |
 | **subscription id** | `az account show --query id -o tsv` |
 | **resource group** | the one you scoped |
 | **subnet id** (only if you created a network) | `terraform output handoff` |

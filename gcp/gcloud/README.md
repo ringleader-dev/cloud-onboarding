@@ -25,6 +25,14 @@ this project rather than in its own — a custom role confined by IAM condition 
 `ringleader-*`, or set `ARTIFACT_STORAGE_BUCKET` to a bucket you made and it narrows to object
 access on that one). Set any of them to `0` to skip it.
 
+On the managed width, `ARTIFACT_STORAGE_BUCKET_PREFIX` takes a short label of yours that those
+buckets must carry in their name, so the condition admits only `ringleader-<label>*`. Empty, the
+default, keeps the wider bound. Set it when one project serves several Ringleader organizations, so
+neither organization's grant reaches the other's buckets. The binding is replaced rather than added
+when you change it, so a later run that sets it does narrow the grant rather than adding a second
+bound beside the first. `network-landing-pad.sh` takes `NAME_PREFIX` for the same reason: see
+[`../README.md`](../README.md#serving-a-second-organization).
+
 A fourth grant is **always** made and has no switch: the custom role that lets Ringleader create
 and delete the role-less service accounts its own appliances enrol with. GCE mints an instance
 identity assertion only for a VM that has a service account attached, so without it an egress

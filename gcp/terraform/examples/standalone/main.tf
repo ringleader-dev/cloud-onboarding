@@ -14,6 +14,66 @@ terraform {
   }
 }
 
+# --- Serving a second organization from this project -------------------------------
+#
+# Each of these defaults to the same constant the module has always used, so leaving them unset
+# changes nothing. A SECOND Ringleader organization onboarding into this same project sets them,
+# because the names below are unique within it. See ../../../README.md#serving-a-second-organization.
+
+variable "name_prefix" {
+  type        = string
+  default     = "ringleader"
+  description = "Names the VPC, its subnets, the router, the NAT and the firewall rules."
+}
+
+variable "sa_account_id" {
+  type        = string
+  default     = "ringleader-workstations"
+  description = "A service account id is unique per project."
+}
+
+variable "pool_id" {
+  type        = string
+  default     = "ringleader"
+  description = "A pool id is unique per project, and a deleted one stays reserved for 30 days."
+}
+
+variable "identity_role_id" {
+  type        = string
+  default     = "ringleaderManagedIdentities"
+  description = "A custom role id is unique per project."
+}
+
+variable "egress_role_id" {
+  type        = string
+  default     = "ringleaderEgressControl"
+  description = "As above."
+}
+
+variable "artifact_storage_role_id" {
+  type        = string
+  default     = "ringleaderArtifactStorage"
+  description = "As above. It names both roles: the second is this id with Provision appended."
+}
+
+variable "artifact_storage_bucket" {
+  type        = string
+  default     = ""
+  description = "A bucket YOU created, to take the narrower named width. Empty is the managed width, whose grant reaches every ringleader-* bucket in the project."
+}
+
+variable "enable_artifact_storage" {
+  type        = bool
+  default     = true
+  description = "Let Ringleader hold artifact payloads in a bucket in THIS project. On by default. Setting it false is one of the two ways two organizations sharing a project keep their payloads apart; the other is naming a bucket each."
+}
+
+variable "artifact_storage_bucket_prefix" {
+  type        = string
+  default     = ""
+  description = "A label of your own that the managed width's buckets must carry in their name, narrowing the grant from every ringleader-* bucket in this project to only ringleader-<this>*. Empty keeps the wider bound. Set it when one project serves several Ringleader organizations. Exactly eight lowercase letters or digits: the bound is a prefix match, so two labels of differing length could overlap and two of the same length never can."
+}
+
 provider "google" {
   project = var.project_id
 }
@@ -106,6 +166,17 @@ module "ringleader" {
   create_governed_subnet = var.create_governed_subnet
 
   create_flow_logs = var.create_flow_logs
+
+  # The names a second organization in this project must change; see above.
+  artifact_storage_bucket_prefix = var.artifact_storage_bucket_prefix
+  enable_artifact_storage        = var.enable_artifact_storage
+  artifact_storage_bucket        = var.artifact_storage_bucket
+  name_prefix                    = var.name_prefix
+  sa_account_id                  = var.sa_account_id
+  pool_id                        = var.pool_id
+  identity_role_id               = var.identity_role_id
+  egress_role_id                 = var.egress_role_id
+  artifact_storage_role_id       = var.artifact_storage_role_id
 }
 
 output "handoff" {

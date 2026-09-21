@@ -144,6 +144,19 @@ Parameters:
       its own -- no payload is written here until a Ringleader namespace declares a Storage
       object naming a bucket.
 
+  ArtifactStorageBucketPrefix:
+    Type: String
+    Default: ""
+    AllowedPattern: "^([a-z0-9]{8})?$"
+    Description: >-
+      A label of your own that the managed width's buckets must carry in their name, narrowing the
+      grant from every bucket named ringleader-* to only those named ringleader-<this>*. Empty, the
+      default, keeps today's wider bound. Set it when one account serves several Ringleader
+      organizations, so neither organization's grant reaches the other's buckets. Exactly eight
+      lowercase letters or digits: the bound is a prefix match, so two labels of differing length
+      could overlap and two of the same length never can. The first eight characters of your
+      Ringleader organization id are a good choice.
+
   ArtifactStorageBucket:
     Type: String
     Default: ""
@@ -252,6 +265,15 @@ Parameters:
     Default: 365
     AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653]
     Description: How many days the flow log group keeps its records, when CreateFlowLogs is true.
+
+  FlowLogGroupName:
+    Type: String
+    Default: ringleader-workstations-flow-logs
+    AllowedPattern: "^[a-zA-Z0-9_./#-]{1,512}$"
+    Description: >-
+      Name of the CloudWatch Logs group the flow log delivers into. A log group name is unique per
+      account and region, so a second Ringleader organization onboarding into the same account and
+      region needs a name of its own here. Leave it alone on the first.
 
   AdditionalGovernedSubnet1Label:
     Type: String
@@ -646,7 +668,7 @@ Resources:
                     - "s3:ListBucketMultipartUploads"
                   Resource: !If
                     - ArtifactStorageIsManaged
-                    - !Sub "arn:${AWS::Partition}:s3:::ringleader-*"
+                    - !Sub "arn:${AWS::Partition}:s3:::ringleader-${ArtifactStorageBucketPrefix}*"
                     - !Sub "arn:${AWS::Partition}:s3:::${ArtifactStorageBucket}"
                 - !Ref AWS::NoValue
 
@@ -661,7 +683,7 @@ Resources:
                     - "s3:PutBucketPublicAccessBlock"
                     - "s3:GetLifecycleConfiguration"
                     - "s3:PutLifecycleConfiguration"
-                  Resource: !Sub "arn:${AWS::Partition}:s3:::ringleader-*"
+                  Resource: !Sub "arn:${AWS::Partition}:s3:::ringleader-${ArtifactStorageBucketPrefix}*"
                 - !Ref AWS::NoValue
 
               - !If
@@ -676,7 +698,7 @@ Resources:
                     - "s3:ListMultipartUploadParts"
                   Resource: !If
                     - ArtifactStorageIsManaged
-                    - !Sub "arn:${AWS::Partition}:s3:::ringleader-*/*"
+                    - !Sub "arn:${AWS::Partition}:s3:::ringleader-${ArtifactStorageBucketPrefix}*/*"
                     - !Sub "arn:${AWS::Partition}:s3:::${ArtifactStorageBucket}/*"
                 - !Ref AWS::NoValue
 
@@ -903,9 +925,9 @@ Resources:
     Type: AWS::Logs::LogGroup
     Condition: WantFlowLogs
     Properties:
-      LogGroupName: ringleader-workstations-flow-logs
+      LogGroupName: !Ref FlowLogGroupName
       RetentionInDays: !Ref FlowLogRetentionDays
-      Tags: [{ Key: Name, Value: ringleader-workstations-flow-logs }]
+      Tags: [{ Key: Name, Value: !Ref FlowLogGroupName }]
 
   # Only VPC Flow Logs may assume this role, for this account. See README.md for its five actions.
   FlowLogsRole:
@@ -938,7 +960,7 @@ Resources:
               - Effect: Allow
                 Action: "logs:DescribeLogGroups"
                 Resource: "*"
-      Tags: [{ Key: Name, Value: ringleader-workstations-flow-logs }]
+      Tags: [{ Key: Name, Value: !Ref FlowLogGroupName }]
 
   FlowLog:
     Type: AWS::EC2::FlowLog

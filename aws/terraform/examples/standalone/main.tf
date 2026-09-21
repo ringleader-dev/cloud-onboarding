@@ -98,6 +98,48 @@ variable "vpc_cidr" {
   default = null
 }
 
+# --- Serving a second organization from this account -------------------------------
+#
+# Each of these defaults to the same constant the module has always used, so leaving them unset
+# changes nothing. A SECOND Ringleader organization onboarding into this same account sets them,
+# because the names below are unique within it. See ../../../README.md#serving-a-second-organization.
+
+variable "role_name" {
+  type        = string
+  default     = "ringleader-workstations"
+  description = "IAM role names are unique per account."
+}
+
+variable "flow_log_group_name" {
+  type        = string
+  default     = "ringleader-workstations-flow-logs"
+  description = "Log group names are unique per account and region."
+}
+
+variable "workstation_identity_path" {
+  type        = string
+  default     = "/ringleader-workstations/"
+  description = "The IAM path Ringleader may pass workstation roles under."
+}
+
+variable "artifact_storage_bucket" {
+  type        = string
+  default     = ""
+  description = "A bucket YOU created, to take the narrower named width. Empty is the managed width, whose grant reaches every ringleader-* bucket in the account."
+}
+
+variable "enable_artifact_storage" {
+  type        = bool
+  default     = true
+  description = "Let Ringleader hold artifact payloads in a bucket in THIS account. On by default. Setting it false is one of the two ways two organizations sharing an account keep their payloads apart; the other is naming a bucket each."
+}
+
+variable "artifact_storage_bucket_prefix" {
+  type        = string
+  default     = ""
+  description = "A label of your own that the managed width's buckets must carry in their name, narrowing the grant from every ringleader-* bucket in this account to only ringleader-<this>*. Empty keeps the wider bound. Set it when one account serves several Ringleader organizations. Exactly eight lowercase letters or digits: the bound is a prefix match, so two labels of differing length could overlap and two of the same length never can."
+}
+
 provider "aws" {
   region = var.region
 }
@@ -133,6 +175,14 @@ module "ringleader_onboarding" {
 
   create_flow_logs        = var.create_flow_logs
   flow_log_retention_days = var.flow_log_retention_days
+
+  # The names a second organization in this account must change; see above.
+  artifact_storage_bucket_prefix = var.artifact_storage_bucket_prefix
+  enable_artifact_storage        = var.enable_artifact_storage
+  artifact_storage_bucket        = var.artifact_storage_bucket
+  role_name                      = var.role_name
+  flow_log_group_name            = var.flow_log_group_name
+  workstation_identity_path      = var.workstation_identity_path
 }
 
 output "handoff" {

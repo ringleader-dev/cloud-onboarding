@@ -51,6 +51,21 @@ provider's resource name, an application client id, a tenant id are all public
 identifiers. Naming a principal grants nothing — the authority is the short-lived token
 Ringleader signs, whose subject your trust configuration pins to your organization.
 
+**One account can serve several Ringleader organizations**, and the second one is mostly a matter
+of names. Mostly, not entirely: **sharing one is not a boundary between the two organizations** on
+any of the three clouds. Each landing pad grants Ringleader the authority to manage workstations
+throughout its scope, and that authority is not divided per organization. Read your cloud's section
+for what it does and does not separate before you decide to share; where the two must not reach
+each other, give each its own account, project or resource group. Each organization gets its own issuer and subject, so the trust is never shared, but
+almost every resource below takes its name from a variable that defaults to the same constant. On
+Terraform a second apply that changes nothing fails on a name that is already taken. The `deploy.sh`
+and `onboard.sh` routes are written to be re-runnable, so they do the opposite: they adopt what they
+find and repoint it at the organization running them, which breaks the first one silently. Either
+way the fix is to set the names on the second organization's first command. Read your cloud's
+section before you start: [AWS](aws/README.md#serving-a-second-organization),
+[Google Cloud](gcp/README.md#serving-a-second-organization),
+[Azure](azure/README.md#serving-a-second-organization).
+
 ## What a workstation itself can do in your cloud
 
 On **Azure** and **AWS** a workstation VM carries no managed identity and no instance
