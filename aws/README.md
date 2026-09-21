@@ -609,9 +609,12 @@ OIDC provider of its own and you never touch the first one's.
 > **Sharing an account is not a boundary between the two, and nothing below makes it one.** This
 > onboarding grants Ringleader the authority to manage workstations throughout the account, and
 > that authority is not divided per organization. The EC2 lifecycle statement is the clearest case:
-> it is granted on every instance, bounded by region alone, so one organization's Ringleader can
-> stop the other's workstation, rewrite its user data and start it again, and read that user data
-> outright. Several other grants are account-wide in the same way.
+> it is granted on every instance in the account, and on the default it carries no bound at all,
+> because the `aws:RequestedRegion` condition is written only when you set `allowed_regions`
+> (`AllowedRegion`). So one organization's Ringleader can stop the other's workstation, rewrite its
+> user data and start it again, and read that user data outright. Setting it narrows that to the
+> region or regions you name and no further: both organizations are still inside them. Several
+> other grants are account-wide in the same way.
 >
 > What this section gives you is a second apply that works: names that do not collide, and grants
 > narrowed where they can be narrowed. It does not give you isolation, and an account is not where
