@@ -83,6 +83,39 @@ run "every_capability_is_on_by_default" {
 # create_nat_gateway is the ONE default that bills, and it is on deliberately: without it a
 # workstation created with assignPublicIp:false has no egress at all. Asserted so that turning it
 # off is a decision someone makes and defends, not a quiet cost saving that strands private boxes.
+# One account can serve several Ringleader organizations, and the managed artifact grant is bounded
+# by a bucket-name pattern rather than by a scope. So a second organization has to be able to narrow
+# that pattern, which is only possible if the label reaches the ARNs.
+run "a_second_organization_can_narrow_the_managed_artifact_grant" {
+  command = plan
+
+  variables {
+    artifact_storage_bucket_prefix = "0192f5bf"
+  }
+
+  assert {
+    condition     = anytrue([for a in output.actions_granted : strcontains(a, ":s3:::ringleader-0192f5bf*")])
+    error_message = "artifact_storage_bucket_prefix does not reach the artifact-storage ARNs, so two organizations in one account still share the managed grant: ${join(" | ", output.actions_granted)}"
+  }
+
+  assert {
+    condition     = !anytrue([for a in output.actions_granted : strcontains(a, ":s3:::ringleader-*")])
+    error_message = "The wider ringleader-* bound survives beside the narrowed one, so the grant still reaches every Ringleader-named bucket in the account and the narrowing buys nothing."
+  }
+}
+
+# The separation two organizations get rests on every label being the SAME length: the bound is a
+# prefix match, so a shorter label covers every longer one that starts with it.
+run "an_artifact_label_of_the_wrong_length_is_refused" {
+  command = plan
+
+  variables {
+    artifact_storage_bucket_prefix = "acme"
+  }
+
+  expect_failures = [var.artifact_storage_bucket_prefix]
+}
+
 run "the_one_default_that_costs_money_is_on_deliberately" {
   command = plan
 
@@ -94,6 +127,16 @@ run "the_one_default_that_costs_money_is_on_deliberately" {
   assert {
     condition     = var.artifact_storage_bucket == ""
     error_message = "artifact_storage_bucket has a non-empty default, which silently takes the NAMED width. The default width has to be the managed one: it is the only one that works without the customer having created anything, and a default naming a destination would be a default naming one nobody has."
+  }
+
+  assert {
+    condition     = var.artifact_storage_bucket_prefix == ""
+    error_message = "artifact_storage_bucket_prefix has a non-empty default. It narrows the managed grant's bucket-name bound, so a default would narrow it under every landing pad that has already applied one, and the grant would then match no bucket they have."
+  }
+
+  assert {
+    condition     = anytrue([for a in output.actions_granted : strcontains(a, ":s3:::ringleader-*")])
+    error_message = "The managed grant's bucket ARNs are not bounded to s3:::ringleader-* on the defaults. That bound is the only thing between the buckets Ringleader made and every bucket in the account, and Ringleader compiles the same literal."
   }
 
   assert {
@@ -200,8 +243,44 @@ run "flow_logs_record_every_connection_for_a_year" {
   }
 
   assert {
+    condition     = aws_cloudwatch_log_group.flow_logs[0].name == "ringleader-workstations-flow-logs"
+    error_message = "The flow log group's default name moved. It is the name every landing pad that already turned flow logs on carries, and a rename here replaces the group and discards its records: got ${aws_cloudwatch_log_group.flow_logs[0].name}."
+  }
+
+  assert {
     condition     = aws_iam_role.flow_logs[0].path == null || aws_iam_role.flow_logs[0].path == "/"
     error_message = "The delivery role is not at the default path. Under workstation_identity_path the iam:PassRole grant for workstation identities would reach it."
+  }
+}
+
+# A log group name is unique per account and region, so a second Ringleader organization onboarding
+# into the same one has to rename the group. That is only possible if the name reaches the resource.
+run "a_second_organization_can_rename_the_flow_log_group" {
+  command = plan
+
+  variables {
+    create_flow_logs    = true
+    flow_log_group_name = "ringleader-workstations-flow-logs-two"
+  }
+
+  override_data {
+    target = data.aws_iam_policy_document.flow_logs_trust[0]
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
+
+  override_data {
+    target = data.aws_iam_policy_document.flow_logs_delivery[0]
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
+
+  assert {
+    condition     = aws_cloudwatch_log_group.flow_logs[0].name == "ringleader-workstations-flow-logs-two"
+    error_message = "flow_log_group_name does not reach the log group, so two organizations in one account and region still collide on it: got ${aws_cloudwatch_log_group.flow_logs[0].name}."
+  }
+
+  assert {
+    condition     = aws_cloudwatch_log_group.flow_logs[0].tags["Name"] == "ringleader-workstations-flow-logs-two"
+    error_message = "The log group's Name tag still carries the old literal, so two groups in one account would be tagged alike."
   }
 }
 

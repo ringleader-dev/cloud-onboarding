@@ -158,6 +158,40 @@ variable "enable_artifact_storage" {
   EOT
 }
 
+variable "artifact_storage_bucket_prefix" {
+  type        = string
+  default     = ""
+  description = <<-EOT
+    A short label of your own that Ringleader's managed artifact buckets must carry in their name,
+    narrowing the grant from every bucket named ringleader-* to only those named
+    ringleader-<this>*. Empty -- the default -- keeps today's wider bound, so a landing pad that
+    does not set it is unchanged.
+
+    Set it when one project serves several Ringleader organizations. The managed width is bounded
+    by a name prefix and nothing else, so on the default both organizations' grants reach each
+    other's buckets.
+
+    Exactly eight lowercase letters or digits, or empty. The length is fixed on purpose: the bound
+    is a PREFIX match, so labels of differing length could overlap -- `acme` would cover every
+    `acmedev` bucket -- and two labels of the same length never can. The first eight characters of
+    your Ringleader organization id are a good choice.
+
+    BOTH organizations need a label for this to separate them. One set on the second alone narrows
+    the second's grant and leaves the first's reaching every bucket named ringleader-*, the
+    second's included. Name the bucket on each Storage object ringleader-<label>... to match:
+    Ringleader is not told the label, so a bucket named otherwise is one the grant cannot reach.
+
+    It bounds what the grant REACHES, not what may be created. storage.buckets.create is
+    authorized against the project and cannot carry a name condition, so the provisioning role
+    stays project-wide on any setting; see the role below.
+  EOT
+
+  validation {
+    condition     = can(regex("^([a-z0-9]{8})?$", var.artifact_storage_bucket_prefix))
+    error_message = "artifact_storage_bucket_prefix must be empty or exactly eight lowercase letters or digits. The length is fixed because the grant's bound is a PREFIX match: two labels of differing length can overlap (acme would cover every acmedev bucket) and two of the same length never can."
+  }
+}
+
 variable "artifact_storage_bucket" {
   type        = string
   default     = ""

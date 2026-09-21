@@ -71,6 +71,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 GCP_TF = "gcp/terraform/main.tf"
 GCP_VARS = "gcp/terraform/variables.tf"
+AWS_VARS = "aws/terraform/variables.tf"
 GCP_SH = "gcp/gcloud/network-landing-pad.sh"
 GCP_ONBOARD_SH = "gcp/gcloud/onboard.sh"
 AWS_TF = "aws/terraform/main.tf"
@@ -294,6 +295,16 @@ GUARDED_SHELL_VARS = frozenset({
     # outlives its loop in bash) would rebind it and every later reader would still see the empty
     # default it was declared with.
     "GATEWAY_MANAGEMENT_RANGES",
+    # Both build a NAME the pads are pinned to, and the closed grammar protects only the names it
+    # is given. Left out, `printf -v NAME_PREFIX %s rl` -- or a loop variable, which outlives its
+    # loop in bash -- rebinds it after the pinned assignment, and every one of the eleven names the
+    # gcloud landing pad creates moves while the Terraform route still ships `ringleader`. Same for
+    # the artifact bound, where a rebind to empty silently widens it back to every ringleader-*
+    # bucket in the project.
+    "NAME_PREFIX", "ARTIFACT_STORAGE_BUCKET_PREFIX",
+    # The six names NAME_PREFIX builds. Each is read at a `gcloud` call far from its
+    # declaration, so a rebind between the two is invisible at both ends.
+    "VPC", "SUBNET", "GATEWAY_SUBNET", "GOVERNED_SUBNET", "ROUTER", "NAT",
 })
 
 
@@ -384,19 +395,35 @@ def cfn_managed_bucket_prefix(source: str, path: str) -> str:
     object-level statement bounded to another is a policy that lints clean and grants a shape
     nobody intended.
     """
-    found = re.findall(r"arn:\$\{AWS::Partition\}:s3:::([A-Za-z0-9.\-]*)\*", strip_yaml_comments(source))
+    # The optional `${...}` after the literal is the per-organization narrowing
+    # (ArtifactStorageBucketPrefix). It is captured separately and checked for agreement below, so
+    # this reader keeps returning the PINNED literal alone while the narrowing cannot drift between
+    # statements. The named width's `${ArtifactStorageBucket}` ARNs do not match: they carry no `*`
+    # after the reference, and the object-level one has a `/` in the way.
+    found = re.findall(
+        r"arn:\$\{AWS::Partition\}:s3:::([A-Za-z0-9.\-]*)(\$\{[A-Za-z0-9:]+\})?\*",
+        strip_yaml_comments(source),
+    )
     if not found:
         raise GuardError(
             f"{path}: no `arn:${{AWS::Partition}}:s3:::<prefix>*` resource anywhere.\n\n"
             "  That pattern is the artifact-storage grant's only bound. If the statements were\n"
             "  restructured, move this guard with them -- an unread bound is an unchecked one."
         )
-    distinct = sorted(set(found))
+    distinct = sorted({literal for literal, _ in found})
     if len(distinct) != 1:
         raise GuardError(
             f"{path}: the artifact-storage statements are bounded to {distinct}, which is not one\n"
             "  prefix. The bucket-level and object-level statements must name the same one, or the\n"
             "  grant reaches objects in buckets it cannot see and vice versa."
+        )
+    narrowings = sorted({ref or "" for _, ref in found})
+    if len(narrowings) != 1:
+        raise GuardError(
+            f"{path}: the artifact-storage statements append {narrowings} after that prefix, which is\n"
+            "  not one narrowing. A bucket-level statement narrowed per organization beside an\n"
+            "  object-level one that is not grants objects in buckets the grant cannot see, and the\n"
+            "  wider of the two is what the customer actually applied."
         )
     return distinct[0]
 
@@ -591,6 +618,24 @@ LITERALS = [
         ],
     ),
     Literal(
+        name="the landing pad's name prefix default",
+        value="ringleader",
+        other_half="",
+        why=(
+            "Every project-unique name the optional GCP landing pad creates is built from this --\n"
+            "  the VPC, its subnets, the router, the NAT and the five firewall rules -- and it is a\n"
+            "  variable so a SECOND Ringleader organization can apply into a project that already\n"
+            "  holds one. What must not differ is the DEFAULT the two supported GCP paths ship. Move\n"
+            "  one and a customer who followed the Terraform README and a customer who ran the script\n"
+            "  get landing pads that are not the same landing pad, under names neither README gives,\n"
+            "  and every other check here stays green because each route is internally consistent."
+        ),
+        sites=[
+            Site(GCP_VARS, 'variable "name_prefix"', hcl_variable_default("name_prefix")),
+            Site(GCP_SH, "NAME_PREFIX", shell_default("NAME_PREFIX")),
+        ],
+    ),
+    Literal(
         name="the secondary-SSH network tag's default",
         value="ringleader-secondary-ssh",
         other_half="",
@@ -620,14 +665,32 @@ TF_TAG_WIRING = [
     ("secondary_ssh", "var.secondary_ssh_network_tag"),
 ]
 
-# The shell script: the rule created by name, and the variable its `--target-tags` must be.
+# The shell script: the rule created, by the SUFFIX its name carries after NAME_PREFIX, and the
+# variable its `--target-tags` must be.
 SH_TAG_WIRING = [
-    ("ringleader-allow-gateway", "GATEWAY_TAG"),
-    ("ringleader-allow-gateway-management", "GATEWAY_TAG"),
-    ("ringleader-allow-ssh", "SSH_TAG"),
-    ("ringleader-allow-internal", "SSH_TAG"),
-    ("ringleader-allow-secondary-ssh", "SECONDARY_SSH_TAG"),
+    ("allow-gateway", "GATEWAY_TAG"),
+    ("allow-gateway-management", "GATEWAY_TAG"),
+    ("allow-ssh", "SSH_TAG"),
+    ("allow-internal", "SSH_TAG"),
+    ("allow-secondary-ssh", "SECONDARY_SSH_TAG"),
 ]
+
+
+def sh_rule_create(suffix: str) -> str:
+    r"""The regex matching the `gcloud ... firewall-rules create` for one rule in the shell script.
+
+    It requires the name to be BUILT from NAME_PREFIX rather than written out, which is what lets a
+    second organization apply this script into a project that already holds a landing pad -- the
+    Terraform module's `name_prefix` covers the same names. Requiring the derived spelling
+    is deliberately stricter than matching any name: an edit that hardcodes one back fails here,
+    which is the direction that costs a customer their second landing pad.
+
+    The closing quote is part of the pattern, so `allow-gateway` cannot match inside
+    `allow-gateway-management`; `(?![\w-])` stays as well, because a suffix that gains a sibling
+    later should fail loudly here rather than silently match two rules.
+    """
+    return (r'\bfirewall-rules\s+create\s+"\$\{NAME_PREFIX\}-'
+            + re.escape(suffix) + r'"(?![\w-])')
 
 
 def check_terraform_wiring(source: str) -> list[str]:
@@ -660,19 +723,15 @@ def check_shell_wiring(source: str) -> list[str]:
     """
     src = strip_shell_comments(source)
     fails = []
-    for rule, want in SH_TAG_WIRING:
-        creates = [
-            c for c in shell_commands(src)
-            # `(?![\w-])` and not `\b`: a hyphen is a non-word character, so `\b` would find
-            # `ringleader-allow-gateway` inside `ringleader-allow-gateway-management` and report two
-            # invocations of a rule that has one. A name that PREFIXES another's is not that rule.
-            if re.search(r"\bfirewall-rules\s+create\s+" + re.escape(rule) + r"(?![\w-])", c)
-        ]
+    for suffix, want in SH_TAG_WIRING:
+        rule = "${NAME_PREFIX}-" + suffix
+        creates = [c for c in shell_commands(src) if re.search(sh_rule_create(suffix), c)]
         if len(creates) != 1:
             raise GuardError(
-                f"{GCP_SH}: found {len(creates)} `firewall-rules create {rule}` invocations, expected 1.\n\n"
-                "  None means the rule was renamed and this guard reads nothing. Two means the second\n"
-                "  one's flags are what the customer actually gets."
+                f"{GCP_SH}: found {len(creates)} `firewall-rules create \"{rule}\"` invocations, expected 1.\n\n"
+                "  None means the rule was renamed, or its name was hardcoded instead of built from\n"
+                "  NAME_PREFIX, and this guard then reads nothing. Two means the second one's flags are\n"
+                "  what the customer actually gets."
             )
         values = gcloud_flag_values(creates[0], "target-tags")
         if values != [f"${{{want}}}"] and values != [f"${want}"]:
@@ -772,20 +831,18 @@ def check_management_port_wiring(sources: dict[str, str]) -> list[str]:
         )
 
     sh = strip_shell_comments(sources[GCP_SH])
-    creates = [
-        c for c in shell_commands(sh)
-        if re.search(r"\bfirewall-rules\s+create\s+ringleader-allow-gateway-management(?![\w-])", c)
-    ]
+    creates = [c for c in shell_commands(sh) if re.search(sh_rule_create("allow-gateway-management"), c)]
     if len(creates) != 1:
         raise GuardError(
-            f"{GCP_SH}: found {len(creates)} `firewall-rules create ringleader-allow-gateway-management`\n"
-            "  invocations, expected 1. None means the rule was renamed and this guard reads nothing;\n"
-            "  two means the second one's flags are what the customer actually gets."
+            f"{GCP_SH}: found {len(creates)} `firewall-rules create \"${{NAME_PREFIX}}-allow-gateway-management\"`\n"
+            "  invocations, expected 1. None means the rule was renamed, or its name was hardcoded\n"
+            "  instead of built from NAME_PREFIX, and this guard then reads nothing; two means the\n"
+            "  second one's flags are what the customer actually gets."
         )
     rules = gcloud_flag_values(creates[0], "rules")
     if rules != ["${GATEWAY_MANAGEMENT_RULES}"] and rules != ["$GATEWAY_MANAGEMENT_RULES"]:
         failures.append(
-            f"{GCP_SH}: `ringleader-allow-gateway-management` opens {rules or 'nothing'}, not\n"
+            f"{GCP_SH}: `${{NAME_PREFIX}}-allow-gateway-management` opens {rules or 'nothing'}, not\n"
             "  `$GATEWAY_MANAGEMENT_RULES`. Writing the ports out again here is a second definition of\n"
             "  the value, free to drift from the one checked above while both look right in isolation."
         )
@@ -1003,33 +1060,156 @@ def _arm_groups_keep_foreign_rules(doc: dict, deploy_sh: str) -> list[str]:
     return failures
 
 
+# The names the gcloud landing pad builds from NAME_PREFIX, as `VAR` -> the suffix it must carry.
+# The five firewall rules are held to it by `sh_rule_create` at their create sites; these six are
+# named through a variable, so they need their own check.
+SH_PREFIXED_NAMES = (
+    ("VPC", "vpc"),
+    ("SUBNET", "workstations"),
+    ("GATEWAY_SUBNET", "gateway"),
+    ("GOVERNED_SUBNET", "governed"),
+    ("ROUTER", "router"),
+    ("NAT", "nat"),
+)
+
+
+# Every name the gcloud landing pad creates, as the literal it must NOT be written as. The tags
+# are absent on purpose: Ringleader sets those, so they stay literal and are pinned separately.
+SH_FORBIDDEN_NAME_LITERALS = (
+    "ringleader-vpc",
+    "ringleader-workstations",
+    "ringleader-gateway",
+    "ringleader-governed",
+    "ringleader-router",
+    "ringleader-nat",
+    "ringleader-allow-ssh",
+    "ringleader-allow-secondary-ssh",
+    "ringleader-allow-internal",
+    "ringleader-allow-gateway",
+    "ringleader-allow-gateway-management",
+)
+
+
+def check_no_landing_pad_name_is_written_out(sources: dict[str, str]) -> list[str]:
+    """No name the landing pad creates survives as a literal, at a declaration OR a use.
+
+    `check_landing_pad_names_are_prefixed` below pins the six declarations and `sh_rule_create`
+    pins the five rule creates, and between them they leave the USES unguarded: `--network
+    ringleader-vpc` on a rule, `--router ringleader-router` on the NAT, the final `subnets
+    describe`. Each of those reads correctly, deploys, and attaches a second organization's apply
+    to the FIRST organization's resources -- or prints a self-link for a subnet that is not the one
+    this run created. So the rule is stated over the whole script rather than per site.
+    """
+    src = strip_shell_comments(sources[GCP_SH])
+    failures = []
+    for literal in SH_FORBIDDEN_NAME_LITERALS:
+        if re.search(r"(?<![\w-])" + re.escape(literal) + r"(?![\w-])", src):
+            failures.append(
+                f"{GCP_SH}: `{literal}` is written out rather than built from NAME_PREFIX.\n\n"
+                "  Every name this script creates carries the prefix so a SECOND Ringleader\n"
+                "  organization can apply into a project that already holds a landing pad. A literal\n"
+                "  here deploys and reads correctly, and collides with -- or silently attaches to --\n"
+                "  the first organization's resource at the second organization's apply."
+            )
+    return failures
+
+
+def check_artifact_label_length_rule(sources: dict[str, str]) -> list[str]:
+    """The artifact label is EXACTLY eight characters, on every route that validates it.
+
+    The separation two organizations get from the label rests entirely on every label being the
+    same length: the grant's bound is a prefix match, so `acme` reaches every `acmedev` bucket.
+    The rule therefore lives at four sites, and a relaxation at any one of them reintroduces the
+    overlap for the customers who took that route.
+    """
+    sites = (
+        (AWS_VARS, '"^([a-z0-9]{8})?$"', "the artifact label validation"),
+        (GCP_VARS, '"^([a-z0-9]{8})?$"', "the artifact label validation"),
+        (AWS_CFN, '"^([a-z0-9]{8})?$"', "the ArtifactStorageBucketPrefix AllowedPattern"),
+        (GCP_ONBOARD_SH, "'^[a-z0-9]{8}$'", "the artifact label check"),
+    )
+    failures = []
+    for path, needle, what in sites:
+        if needle not in sources[path]:
+            failures.append(
+                f"{path}: {what} is not `{needle}`.\n\n"
+                "  The label's whole separation argument is that two labels of the SAME length can\n"
+                "  never be a prefix of one another. Admit a different length on any route and two\n"
+                "  organizations that took it overlap again -- `acme` reaching every `acmedev`\n"
+                "  bucket -- while every other check here stays green."
+            )
+    return failures
+
+
+def check_landing_pad_names_are_prefixed(sources: dict[str, str]) -> list[str]:
+    """Every project-unique name the gcloud landing pad creates is BUILT from NAME_PREFIX.
+
+    The names were literals until the script took the variable, and a literal was pinned by being
+    matched. Hardcoding one back leaves every other check here green -- the rule creates still
+    reference their own variables, and the default is still `ringleader` -- while a second
+    Ringleader organization applying into the same project collides on that one resource. The
+    collision is the whole reason the variable exists, and it surfaces at the customer's apply.
+    """
+    src = strip_shell_comments(sources[GCP_SH])
+    failures = []
+    for var, suffix in SH_PREFIXED_NAMES:
+        want = f'{var}="${{NAME_PREFIX}}-{suffix}"'
+        if want not in src:
+            failures.append(
+                f"{GCP_SH}: does not build `{var}` as `{want}`.\n\n"
+                "  A name written out instead of built from NAME_PREFIX still deploys, and still reads\n"
+                "  correctly, but a second Ringleader organization applying into this project then\n"
+                "  collides on it -- which is the collision the variable exists to remove."
+            )
+    return failures
+
+
 def check_bucket_prefix_wiring(sources: dict[str, str]) -> list[str]:
-    """The prefix must be what the artifact-storage BOUND is written against.
+    """The prefix must be what the artifact-storage BOUND is written against -- at EVERY occurrence.
 
     The same rule as the tag wiring above: pinning a value nothing applies proves nothing. Here it
     matters more than usual, because the bound is the only thing between "Ringleader may manage
     the buckets it creates" and "Ringleader may read every bucket in this project". A landing pad
     that declares the prefix and then bounds the grant with a literal of its own would satisfy
     every check above while granting something else entirely.
+
+    Every occurrence, and not merely one, because a grant is the UNION of its statements. A second,
+    wider bound added beside the narrowed one reads as narrowed in review and grants the wider
+    thing, and the wider thing is what the customer applied. That is the property
+    `cfn_managed_bucket_prefix` already enforces on the CloudFormation template, so these two
+    routes are held to it as well rather than to the presence of one needle.
     """
-    failures = []
+    want_hcl = "${local.managed_bucket_prefix}${var.artifact_storage_bucket_prefix}"
+    want_sh = "${MANAGED_BUCKET_PREFIX}${ARTIFACT_STORAGE_BUCKET_PREFIX}"
     checks = (
-        (AWS_TF, "s3:::${local.managed_bucket_prefix}", "the artifact-storage ARN patterns"),
-        (GCP_TF, 'projects/_/buckets/${local.managed_bucket_prefix}', "the artifact-storage IAM condition"),
-        (GCP_ONBOARD_SH, 'projects/_/buckets/${MANAGED_BUCKET_PREFIX}', "the artifact-storage IAM condition"),
+        (AWS_TF, strip_hcl_comments, r's3:::([^"]*?)\*', "the artifact-storage ARN patterns", want_hcl),
+        (GCP_TF, strip_hcl_comments, r'projects/_/buckets/([^\\"]*)', "the artifact-storage IAM condition", want_hcl),
+        (GCP_ONBOARD_SH, strip_shell_comments, r'projects/_/buckets/([^\\"]*)', "the artifact-storage IAM condition", want_sh),
     )
-    for path, needle, what in checks:
-        if needle not in sources[path]:
+    failures = []
+    for path, strip, pattern, what, want in checks:
+        found = re.findall(pattern, strip(sources[path]))
+        if not found:
             failures.append(
-                f"{path}: {what} does not interpolate the declared prefix (`{needle}`).\n\n"
-                "  The prefix is pinned above, but the bound is written against something else -- so\n"
-                "  the pin proves nothing about what this landing pad actually grants. Bound and\n"
-                "  prefix have to be the same value, by reference and not by coincidence."
+                f"{path}: {what} does not appear at all, so nothing here reads the bound.\n\n"
+                "  If the statements were restructured, move this check with them -- an unread bound\n"
+                "  is an unchecked one."
+            )
+            continue
+        distinct = sorted(set(found))
+        if distinct != [want]:
+            failures.append(
+                f"{path}: {what} is bounded to {distinct}, not to `{want}` alone.\n\n"
+                "  The prefix is pinned above, but a bound written against something else -- or a\n"
+                "  SECOND, wider bound beside the narrowed one -- means the pin proves nothing about\n"
+                "  what this landing pad grants. A grant is the union of its statements, so the widest\n"
+                "  of them is what the customer actually applied. Bound and prefix have to be the same\n"
+                "  value, by reference and not by coincidence, at every occurrence."
             )
     return failures
 
 
-PATHS = sorted({s.path for lit in LITERALS for s in lit.sites} | {GCP_TF, GCP_SH, AZURE_VARS, AZURE_SH})
+PATHS = sorted({s.path for lit in LITERALS for s in lit.sites} | {GCP_TF, GCP_SH, AZURE_VARS, AZURE_SH, AWS_VARS, GCP_VARS})
 
 
 def check_all(sources: dict[str, str]) -> list[str]:
@@ -1054,6 +1234,9 @@ def check_all(sources: dict[str, str]) -> list[str]:
         check_azure_management_wiring,
         check_management_default_follows_ssh,
         check_bucket_prefix_wiring,
+        check_landing_pad_names_are_prefixed,
+        check_no_landing_pad_name_is_written_out,
+        check_artifact_label_length_rule,
     ):
         try:
             failures += cross(sources)

@@ -55,6 +55,34 @@ run "every_capability_is_on_by_default" {
 
 # The things that are deliberately NOT on, asserted so that staying off is a RECORDED DECISION
 # rather than drift. Every one would be a bug to "fix" by flipping the default.
+# One project can serve several Ringleader organizations, and the managed artifact grant is bounded
+# by a bucket-name pattern rather than by a scope. So a second organization has to be able to narrow
+# that pattern, which is only possible if the label reaches the IAM condition.
+run "a_second_organization_can_narrow_the_managed_artifact_grant" {
+  command = plan
+
+  variables {
+    artifact_storage_bucket_prefix = "0192f5bf"
+  }
+
+  assert {
+    condition     = google_project_iam_member.artifact_storage[0].condition[0].expression == "resource.name.startsWith(\"projects/_/buckets/ringleader-0192f5bf\")"
+    error_message = "artifact_storage_bucket_prefix does not reach the IAM condition, so two organizations in one project still share the managed grant: got ${google_project_iam_member.artifact_storage[0].condition[0].expression}."
+  }
+}
+
+# The separation two organizations get rests on every label being the SAME length: the bound is a
+# prefix match, so a shorter label covers every longer one that starts with it.
+run "an_artifact_label_of_the_wrong_length_is_refused" {
+  command = plan
+
+  variables {
+    artifact_storage_bucket_prefix = "acme"
+  }
+
+  expect_failures = [var.artifact_storage_bucket_prefix]
+}
+
 run "the_deliberate_exceptions_stay_off" {
   command = plan
 
@@ -66,6 +94,16 @@ run "the_deliberate_exceptions_stay_off" {
   assert {
     condition     = var.artifact_storage_bucket == ""
     error_message = "artifact_storage_bucket has a non-empty default, which silently takes the NAMED width. The default width has to be the managed one: it is the only one that works without the customer having created anything, and a default naming a bucket would be a default naming a bucket nobody has."
+  }
+
+  assert {
+    condition     = var.artifact_storage_bucket_prefix == ""
+    error_message = "artifact_storage_bucket_prefix has a non-empty default. It narrows the managed grant's bucket-name bound, so a default would narrow it under every landing pad that has already applied one, and the grant would then match no bucket they have."
+  }
+
+  assert {
+    condition     = google_project_iam_member.artifact_storage[0].condition[0].expression == "resource.name.startsWith(\"projects/_/buckets/ringleader-\")"
+    error_message = "The managed grant's IAM condition is not bounded to projects/_/buckets/ringleader- on the defaults. That bound is the only thing between the buckets Ringleader made and every bucket in the project, and Ringleader compiles the same literal: got ${google_project_iam_member.artifact_storage[0].condition[0].expression}."
   }
 
   assert {

@@ -559,7 +559,8 @@ The apply changes the subnets in place and replaces none of them. If you bring y
 
 On the gcloud path, set `CREATE_FLOW_LOGS=true` for the run of `network-landing-pad.sh` that creates
 the subnets. The script cannot change a subnet it already created, so update an existing subnet in
-place. Run this for `ringleader-workstations`, and again with `ringleader-gateway` and
+place. Those names carry `NAME_PREFIX`; substitute yours if you set one. Run this for
+`ringleader-workstations`, and again with `ringleader-gateway` and
 `ringleader-governed` if you created them:
 
 ```bash
@@ -660,6 +661,124 @@ is `providerConfig.gcp.zone` on the workstation.
 One trap worth naming: on GCP, *all* traffic to or from an **external** IPv4 address leaves the
 zone regardless of destination. So a workstation reaching its proxy by public address pays
 inter-zone rates while sitting right next to it — use internal addressing between them.
+
+## Serving a second organization
+
+One GCP project can hold the workstations of several Ringleader organizations. Nothing about the
+trust is shared: each organization gets its own issuer URL and its own subject, so a token minted
+for one is refused by the other's provider.
+
+> **Sharing a project is not a boundary between the two, and nothing below makes it one.** This
+> onboarding grants Ringleader the authority to manage workstations throughout the project, and
+> that authority is not divided per organization. Every role it binds is project-wide:
+> `roles/compute.instanceAdmin.v1` and `roles/iam.serviceAccountUser` have no switch at all, the
+> second because a GCE workstation cannot come up without an attached service account and the
+> `actAs` it gives reaches *any* service account in the project. So one organization's Ringleader
+> can delete or stop the other's workstations, or attach the other's onboarding account to a
+> workstation of its own and use everything that account can.
+>
+> What this section gives you is a second apply that works: names that do not collide, and grants
+> narrowed where they can be narrowed. It does not give you isolation, and a project is not where
+> this product draws a tenancy boundary. **A project per organization is the answer, and it is what
+> this onboarding asks for anyway.**
+>
+> If you share one regardless, decline the two grants that widen it furthest, in both
+> organizations. `enable_workstation_identities = false` (`WORKSTATION_IDENTITIES=0`) drops
+> `roles/resourcemanager.projectIamAdmin`, which can grant any role in the project to any
+> principal. `enable_egress_control = false` (`EGRESS_CONTROL=0`) drops project-wide authority over
+> firewall rules and routes, which one organization could otherwise use to add a low-priority allow
+> that silently defeats every egress policy in the VPC while Ringleader goes on reporting them
+> enforced. Both cost the features they name.
+
+What the second apply does need is its own **names**. Everything below is unique within the
+project, and every variable that names one defaults to the same constant. Do not change the first
+organization's values to make room: renaming a resource a landing pad already carries does not
+migrate it, it breaks it.
+
+> **Set the names on the second organization's FIRST command, and read this before you run it.**
+> The two routes behave differently, and only one of them protects you. Terraform refuses to create
+> a service account or a pool that exists, so a second apply on the defaults fails on the taken
+> name and never repoints the first organization's trust. It does not stop before it builds
+> anything, though: the VPC, its subnets, the router and Cloud NAT are an independent branch of the
+> graph, so they are created in the same wave and the apply is half done when it stops. Clean that
+> up with `terraform destroy` rather than by discarding the state, which orphans the network and a
+> Cloud NAT that bills by the hour. `onboard.sh` is written to be re-runnable and does the
+> opposite: it reuses the service
+> account and the pool it finds, then **updates the existing OIDC provider's issuer, audience and
+> subject condition** to the second organization's. The first organization's tokens stop being
+> accepted from that moment: they are refused at the provider and never reach the service account,
+> whose binding for the first organization is left behind doing nothing. There is no error, and we
+> cannot repair it for you.
+
+Set these on the second and later applies:
+
+| What | Terraform | `gcloud` scripts | Why |
+|---|---|---|---|
+| The onboarding service account | `sa_account_id` | `SA` | a service account id is unique per project |
+| The workload identity pool | `pool_id` | `POOL` | a pool id is unique per project |
+| The role for the identities Ringleader's own appliances enrol with | `identity_role_id` | `IDENTITY_ROLE` | a custom role id is unique per project. Always granted, and separate from `enable_workstation_identities` |
+| The egress control role | `egress_role_id` | `EGRESS_ROLE` | as above |
+| The artifact storage roles | `artifact_storage_role_id` | `ARTIFACT_STORAGE_ROLE` | as above. It names both roles: the second is that id with `Provision` appended |
+| The landing pad's resources | `name_prefix` | `NAME_PREFIX` | the VPC, its subnets, the router, the NAT and the firewall rules are all unique per project |
+| The address range | `network_cidr` | `CIDR` | two organizations on one range cannot both be reached from one network of yours |
+| Artifact storage's bucket names, if you keep the managed width | `artifact_storage_bucket_prefix` | `ARTIFACT_STORAGE_BUCKET_PREFIX` | the managed grant is bounded by a bucket-name pattern, which is project-wide without it |
+| Per-workstation identities, which you should decline in a shared project | `enable_workstation_identities = false` | `WORKSTATION_IDENTITIES=0` | it grants `roles/resourcemanager.projectIamAdmin`, which can grant any role in the project to any principal |
+
+**A deleted pool keeps its id for 30 days**, which matters because a first attempt that failed
+partway is exactly when someone deletes and retries. The id is soft-deleted rather than gone. On
+Terraform, re-applying with it fails until the window closes, so either pick a different `pool_id`
+or undelete the one you have first (`gcloud iam workload-identity-pools undelete <id> --project
+<project> --location global`). `onboard.sh` undeletes it for you and says so.
+
+**`provider_id` needs no override.** A provider id is unique only within its pool, so once
+`pool_id` differs the providers cannot collide.
+
+**`name_prefix` is not optional here.** `create_network` is on by default and the VPC is named
+`<name_prefix>-vpc`, so the default path collides even if you set every identity name above. This
+is the one place GCP differs from Azure, where the landing pad's resources live in a resource group
+and a second organization with its own group needs nothing.
+
+**Artifact storage is the grant over your DATA that is bounded by a name pattern rather than by a
+scope**, which is why it needs its own answer here.
+`enable_artifact_storage` is on by default and takes the *managed* width unless you name a bucket.
+That width conditions the role on `resource.name.startsWith("projects/_/buckets/ringleader-")`, so
+on the default each organization's service account is permitted to reach every Ringleader-named
+artifact bucket in the project, including the other organization's. Those buckets hold sealed
+agent-session transcripts and workflow file outputs. Renaming anything else does not narrow it.
+
+Three ways to narrow it, and the first is the one to reach for:
+
+- **`artifact_storage_bucket_prefix`** (`ARTIFACT_STORAGE_BUCKET_PREFIX`), a label of your own.
+  The condition then admits only `ringleader-<label>*`, so neither organization's *artifact-storage
+  binding* reaches the other's buckets. Read that bound for what it is: it narrows one binding, and
+  the project-wide `actAs` above is a separate path to the same buckets. It defaults to empty, which is today's wider bound.
+  It is exactly eight lowercase letters or digits, and the fixed length is the point: the condition
+  is a prefix match, so `acme` would admit every `acmedev` bucket while two labels of the same
+  length can never overlap. The first eight characters of your organization id are a good choice. Name the bucket in each `Storage` object
+  `ringleader-<label>...` to match: Ringleader is not told the label, so a bucket named otherwise is
+  one the grant cannot reach.
+- **`artifact_storage_bucket`** (`ARTIFACT_STORAGE_BUCKET`) takes the narrow width instead, binding
+  the grant to one bucket you created and dropping every bucket-management action.
+- **`enable_artifact_storage = false`** (`ARTIFACT_STORAGE=0`) declines the grant, and payloads
+  stay in a bucket Ringleader owns.
+
+**Both organizations need a label for this to separate them, which makes it the one item here that
+is not "set it on the second apply".** A label on the second alone narrows the second's grant and
+leaves the first's reaching every bucket named `ringleader-*`, including the second's. And narrowing
+a pad that has already applied only works if its buckets already carry its label, because the grant
+stops matching anything named otherwise. So decide the labels before the first organization
+onboards; retrofitting one means renaming buckets, and `Storage.spec.bucket` cannot be changed after
+the object is created.
+
+**One authority stays project-wide whatever you set: creating a bucket.** A bucket create is
+authorized against the project, and an IAM condition on the resource name cannot match a bucket
+that does not exist yet, so the second custom role holds `storage.buckets.create` unconditioned.
+It carries nothing else, so it cannot read, change or delete any bucket, new or existing.
+
+**Both `gcloud` scripts take every name above.** `onboard.sh` takes the identity and role names,
+and `network-landing-pad.sh` takes `NAME_PREFIX`, which names the VPC, its three subnets, the
+router, the NAT and the five firewall rules. The network TAGS are deliberately not prefixed:
+Ringleader sets those itself, and a renamed tag is a rule that admits nobody.
 
 ## What you return to Ringleader
 

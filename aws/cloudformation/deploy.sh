@@ -59,6 +59,11 @@
 #   FLOW_LOG_RETENTION_DAYS  days the log group keeps records; one
 #                of the values CloudWatch Logs accepts
 #                                              (default: unset, which keeps the stack's; 365 at creation)
+#   FLOW_LOG_GROUP_NAME  name of the CloudWatch Logs group the flow
+#                log delivers into. A group name is unique per account
+#                and region, so a second organization onboarding into
+#                the same one needs its own
+#                                              (default: unset, which keeps the stack's; ringleader-workstations-flow-logs at creation)
 #   VPC_CIDR     override the whole VPC range; empty derives it
 #                from REGION_INDEX                               (default: empty)
 #   SUBNET_CIDR  override the workstations subnet; empty derives
@@ -69,6 +74,11 @@
 #   WORKSTATION_IDENTITY_PATH  the IAM path those roles live under (default: /ringleader/)
 #   ARTIFACT_STORAGE  true|false: let Ringleader hold artifact
 #                payloads in an S3 bucket in THIS account         (default: true)
+#   ARTIFACT_STORAGE_BUCKET_PREFIX  a short label of your own that the
+#                managed width's buckets must carry in their name, narrowing
+#                the grant from every ringleader-* bucket to only
+#                ringleader-<this>*. Set it when one ACCOUNT serves several
+#                Ringleader organizations                        (default: empty, the wider bound)
 #   ARTIFACT_STORAGE_BUCKET  a bucket YOU created, to take the
 #                narrower "named" width instead of letting
 #                Ringleader create its own                        (default: empty, managed)
@@ -114,6 +124,7 @@ WORKSTATION_IDENTITIES="${WORKSTATION_IDENTITIES:-true}"
 WORKSTATION_IDENTITY_PATH="${WORKSTATION_IDENTITY_PATH:-/ringleader/}"
 ARTIFACT_STORAGE="${ARTIFACT_STORAGE:-true}"
 ARTIFACT_STORAGE_BUCKET="${ARTIFACT_STORAGE_BUCKET:-}"
+ARTIFACT_STORAGE_BUCKET_PREFIX="${ARTIFACT_STORAGE_BUCKET_PREFIX:-}"
 EGRESS_VPC_ID="${EGRESS_VPC_ID:-}"
 CREATE_NAT_GATEWAY="${CREATE_NAT_GATEWAY:-true}"
 CREATE_GATEWAY_SUBNET="${CREATE_GATEWAY_SUBNET:-true}"
@@ -122,11 +133,13 @@ CREATE_GOVERNED_SUBNET="${CREATE_GOVERNED_SUBNET:-true}"
 GOVERNED_SUBNET_CIDR="${GOVERNED_SUBNET_CIDR:-}"
 ADDITIONAL_GOVERNED_SUBNETS="${ADDITIONAL_GOVERNED_SUBNETS:-}"
 # Flow logs are off when the stack is created: they bill and grant Ringleader nothing. Unlike the
-# switches above, these two are passed only when set, so a later run that does not mention them keeps
-# what the stack has. Turning flow logs off deletes the log group and every record in it, so only
-# CREATE_FLOW_LOGS=false does that.
+# switches above, these three are passed only when set, so a later run that does not mention them
+# keeps what the stack has. Turning flow logs off deletes the log group and every record in it, so
+# only CREATE_FLOW_LOGS=false does that. Renaming the group replaces it, and the records in the old
+# one go with it, so set FLOW_LOG_GROUP_NAME when you create the stack rather than afterwards.
 CREATE_FLOW_LOGS="${CREATE_FLOW_LOGS:-}"
 FLOW_LOG_RETENTION_DAYS="${FLOW_LOG_RETENTION_DAYS:-}"
+FLOW_LOG_GROUP_NAME="${FLOW_LOG_GROUP_NAME:-}"
 
 case "$ISSUER_URL" in
   https://*/) echo "ISSUER_URL must not end in a slash" >&2; exit 1 ;;
@@ -165,6 +178,8 @@ echo ">> egress control:$EGRESS_CONTROL  vpc: ${EGRESS_VPC_ID:-<the one this sta
 echo ">> gateway subnet:$CREATE_GATEWAY_SUBNET  governed subnet: $CREATE_GOVERNED_SUBNET  nat: $CREATE_NAT_GATEWAY"
 echo ">> additional governed subnets: ${ADDITIONAL_GOVERNED_SUBNETS:-<unchanged>}"
 echo ">> flow logs:     ${CREATE_FLOW_LOGS:-<unchanged>}  retention days: ${FLOW_LOG_RETENTION_DAYS:-<unchanged>}"
+echo ">> flow log group:${FLOW_LOG_GROUP_NAME:-<unchanged>}"
+echo ">> artifact storage:${ARTIFACT_STORAGE}  bucket: ${ARTIFACT_STORAGE_BUCKET:-<managed>}  managed-name label: ${ARTIFACT_STORAGE_BUCKET_PREFIX:-<unchanged>}"
 
 # Substitute the one placeholder CloudFormation cannot parameterize (a condition KEY).
 # All four CIDR overrides are passed ONLY when set. `aws cloudformation deploy` keeps a stack's
@@ -194,6 +209,15 @@ if [ -n "$CREATE_FLOW_LOGS" ]; then
 fi
 if [ -n "$FLOW_LOG_RETENTION_DAYS" ]; then
   CIDR_OVERRIDES+=("FlowLogRetentionDays=$FLOW_LOG_RETENTION_DAYS")
+fi
+if [ -n "$FLOW_LOG_GROUP_NAME" ]; then
+  CIDR_OVERRIDES+=("FlowLogGroupName=$FLOW_LOG_GROUP_NAME")
+fi
+# Passed only when set, like the flow-log parameters above, so a re-run that does not mention it
+# keeps the stack's. Passing an empty string instead would WIDEN a stack that had been narrowed
+# per organization, silently, on any later deploy.sh run that forgot the variable.
+if [ -n "$ARTIFACT_STORAGE_BUCKET_PREFIX" ]; then
+  CIDR_OVERRIDES+=("ArtifactStorageBucketPrefix=$ARTIFACT_STORAGE_BUCKET_PREFIX")
 fi
 
 # More governed subnets, one per namespace that runs its own gateway: a gateway steers a whole

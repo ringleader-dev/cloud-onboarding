@@ -32,8 +32,16 @@ tenant id, subscription id, resource group).
 
 Env vars: `RG`, `ISSUER_URL`, `ORG_UID` (required); `APP_NAME`
 (`ringleader-workstations`), `ROLE_NAME` (`Ringleader Workstation Operator`),
-`WORKSTATION_IDENTITIES` (`1` to also grant the per-workstation runtime-identity
-actions — see [`../README.md`](../README.md) before turning it on).
+`ROLE_DEPLOYMENT_NAME` (`azuredeploy`) and `NETWORK_DEPLOYMENT_NAME`
+(`ringleader-onboarding-network`), the two ARM deployment records whose names are
+otherwise fixed; `WORKSTATION_IDENTITIES` (`1` to also grant the per-workstation
+runtime-identity actions — see [`../README.md`](../README.md) before turning it on).
+
+A second Ringleader organization sharing this resource group sets `APP_NAME`,
+`ROLE_NAME`, the two deployment names and `NAME_PREFIX` on its FIRST run: this script
+reuses an app it finds by display name and repoints its federated credential, so it
+takes the first organization's trust rather than failing. See
+[`../README.md`](../README.md#serving-a-second-organization).
 
 ## The optional network landing pad
 

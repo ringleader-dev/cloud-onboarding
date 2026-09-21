@@ -65,9 +65,14 @@ Two more grant capabilities on the role rather than on the network. `EnableWorks
 account rather than in its own; `ArtifactStorageBucket` (empty) takes the managed width, where
 Ringleader creates and converges its own buckets bounded by ARN to names beginning
 `ringleader-`, and naming a bucket you made narrows the grant to that one ARN with no
-`CreateBucket`, `DeleteBucket` or lifecycle write. `deploy.sh` exposes all four as
-`WORKSTATION_IDENTITIES`, `WORKSTATION_IDENTITY_PATH`, `ARTIFACT_STORAGE` and
-`ARTIFACT_STORAGE_BUCKET`.
+`CreateBucket`, `DeleteBucket` or lifecycle write. On the managed width
+`ArtifactStorageBucketPrefix` (empty) takes a short label of yours that those buckets must carry in
+their name, bounding the ARNs to `ringleader-<label>*` instead of every `ringleader-*` bucket in
+the account; set it when one account serves several Ringleader organizations. `deploy.sh` exposes
+all five as `WORKSTATION_IDENTITIES`, `WORKSTATION_IDENTITY_PATH`, `ARTIFACT_STORAGE`,
+`ARTIFACT_STORAGE_BUCKET` and `ARTIFACT_STORAGE_BUCKET_PREFIX`. The last is passed only when set,
+like the flow-log parameters, so a run that does not mention it keeps the stack's rather than
+widening a grant that had been narrowed.
 
 Egress control and the two egress-control subnets add seven more: `EnableEgressControl`
 (`true`), `EgressVpcId` (empty — uses the VPC this stack creates), `CreateNatGateway` (`true`),
@@ -101,8 +106,11 @@ proxy: `AdditionalGovernedSubnet1Label` and `AdditionalGovernedSubnet1Cidr` thro
 CloudWatch Logs group that keeps the records for `FlowLogRetentionDays` (`365`). It also creates the
 role that delivers them, which only VPC Flow Logs can assume. It is off by default, because it bills
 per GB and grants Ringleader nothing. The stack refuses it without `CreateNetwork=true`. `deploy.sh`
-exposes the two as `CREATE_FLOW_LOGS` and `FLOW_LOG_RETENTION_DAYS`, and passes each only when you
-set it, so a later run keeps what the stack has. The delivery role
+exposes the three as `CREATE_FLOW_LOGS`, `FLOW_LOG_RETENTION_DAYS` and `FLOW_LOG_GROUP_NAME`, and
+passes each only when you set it, so a later run keeps what the stack has. A log group name is
+unique per account and region, so a second Ringleader organization onboarding into the same one
+needs its own; renaming the group replaces it and the records in the old one go with it, so set it
+when you create the stack rather than afterwards. The delivery role
 holds `logs:CreateLogGroup`, `CreateLogStream`, `PutLogEvents` and `DescribeLogStreams` on that one
 group and its streams, and `logs:DescribeLogGroups` on `*`, which IAM cannot scope. See
 [`../README.md`](../README.md#optional-flow-logs-for-the-vpc).

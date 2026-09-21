@@ -495,9 +495,12 @@ false`), the plan or the stack refuses the switch, because there is no VPC here 
 With the switch on, you get a flow log, a log group and a delivery role:
 
 - The flow log records all traffic in the VPC, accepted and rejected.
-- The CloudWatch Logs group, `ringleader-workstations-flow-logs`, keeps the records for
+- The CloudWatch Logs group, `ringleader-workstations-flow-logs` unless you set
+  `flow_log_group_name` (`FLOW_LOG_GROUP_NAME`), keeps the records for
   `flow_log_retention_days` (`FLOW_LOG_RETENTION_DAYS`), 365 by default. Unless its setting is
-  changed, AWS Security Hub's CloudWatch.16 check fails a log group kept for less than a year.
+  changed, AWS Security Hub's CloudWatch.16 check fails a log group kept for less than a year. A
+  group name is unique per account and region, so a second organization onboarding into the same
+  one needs its own; see [Serving a second organization](#serving-a-second-organization).
 - The IAM role delivers the records into that group. Only the VPC Flow Logs service can assume it,
   and only for a flow log in this account and region.
 
@@ -596,6 +599,98 @@ landing pad. They mock both providers and only ever `plan`, so they need no cred
 ```console
 $ cd aws/terraform && terraform init && terraform test
 ```
+
+## Serving a second organization
+
+One AWS account can hold the workstations of several Ringleader organizations. Nothing about the
+trust is shared: each organization gets its own issuer URL, so the second apply creates a second
+OIDC provider of its own and you never touch the first one's.
+
+> **Sharing an account is not a boundary between the two, and nothing below makes it one.** This
+> onboarding grants Ringleader the authority to manage workstations throughout the account, and
+> that authority is not divided per organization. The EC2 lifecycle statement is the clearest case:
+> it is granted on every instance, bounded by region alone, so one organization's Ringleader can
+> stop the other's workstation, rewrite its user data and start it again, and read that user data
+> outright. Several other grants are account-wide in the same way.
+>
+> What this section gives you is a second apply that works: names that do not collide, and grants
+> narrowed where they can be narrowed. It does not give you isolation, and an account is not where
+> this product draws a tenancy boundary. **If the two organizations must not reach each other, give
+> each its own account.**
+
+What the second apply does need is its own **names**. Almost everything here takes its name from a
+variable, and every one of those defaults to the same constant. Do not change the first
+organization's values to make room: renaming a resource a landing pad already carries does not
+migrate it, it breaks it.
+
+> **Set the names on the second organization's FIRST command, and read this before you run it.**
+> The two routes behave differently, and only one of them protects you. Terraform fails on the
+> taken role name and never touches the first organization's trust, though it does not stop before
+> it builds anything: the VPC, the internet gateway and the OIDC provider have no dependency on the
+> role, so they are created in the same wave and the apply is half done when it stops. Clean that up
+> with `terraform destroy` rather than by discarding the state, which orphans a VPC and, with
+> `create_nat_gateway`, a billed NAT. `deploy.sh` gives you no error at all: `aws cloudformation
+> deploy` **updates the stack named `STACK_NAME` in place**, so a second organization running it on
+> the defaults rewrites the first organization's stack with its own issuer and subject. We cannot
+> repair that for you.
+
+Set these on the second and later applies:
+
+| What | Terraform | CloudFormation (`deploy.sh`) | Why |
+|---|---|---|---|
+| The IAM role Ringleader assumes | `role_name` | `ROLE_NAME` | IAM role names are unique per account |
+| The stack itself | n/a | `STACK_NAME` | stack names are unique per account and region |
+| The flow log group, if you turn flow logs on | `flow_log_group_name` | `FLOW_LOG_GROUP_NAME` | log group names are unique per account and region |
+| The VPC's address range | `region_indexes`, or `vpc_cidr` | `REGION_INDEX`, or `VPC_CIDR` | two VPCs on one range can never be peered |
+| Artifact storage's bucket names, if you keep the managed width | `artifact_storage_bucket_prefix` | `ARTIFACT_STORAGE_BUCKET_PREFIX` | the managed grant is bounded by a bucket-name pattern, which is account-wide without it |
+
+Two more things are worth knowing rather than setting.
+
+**The OIDC provider needs no override.** `aws_iam_openid_connect_provider.ringleader` is keyed by
+its URL, which is `<issuer>/org/<your organization id>`, so two organizations produce two providers
+without any help. Neither can be used to assume the other's role: each role's trust policy pins its
+own `sub`.
+
+**The security groups need none either.** Their names are unique within a VPC, and each apply
+creates its own VPC. The flow log delivery role needs none because it asks AWS for a unique suffix.
+
+**Artifact storage is the grant over your DATA that is bounded by a name pattern rather than by a
+scope**, which is why it needs its own answer here.
+`enable_artifact_storage` is on by default and takes the *managed* width unless you name a bucket.
+That width grants object read, write and delete on `arn:<partition>:s3:::ringleader-*`, so on the
+default
+each organization's role is permitted to reach every Ringleader-named artifact bucket in the
+account, including the other organization's. Those buckets hold sealed agent-session transcripts
+and workflow file outputs. Renaming anything else does not narrow it.
+
+Three ways to narrow it, and the first is the one to reach for:
+
+- **`artifact_storage_bucket_prefix`** (`ARTIFACT_STORAGE_BUCKET_PREFIX`), a label of your own.
+  The grant then reaches only `ringleader-<label>*`, so give each organization its own label and
+  neither is permitted the other's buckets. It defaults to empty, which is today's wider bound.
+  It is exactly eight lowercase letters or digits, and the fixed length is the point: the bound is
+  a prefix match, so `acme` would cover every `acmedev` bucket while two labels of the same length
+  can never overlap. The first eight characters of your organization id are a good choice. Name the bucket in each `Storage` object
+  `ringleader-<label>...` to match: Ringleader is not told the label, so a bucket named otherwise is
+  one the grant cannot reach.
+- **`artifact_storage_bucket`** (`ARTIFACT_STORAGE_BUCKET`) takes the narrow width instead, binding
+  the grant to one bucket you created and dropping every bucket-management action.
+- **`enable_artifact_storage = false`** (`ARTIFACT_STORAGE=false`) declines the grant, and
+  payloads stay in a bucket Ringleader owns.
+
+**Both organizations need a label for this to separate them, which makes it the one item here that
+is not "set it on the second apply".** A label on the second alone narrows the second's grant and
+leaves the first's reaching every bucket named `ringleader-*`, including the second's. And narrowing
+a pad that has already applied only works if its buckets already carry its label, because the grant
+stops matching anything named otherwise. So decide the labels before the first organization
+onboards; retrofitting one means renaming buckets, and `Storage.spec.bucket` cannot be changed after
+the object is created.
+
+**`workstation_identity_path` is not a collision, but give each organization its own.** It is the
+IAM path under which Ringleader may pass roles to workstations, and two organizations left on the
+default share it, so either one's role could pass the other's workstation roles. It is
+`workstation_identity_path` on Terraform, defaulting to `/ringleader-workstations/`, and
+`WORKSTATION_IDENTITY_PATH` on `deploy.sh`, defaulting to `/ringleader/`.
 
 ## Workstations hold no AWS identity by default
 

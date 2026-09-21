@@ -9,6 +9,13 @@
 #   PROJECT      your project id                     (required)
 #   REGION       region for the subnet/NAT           (default: us-central1)
 #   CIDR         subnet primary range                (default: 10.80.0.0/20)
+#   NAME_PREFIX  prefix for every resource this script creates -- the
+#                VPC, its subnets, the router, the NAT and the firewall
+#                rules. Set it when those names are already taken in
+#                this project, which is what a SECOND Ringleader
+#                organization onboarding into it hits. The Terraform
+#                module's name_prefix is the same knob
+#                                                    (default: ringleader)
 #   SSH_RANGES   comma-separated CIDRs allowed to reach workstations on TCP 22
 #                (default: empty -- NO inbound rule of your own is created)
 #   SSH_TAG      network tag the rule targets        (default: ringleader-workstation)
@@ -62,6 +69,8 @@
 #   gcloud compute networks subnets update ringleader-workstations --project <p> --region <r> \
 #     --enable-flow-logs --logging-aggregation-interval=interval-5-sec \
 #     --logging-flow-sampling=1.0 --logging-metadata=include-all
+#
+# Those three names, and every other name below, carry NAME_PREFIX. Substitute yours if you set it.
 #
 # REACHABILITY -- the part that decides whether your workstations are USABLE.
 #
@@ -146,6 +155,17 @@ GATEWAY_MANAGEMENT_RULES="tcp:22,tcp:30000-32767"
 PROJECT="${PROJECT:?set PROJECT to your GCP project id}"
 REGION="${REGION:-us-central1}"
 CIDR="${CIDR:-10.80.0.0/20}"
+# Every name below is unique within the PROJECT, so a second Ringleader organization onboarding
+# into the same one needs its own prefix. The default reproduces the names this script has always
+# created, so changing nothing changes nothing. The network TAGS are deliberately NOT prefixed:
+# Ringleader sets those itself, and a renamed tag is a rule that admits nobody.
+NAME_PREFIX="${NAME_PREFIX:-ringleader}"
+VPC="${NAME_PREFIX}-vpc"
+SUBNET="${NAME_PREFIX}-workstations"
+GATEWAY_SUBNET="${NAME_PREFIX}-gateway"
+GOVERNED_SUBNET="${NAME_PREFIX}-governed"
+ROUTER="${NAME_PREFIX}-router"
+NAT="${NAME_PREFIX}-nat"
 SSH_RANGES="${SSH_RANGES:-}"
 SSH_TAG="${SSH_TAG:-ringleader-workstation}"
 # 2222 follows 22 unless you say otherwise: if you opened one to your engineers you almost
@@ -197,9 +217,9 @@ elif [[ "$CREATE_FLOW_LOGS" != "false" ]]; then
   exit 1
 fi
 
-gcloud compute networks create ringleader-vpc --project "$PROJECT" --subnet-mode custom
-gcloud compute networks subnets create ringleader-workstations --project "$PROJECT" \
-  --network ringleader-vpc --region "$REGION" --range "$CIDR" \
+gcloud compute networks create "$VPC" --project "$PROJECT" --subnet-mode custom
+gcloud compute networks subnets create "$SUBNET" --project "$PROJECT" \
+  --network "$VPC" --region "$REGION" --range "$CIDR" \
   --enable-private-ip-google-access $FLOW_LOG_FLAGS
 # A reserved, empty range -- created only if you ask, and it STAYS empty here.
 #
@@ -211,29 +231,29 @@ gcloud compute networks subnets create ringleader-workstations --project "$PROJE
 # It is carved anyway so the addressing matches the AWS and Azure paths and a later renumbering
 # does not collide. GCP does not bill for a subnet.
 if [[ -n "$GATEWAY_CIDR" ]]; then
-  gcloud compute networks subnets create ringleader-gateway --project "$PROJECT" \
-    --network ringleader-vpc --region "$REGION" --range "$GATEWAY_CIDR" \
+  gcloud compute networks subnets create "$GATEWAY_SUBNET" --project "$PROJECT" \
+    --network "$VPC" --region "$REGION" --range "$GATEWAY_CIDR" \
     --enable-private-ip-google-access $FLOW_LOG_FLAGS
-  echo ">> reserved range ringleader-gateway created at ${GATEWAY_CIDR} (stays empty; the gateway VM runs in the workstations subnet)"
+  echo ">> reserved range ${GATEWAY_SUBNET} created at ${GATEWAY_CIDR} (stays empty; the gateway VM runs in the workstations subnet)"
 fi
 if [[ -n "$GOVERNED_CIDR" ]]; then
-  gcloud compute networks subnets create ringleader-governed --project "$PROJECT" \
-    --network ringleader-vpc --region "$REGION" --range "$GOVERNED_CIDR" \
+  gcloud compute networks subnets create "$GOVERNED_SUBNET" --project "$PROJECT" \
+    --network "$VPC" --region "$REGION" --range "$GOVERNED_CIDR" \
     --enable-private-ip-google-access $FLOW_LOG_FLAGS
-  echo ">> governed subnet ringleader-governed created at ${GOVERNED_CIDR}"
+  echo ">> governed subnet ${GOVERNED_SUBNET} created at ${GOVERNED_CIDR}"
 fi
 
-gcloud compute routers create ringleader-router --project "$PROJECT" \
-  --region "$REGION" --network ringleader-vpc
-gcloud compute routers nats create ringleader-nat --project "$PROJECT" \
-  --region "$REGION" --router ringleader-router \
+gcloud compute routers create "$ROUTER" --project "$PROJECT" \
+  --region "$REGION" --network "$VPC"
+gcloud compute routers nats create "$NAT" --project "$PROJECT" \
+  --region "$REGION" --router "$ROUTER" \
   --auto-allocate-nat-external-ips --nat-all-subnet-ip-ranges
 
 if [[ -n "$SSH_RANGES" ]]; then
   # Targeted by TAG, so it applies to your workstations and to nothing else in the VPC. Put the
   # same tag on the workstations: providerConfig.gcp.networkTags: [ringleader-workstation]
-  gcloud compute firewall-rules create ringleader-allow-ssh --project "$PROJECT" \
-    --network ringleader-vpc --direction INGRESS --action allow --rules tcp:22 \
+  gcloud compute firewall-rules create "${NAME_PREFIX}-allow-ssh" --project "$PROJECT" \
+    --network "$VPC" --direction INGRESS --action allow --rules tcp:22 \
     --source-ranges "$SSH_RANGES" --target-tags "$SSH_TAG"
   echo ">> inbound SSH allowed from ${SSH_RANGES} to VMs tagged ${SSH_TAG}"
 else
@@ -245,8 +265,8 @@ else
 fi
 
 if [[ -n "$SECONDARY_SSH_RANGES" ]]; then
-  gcloud compute firewall-rules create ringleader-allow-secondary-ssh --project "$PROJECT" \
-    --network ringleader-vpc --direction INGRESS --action allow \
+  gcloud compute firewall-rules create "${NAME_PREFIX}-allow-secondary-ssh" --project "$PROJECT" \
+    --network "$VPC" --direction INGRESS --action allow \
     --rules "tcp:${SECONDARY_SSH_PORT}" \
     --source-ranges "$SECONDARY_SSH_RANGES" --target-tags "$SECONDARY_SSH_TAG"
   echo ">> secondary SSH port ${SECONDARY_SSH_PORT} allowed from ${SECONDARY_SSH_RANGES} to VMs tagged ${SECONDARY_SSH_TAG}"
@@ -265,8 +285,8 @@ if [[ -n "$GOVERNED_CIDR" ]]; then
 fi
 
 if [[ "$ALLOW_INTERNAL" == "1" ]]; then
-  gcloud compute firewall-rules create ringleader-allow-internal --project "$PROJECT" \
-    --network ringleader-vpc --direction INGRESS --action allow \
+  gcloud compute firewall-rules create "${NAME_PREFIX}-allow-internal" --project "$PROJECT" \
+    --network "$VPC" --direction INGRESS --action allow \
     --rules tcp,udp,icmp --source-ranges "$WORKSTATION_RANGES" --target-tags "$SSH_TAG"
   echo ">> workstations tagged ${SSH_TAG} can reach each other within ${WORKSTATION_RANGES}"
 fi
@@ -285,8 +305,8 @@ fi
 # between workstations; this admits them to the one machine that polices their egress, so turning it
 # off would harden nothing and break egress control while leaving it looking enforced. Without
 # hostname-level egress control there is no gateway VM and the rule admits nobody.
-gcloud compute firewall-rules create ringleader-allow-gateway --project "$PROJECT" \
-  --network ringleader-vpc --direction INGRESS --action allow \
+gcloud compute firewall-rules create "${NAME_PREFIX}-allow-gateway" --project "$PROJECT" \
+  --network "$VPC" --direction INGRESS --action allow \
   --rules tcp,udp,icmp --source-ranges "$WORKSTATION_RANGES" --target-tags "$GATEWAY_TAG"
 echo ">> workstations within ${WORKSTATION_RANGES} can reach the egress gateway tagged ${GATEWAY_TAG}"
 
@@ -306,8 +326,8 @@ echo ">> workstations within ${WORKSTATION_RANGES} can reach the egress gateway 
 # listens on would be a rule that reads correctly in the console and admits nothing, and this
 # landing pad cannot be re-applied by us afterwards.
 if [[ -n "$GATEWAY_MANAGEMENT_RANGES" ]]; then
-  gcloud compute firewall-rules create ringleader-allow-gateway-management --project "$PROJECT" \
-    --network ringleader-vpc --direction INGRESS --action allow \
+  gcloud compute firewall-rules create "${NAME_PREFIX}-allow-gateway-management" --project "$PROJECT" \
+    --network "$VPC" --direction INGRESS --action allow \
     --rules "$GATEWAY_MANAGEMENT_RULES" \
     --source-ranges "$GATEWAY_MANAGEMENT_RANGES" --target-tags "$GATEWAY_TAG"
   echo ">> ${GATEWAY_MANAGEMENT_RANGES} can reach the egress gateway tagged ${GATEWAY_TAG} on ${GATEWAY_MANAGEMENT_RULES}"
@@ -322,7 +342,7 @@ fi
 
 echo
 echo ">> subnet self-link (hand back to Ringleader as your workstation subnet):"
-gcloud compute networks subnets describe ringleader-workstations \
+gcloud compute networks subnets describe "$SUBNET" \
   --project "$PROJECT" --region "$REGION" --format='value(selfLink)'
 
 if [[ -n "$GATEWAY_CIDR" ]]; then
@@ -330,7 +350,7 @@ if [[ -n "$GATEWAY_CIDR" ]]; then
   echo ">> reserved range self-link -- do NOT hand this back. Nothing is placed in it: the"
   echo "   gateway VM runs in the workstations subnet, and Edge.spec.subnet is"
   echo "   refused on GCP. Kept only so the addressing matches the AWS and Azure paths."
-  gcloud compute networks subnets describe ringleader-gateway \
+  gcloud compute networks subnets describe "$GATEWAY_SUBNET" \
     --project "$PROJECT" --region "$REGION" --format='value(selfLink)'
 fi
 
@@ -350,5 +370,7 @@ fi
 #   gcloud compute routers nats create ringleader-nat-<region> \
 #     --project <p> --region <region> --router ringleader-router-<region> \
 #     --auto-allocate-nat-external-ips --nat-all-subnet-ip-ranges
+#
+# Substitute your NAME_PREFIX for "ringleader" in those names if you set one.
 #
 # The Terraform module does this for you -- see its additional_regions variable.

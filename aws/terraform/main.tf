@@ -169,7 +169,7 @@ locals {
 
   # The bucket ARNs each width reaches: every `ringleader-*` bucket, or exactly the one named.
   artifact_storage_bucket_arns = local.artifact_storage_managed ? [
-    "arn:${data.aws_partition.current.partition}:s3:::${local.managed_bucket_prefix}*",
+    "arn:${data.aws_partition.current.partition}:s3:::${local.managed_bucket_prefix}${var.artifact_storage_bucket_prefix}*",
     ] : [
     "arn:${data.aws_partition.current.partition}:s3:::${var.artifact_storage_bucket}",
   ]
@@ -1059,9 +1059,9 @@ resource "aws_subnet" "governed_additional" {
 
 resource "aws_cloudwatch_log_group" "flow_logs" {
   count             = var.create_network && var.create_flow_logs ? 1 : 0
-  name              = "ringleader-workstations-flow-logs"
+  name              = var.flow_log_group_name
   retention_in_days = var.flow_log_retention_days
-  tags              = merge(var.tags, { Name = "ringleader-workstations-flow-logs" })
+  tags              = merge(var.tags, { Name = var.flow_log_group_name })
 }
 
 # The confused-deputy conditions AWS recommends for this role: the service may assume it only for a
