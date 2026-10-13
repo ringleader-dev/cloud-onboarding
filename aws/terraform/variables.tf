@@ -577,6 +577,33 @@ variable "flow_log_group_name" {
   }
 }
 
+# --- The default security group of the VPC this module creates (left alone by default) -------
+
+variable "restrict_default_security_group" {
+  type        = bool
+  default     = false
+  description = <<-EOT
+    Remove every rule from the default security group of the VPC this module creates, and keep
+    the group empty on every apply. Off by default. Needs create_network; a VPC you bring
+    yourself is yours to change.
+
+    AWS gives every VPC a default security group, which cannot be deleted. The group starts out
+    allowing all outbound traffic, and all inbound traffic from anything else that carries it.
+    This variable is here because compliance scans such as AWS Security Hub's EC2.2 check expect
+    that group to allow no traffic, and this module declares the VPC.
+
+    It is off because it cuts the traffic of whatever carries the group. A workstation whose
+    providerConfig.aws names no security group carries it, as any EC2 instance launched without
+    one does, and gets its outbound traffic from it. Before you set this, run the check in
+    aws/README.md. Every workstation must name one of this module's two groups when it is
+    created: security_group_id, or inbound_only_security_group_id for a workstation that declares
+    spec.egress.
+
+    Setting it also replaces the group's tags with this module's. Unsetting it later does not
+    put the rules back: Terraform stops managing the group and leaves it as it is.
+  EOT
+}
+
 variable "tags" {
   type        = map(string)
   default     = {}

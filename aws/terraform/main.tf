@@ -702,13 +702,19 @@ data "aws_availability_zones" "available" {
 # this is the only way it can learn where it is being applied -- which is what binds an index
 # in region_indexes to a region rather than to whichever tfvars file was reached for.
 data "aws_region" "current" {
-  # Checked here because this data source is read on every apply. Flow logs are declared on the
-  # VPC this module creates, so without one the switch would plan nothing, and a customer who set it
-  # for a compliance scan would believe the network was logged.
+  # Checked here because this data source is read on every apply. Flow logs and the default
+  # security group both belong to the VPC this module creates. Without that VPC either switch
+  # would plan nothing. A customer who set one for a compliance scan would believe it had taken
+  # effect.
   lifecycle {
     precondition {
       condition     = var.create_network || !var.create_flow_logs
       error_message = "create_flow_logs is set, but create_network is false, so this module creates no VPC to record flow logs for. Turn on flow logs for your own VPC where it is declared, or unset create_flow_logs."
+    }
+
+    precondition {
+      condition     = var.create_network || !var.restrict_default_security_group
+      error_message = "restrict_default_security_group is set, but create_network is false, so this module creates no VPC whose default security group it could empty. Empty the default security group of your own VPC where that VPC is declared, or unset restrict_default_security_group."
     }
   }
 }
@@ -909,6 +915,35 @@ resource "aws_security_group" "workstations_inbound_only" {
   }]
 
   tags = merge(var.tags, { Name = "ringleader-workstations-inbound-only" })
+}
+
+# The VPC's default security group, emptied when restrict_default_security_group is set.
+#
+# AWS creates this group with every VPC, and it cannot be deleted. It starts out allowing all
+# outbound traffic, and all inbound traffic from anything else that carries the group. This
+# resource creates nothing. Terraform takes over the group AWS created, removes every rule it
+# finds, and replaces the group's tags with the ones below. From then on it keeps exactly the rules
+# declared here, which are none.
+#
+# Both lists are assigned an empty list, and that is load-bearing. The provider reads them in
+# attributes-as-blocks mode, where a list with no assignment is one Terraform does not manage.
+# Without the assignment the group would be emptied once, and a rule added to it later by hand
+# would stay.
+#
+# Off by default, because emptying the group cuts the traffic of whatever carries it. A
+# workstation that names no security group carries this one, as any EC2 instance launched without
+# one does, and gets its outbound traffic from it.
+#
+# Removing this resource does not put the rules back. Terraform forgets the group and leaves it as
+# it is.
+resource "aws_default_security_group" "workstations" {
+  count  = var.create_network && var.restrict_default_security_group ? 1 : 0
+  vpc_id = aws_vpc.workstations[0].id
+
+  ingress = []
+  egress  = []
+
+  tags = merge(var.tags, { Name = "ringleader-workstations-default" })
 }
 
 # NAT gateway, for anything on this VPC without a public IP: a workstation created with

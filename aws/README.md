@@ -18,6 +18,7 @@ OIDC provider (or the role).
 | **IAM role** (`ringleader-workstations`) | assumed via `sts:AssumeRoleWithWebIdentity`; trust pins **both** `aud` and `sub` to your org; permissions cover only the EC2 workstation lifecycle + the SSM public-parameter read that resolves an AMI |
 | _optional_ **VPC + public subnet + internet gateway + security group** | a landing pad: egress out (so a workstation can come up), inbound SSH from the CIDRs you name, and — only if you ask — a secondary SSH port |
 | _optional, off by default_ **VPC flow log + CloudWatch Logs group + delivery role** | a record of all traffic in that VPC, kept for 365 days by default. See [flow logs](#optional-flow-logs-for-the-vpc) |
+| _optional, off by default_ **that VPC's default security group, with every rule removed** | AWS creates the group with the VPC, and compliance scans expect it to allow no traffic. See [an empty default security group](#optional-an-empty-default-security-group) |
 
 The permissions policy's **base** is exactly these four statements — no wildcard on any action:
 
@@ -524,6 +525,81 @@ log groups and their settings, and reads no log events.
 
 **Turning them off again** deletes the flow log, the role, and the log group with every record in
 it.
+
+## Optional: an empty default security group
+
+AWS gives every VPC a default security group, and it cannot be deleted. It starts out allowing all
+outbound traffic, and all inbound traffic from anything else that carries the group. Compliance
+scans such as AWS Security Hub's EC2.2 check, which follows the CIS AWS Foundations Benchmark,
+expect that group to allow no traffic. This onboarding can remove every rule from the default group
+of the VPC it creates.
+
+This switch is off by default, because removing the rules cuts the traffic of whatever carries the
+group. A workstation that names no security group carries the default group, as any EC2 instance
+launched without one does, and gets its outbound traffic from it. With the rules gone, a new
+workstation like that has no outbound traffic and never comes up. A running one can open no new
+outbound connection, and an open SSH session into it can drop at once. Connections it already
+opened last until they close or time out.
+
+**Before you turn it on, check that nothing carries the group.** These commands list every network
+interface that does. `<subnet-id>` is the `subnet_id` you handed back to Ringleader, or `SubnetId`
+on the CloudFormation path. `<region>` is the region you applied in:
+
+```sh
+VPC_ID=$(aws ec2 describe-subnets --region <region> --subnet-ids <subnet-id> \
+  --query 'Subnets[0].VpcId' --output text)
+GROUP_ID=$(aws ec2 describe-security-groups --region <region> \
+  --filters Name=vpc-id,Values="$VPC_ID" Name=group-name,Values=default \
+  --query 'SecurityGroups[0].GroupId' --output text)
+echo "$VPC_ID" "$GROUP_ID"
+aws ec2 describe-network-interfaces --region <region> --filters Name=group-id,Values="$GROUP_ID" \
+  --query 'NetworkInterfaces[].[NetworkInterfaceId,Attachment.InstanceId,Description]' --output table
+```
+
+`echo` must print two ids, one that starts with `vpc-` and one that starts with `sg-`. If either is
+missing or is `None`, the subnet id or the region is wrong. The last command then lists nothing,
+even when something carries the group.
+
+If the last command lists nothing, nothing carries the group now. If it lists the instance of a
+workstation, that workstation has to move off the group first. Ringleader reads
+`providerConfig.aws.securityGroupIds` only when it creates a workstation. So create the workstation
+again with one of the two groups in
+[Which security group a workstation gets](#which-security-group-a-workstation-gets) in that field.
+Move anything else the command lists to a security group of its own. The commands list only what
+exists now, so make sure every workstation you create later names a security group too.
+
+To turn the switch on, set one variable and apply again:
+
+```hcl
+restrict_default_security_group = true
+```
+
+On the CloudFormation path, run `deploy.sh` with `RESTRICT_DEFAULT_SECURITY_GROUP=true`. If you
+bring your own network (`create_network = false`), the plan or `deploy.sh` refuses the switch. There
+is then no VPC here whose default group it could empty.
+
+The two paths differ in when they empty the group:
+
+- Terraform takes over the group and removes every rule it finds. A rule added to the group later
+  is removed on the next apply. Terraform also replaces the group's tags with the module's `tags`
+  variable and a `Name` of `ringleader-workstations-default`, so any other tag on the group is
+  removed.
+- `deploy.sh` removes the rules it finds after the stack deploys, on each run that sets the
+  variable. A run without the variable leaves the group as it is, with any rule added since. Set
+  the variable on every run to keep the group empty.
+
+**Turning the switch off again does not put the rules back.** Terraform stops managing the group
+and leaves it as it is. The plan shows the group as destroyed, and nothing is deleted. `deploy.sh`
+never adds a rule. To get back the rules AWS created, turn the switch off first. Then add an
+outbound rule for all traffic and an inbound rule for all traffic from the group itself. `$GROUP_ID`
+is the `sg-` id the check above printed:
+
+```sh
+aws ec2 authorize-security-group-egress --region <region> --group-id "$GROUP_ID" \
+  --ip-permissions 'IpProtocol=-1,IpRanges=[{CidrIp=0.0.0.0/0}]'
+aws ec2 authorize-security-group-ingress --region <region> --group-id "$GROUP_ID" \
+  --ip-permissions "IpProtocol=-1,UserIdGroupPairs=[{GroupId=$GROUP_ID}]"
+```
 
 ## A second region: name it, do not renumber it
 

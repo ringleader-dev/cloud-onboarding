@@ -296,3 +296,60 @@ run "flow_logs_without_the_network_are_refused" {
 
   expect_failures = [data.aws_region.current]
 }
+
+# The VPC's default security group is left as it is unless the customer asks. A workstation that
+# names no security group carries that group and gets its outbound traffic from it. A default that
+# emptied the group would cut that traffic on the next apply of an existing landing pad.
+run "the_default_security_group_is_left_alone_until_asked_for" {
+  command = plan
+
+  assert {
+    condition     = var.restrict_default_security_group == false
+    error_message = "restrict_default_security_group defaults to true. Every customer who re-applies would have the VPC's default security group emptied, and a workstation that names no security group would lose its outbound traffic."
+  }
+
+  assert {
+    condition     = length(aws_default_security_group.workstations) == 0
+    error_message = "The VPC's default security group is planned on the defaults, so a customer who never set restrict_default_security_group has its rules removed on the next apply."
+  }
+}
+
+# Switched on, the module takes over the default group and declares no rule in either direction.
+# Both lists must be known and empty in the plan: an unassigned list is one Terraform does not
+# manage, so a rule added to the group later would stay.
+run "the_default_security_group_is_emptied_when_asked_for" {
+  command = plan
+
+  variables {
+    restrict_default_security_group = true
+  }
+
+  assert {
+    condition     = length(aws_default_security_group.workstations) == 1
+    error_message = "restrict_default_security_group = true does not plan the VPC's default security group, so the switch changes nothing."
+  }
+
+  assert {
+    condition     = length(aws_default_security_group.workstations[0].ingress) == 0
+    error_message = "The default security group is planned with an inbound rule. A compliance scan fails the group while it allows any traffic."
+  }
+
+  assert {
+    condition     = length(aws_default_security_group.workstations[0].egress) == 0
+    error_message = "The default security group is planned with an outbound rule. A compliance scan fails the group while it allows any traffic."
+  }
+}
+
+# The switch cannot empty the default group of a VPC this module did not create. It is refused,
+# because a plan that changes nothing would let a customer who set it for a compliance scan believe
+# the group was empty.
+run "restricting_the_default_group_without_the_network_is_refused" {
+  command = plan
+
+  variables {
+    create_network                  = false
+    restrict_default_security_group = true
+  }
+
+  expect_failures = [data.aws_region.current]
+}
