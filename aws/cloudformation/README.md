@@ -28,7 +28,8 @@ Env vars: `ISSUER_URL`, `ORG_UID` (required); `REGION_INDEX` (required with a ne
 `REGION` (default `us-east-1`), `STACK_NAME`
 (`ringleader-onboarding`), `ROLE_NAME` (`ringleader-workstations`), `CREATE_NETWORK`
 (`true`), `SSH_SOURCE_CIDR` (empty), `SECONDARY_SSH_SOURCE_CIDR` (mirrors `SSH_SOURCE_CIDR`),
-`ALLOWED_REGION` (default `$REGION`), plus the five in *Parameters* below.
+`ALLOWED_REGION` (default `$REGION`), plus the ones named under *Parameters* and
+*Emptying the default security group* below.
 
 `SECONDARY_SSH_SOURCE_CIDR` **follows `SSH_SOURCE_CIDR`** unless you set it: it opens a second
 SSH port on the workstations security group, which some Ringleader workstation types run their
@@ -153,6 +154,44 @@ egress out, inbound SSH. `InboundOnlySecurityGroupId` has the same inbound rules
 egress, and it is the one a workstation that declares `spec.egress` must carry — see
 [the union rule](../README.md#which-security-group-a-workstation-gets). Give a policy-bearing
 workstation the first id and Ringleader refuses to launch it.
+
+## Emptying the default security group
+
+With `RESTRICT_DEFAULT_SECURITY_GROUP=true`, `deploy.sh` removes every rule from the default
+security group of the stack's VPC, after the stack deploys. It is off by default, because a
+workstation that names no security group carries that group and would lose its outbound traffic.
+Read [`../README.md`](../README.md#optional-an-empty-default-security-group) before you set it.
+`deploy.sh` refuses it without `CREATE_NETWORK=true`.
+
+This is a step `deploy.sh` runs, and not a template parameter. A stack you deploy by hand leaves
+the group as it is. To empty the group by hand, first find it, with the stack's `VpcId` output in
+place of `<vpc-id>` and the stack's region in place of `<region>`. Run these commands in `bash`,
+which passes each rule id in a list as its own argument:
+
+```sh
+GROUP_ID=$(aws ec2 describe-security-groups --region <region> \
+  --filters Name=vpc-id,Values=<vpc-id> Name=group-name,Values=default \
+  --query 'SecurityGroups[0].GroupId' --output text)
+echo "$GROUP_ID"
+```
+
+`echo` must print an id that starts with `sg-`. If it prints `None`, the VPC id or the region is
+wrong, so stop there. Otherwise list the group's rules and remove them:
+
+```sh
+INBOUND=$(aws ec2 describe-security-group-rules --region <region> \
+  --filters Name=group-id,Values="$GROUP_ID" \
+  --query 'SecurityGroupRules[?IsEgress==`false`].SecurityGroupRuleId' --output text)
+OUTBOUND=$(aws ec2 describe-security-group-rules --region <region> \
+  --filters Name=group-id,Values="$GROUP_ID" \
+  --query 'SecurityGroupRules[?IsEgress==`true`].SecurityGroupRuleId' --output text)
+aws ec2 revoke-security-group-ingress --region <region> --group-id "$GROUP_ID" \
+  --security-group-rule-ids $INBOUND
+aws ec2 revoke-security-group-egress --region <region> --group-id "$GROUP_ID" \
+  --security-group-rule-ids $OUTBOUND
+```
+
+Skip a `revoke` command whose list is empty.
 
 ## Changing the template
 

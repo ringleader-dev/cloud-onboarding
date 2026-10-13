@@ -288,7 +288,9 @@ answer produces.
 Onboarding grants what Ringleader needs for **every feature available today**, so adopting one
 later never means a second onboarding pass and another change-approval cycle. Each row below is
 turned on or off by one variable. Flow logs are off by default on every cloud, because they cost
-money and grant Ringleader nothing. The governed subnet is off on GCP. Everything else is on.
+money and grant Ringleader nothing. On AWS, emptying the VPC's default security group is off,
+because it cuts the traffic of whatever carries that group. The governed subnet is off on GCP.
+Everything else is on.
 
 | | What it does | Terraform | Script | Costs money |
 |---|---|---|---|---|
@@ -301,6 +303,7 @@ money and grant Ringleader nothing. The governed subnet is off on GCP. Everythin
 | **Artifact storage** | Ringleader may hold artifact payloads — sealed agent-session transcripts, workflow file outputs, files a box publishes — in a bucket, container or storage account **in your own account** instead of in Ringleader's | `enable_artifact_storage`, and `artifact_storage_bucket` / `artifact_storage_account_name` to name one of yours | `ARTIFACT_STORAGE`, `ARTIFACT_STORAGE_BUCKET` / `ARTIFACT_STORAGE_ACCOUNT` | only the storage itself, and only once payloads land in it |
 | **Workstation-to-workstation** (GCP) | boxes on the subnet can reach each other | `allow_internal_traffic` | `ALLOW_INTERNAL` | no |
 | **Flow logs**, **off by default** | records the traffic in the network this onboarding creates, for compliance scans that expect flow logs on every network. Each cloud's README says where the records go and who can read them | `create_flow_logs` | `CREATE_FLOW_LOGS` | yes, per GB of records collected and stored |
+| **Empty default security group** (AWS), **off by default** | removes every rule from the default security group of the VPC this onboarding creates. Compliance scans expect that group to allow no traffic. A workstation that names no security group carries it, so read [the AWS README](aws/README.md#optional-an-empty-default-security-group) first | `restrict_default_security_group` | `RESTRICT_DEFAULT_SECURITY_GROUP` | no |
 
 Two of these deserve a deliberate decision rather than a default:
 

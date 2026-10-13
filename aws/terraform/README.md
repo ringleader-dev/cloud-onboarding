@@ -56,6 +56,7 @@ output "handoff" { value = module.ringleader_onboarding.handoff }
 | `create_flow_logs` | `false` | record a VPC flow log for all traffic in the VPC this module creates, into a CloudWatch Logs group, with a delivery role only VPC Flow Logs can assume. **Off by default**, because it bills per GB ingested and stored. Ringleader's role cannot read it. Needs `create_network`. See `aws/README.md` |
 | `flow_log_retention_days` | `365` | how many days that log group keeps its records. Must be a value CloudWatch Logs accepts: 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288 or 3653 |
 | `flow_log_group_name` | `ringleader-workstations-flow-logs` | name of that log group. A log group name is unique per account and region, so a second Ringleader organization onboarding into the same one needs its own. Renaming it replaces the group, and the records in the old one go with it |
+| `restrict_default_security_group` | `false` | remove every rule from the default security group of the VPC this module creates, and keep it empty on every apply. **Off by default**, because a workstation that names no security group carries that group and would lose its outbound traffic. Needs `create_network`. See `aws/README.md` |
 | `max_session_duration` | `3600` | ceiling on the life of the credentials Ringleader mints by assuming the role (AWS bounds: 3600–43200). 3600 is AWS's own default, so setting it changes nothing on an existing role |
 
 ## Outputs

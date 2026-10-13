@@ -84,6 +84,13 @@ variable "flow_log_retention_days" {
   default = 365
 }
 
+# Off by default: emptying the VPC's default security group cuts the traffic of whatever carries
+# it, and a workstation that names no security group does. It is forwarded below, like the rest.
+variable "restrict_default_security_group" {
+  type    = bool
+  default = false
+}
+
 # Which /16 each region's landing pad takes. Forwarded below, so a value set in
 # terraform.tfvars actually takes effect -- a variable this root did not declare would be
 # accepted with a warning and then IGNORED, leaving the second region on the first one's range.
@@ -175,6 +182,8 @@ module "ringleader_onboarding" {
 
   create_flow_logs        = var.create_flow_logs
   flow_log_retention_days = var.flow_log_retention_days
+
+  restrict_default_security_group = var.restrict_default_security_group
 
   # The names a second organization in this account must change; see above.
   artifact_storage_bucket_prefix = var.artifact_storage_bucket_prefix

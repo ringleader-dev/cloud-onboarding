@@ -64,6 +64,13 @@
 #                and region, so a second organization onboarding into
 #                the same one needs its own
 #                                              (default: unset, which keeps the stack's; ringleader-workstations-flow-logs at creation)
+#   RESTRICT_DEFAULT_SECURITY_GROUP  true|false: after the stack
+#                deploys, remove every rule from the default security
+#                group of the stack's VPC. Anything that carries that
+#                group loses its traffic, and a workstation that names
+#                no security group carries it. Needs
+#                CREATE_NETWORK=true. false leaves the group as it is,
+#                and does not put removed rules back      (default: false)
 #   VPC_CIDR     override the whole VPC range; empty derives it
 #                from REGION_INDEX                               (default: empty)
 #   SUBNET_CIDR  override the workstations subnet; empty derives
@@ -140,6 +147,18 @@ ADDITIONAL_GOVERNED_SUBNETS="${ADDITIONAL_GOVERNED_SUBNETS:-}"
 CREATE_FLOW_LOGS="${CREATE_FLOW_LOGS:-}"
 FLOW_LOG_RETENTION_DAYS="${FLOW_LOG_RETENTION_DAYS:-}"
 FLOW_LOG_GROUP_NAME="${FLOW_LOG_GROUP_NAME:-}"
+# The default security group belongs to the VPC and not to the stack, and CloudFormation removes no
+# rule from it. So this is a step this script runs after the stack deploys, and not a parameter. It
+# is checked here so a bad value stops the run before anything is deployed.
+RESTRICT_DEFAULT_SECURITY_GROUP="${RESTRICT_DEFAULT_SECURITY_GROUP:-false}"
+if [ "$RESTRICT_DEFAULT_SECURITY_GROUP" != "true" ] && [ "$RESTRICT_DEFAULT_SECURITY_GROUP" != "false" ]; then
+  echo "RESTRICT_DEFAULT_SECURITY_GROUP must be true or false, not '${RESTRICT_DEFAULT_SECURITY_GROUP}'" >&2
+  exit 1
+fi
+if [ "$RESTRICT_DEFAULT_SECURITY_GROUP" = "true" ] && [ "$CREATE_NETWORK" != "true" ]; then
+  echo "RESTRICT_DEFAULT_SECURITY_GROUP=true needs CREATE_NETWORK=true: this script can empty the default security group only in the VPC the stack creates." >&2
+  exit 1
+fi
 
 case "$ISSUER_URL" in
   https://*/) echo "ISSUER_URL must not end in a slash" >&2; exit 1 ;;
@@ -179,6 +198,7 @@ echo ">> gateway subnet:$CREATE_GATEWAY_SUBNET  governed subnet: $CREATE_GOVERNE
 echo ">> additional governed subnets: ${ADDITIONAL_GOVERNED_SUBNETS:-<unchanged>}"
 echo ">> flow logs:     ${CREATE_FLOW_LOGS:-<unchanged>}  retention days: ${FLOW_LOG_RETENTION_DAYS:-<unchanged>}"
 echo ">> flow log group:${FLOW_LOG_GROUP_NAME:-<unchanged>}"
+echo ">> restrict default security group: $RESTRICT_DEFAULT_SECURITY_GROUP"
 echo ">> artifact storage:${ARTIFACT_STORAGE}  bucket: ${ARTIFACT_STORAGE_BUCKET:-<managed>}  managed-name label: ${ARTIFACT_STORAGE_BUCKET_PREFIX:-<unchanged>}"
 
 # Substitute the one placeholder CloudFormation cannot parameterize (a condition KEY).
@@ -295,6 +315,43 @@ aws cloudformation deploy \
     `# one unless there is no landing pad to allocate, or VPC_CIDR overrides the derivation;` \
     `# on those paths the index is inert, so 0 here is not a guess.` \
     RegionIndex="${REGION_INDEX:-0}"
+
+# Empty the default security group of the stack's VPC. Every rule is removed by its id, so the
+# step is the same whether the group holds the rules AWS created or ones added since. A run that
+# finds no rule changes nothing.
+if [ "$RESTRICT_DEFAULT_SECURITY_GROUP" = "true" ]; then
+  VPC_ID="$(aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK_NAME" \
+    --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text)"
+  if ! printf '%s' "$VPC_ID" | grep -Eq '^vpc-[0-9a-f]+$'; then
+    echo "stack ${STACK_NAME} deployed, but it has no VpcId output, so the default security group was not emptied. Check that the stack was deployed with CREATE_NETWORK=true." >&2
+    exit 1
+  fi
+  DEFAULT_GROUP_ID="$(aws ec2 describe-security-groups --region "$REGION" \
+    --filters "Name=vpc-id,Values=${VPC_ID}" "Name=group-name,Values=default" \
+    --query 'SecurityGroups[0].GroupId' --output text)"
+  if ! printf '%s' "$DEFAULT_GROUP_ID" | grep -Eq '^sg-[0-9a-f]+$'; then
+    echo "stack ${STACK_NAME} deployed, but ${VPC_ID} has no security group named default in ${REGION}, so no rule was removed." >&2
+    exit 1
+  fi
+  INBOUND_RULE_IDS="$(aws ec2 describe-security-group-rules --region "$REGION" \
+    --filters "Name=group-id,Values=${DEFAULT_GROUP_ID}" \
+    --query 'SecurityGroupRules[?IsEgress==`false`].SecurityGroupRuleId' --output text)"
+  OUTBOUND_RULE_IDS="$(aws ec2 describe-security-group-rules --region "$REGION" \
+    --filters "Name=group-id,Values=${DEFAULT_GROUP_ID}" \
+    --query 'SecurityGroupRules[?IsEgress==`true`].SecurityGroupRuleId' --output text)"
+  # The two lists are unquoted on purpose: each rule id is one argument.
+  if [ -n "$INBOUND_RULE_IDS" ]; then
+    # shellcheck disable=SC2086
+    aws ec2 revoke-security-group-ingress --region "$REGION" --group-id "$DEFAULT_GROUP_ID" \
+      --security-group-rule-ids $INBOUND_RULE_IDS > /dev/null
+  fi
+  if [ -n "$OUTBOUND_RULE_IDS" ]; then
+    # shellcheck disable=SC2086
+    aws ec2 revoke-security-group-egress --region "$REGION" --group-id "$DEFAULT_GROUP_ID" \
+      --security-group-rule-ids $OUTBOUND_RULE_IDS > /dev/null
+  fi
+  echo ">> default security group ${DEFAULT_GROUP_ID} of ${VPC_ID} holds no rules"
+fi
 
 echo
 echo "================ hand these back to Ringleader ================"

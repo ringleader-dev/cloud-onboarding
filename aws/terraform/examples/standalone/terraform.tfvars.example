@@ -112,3 +112,9 @@ region_indexes = {
 #
 # How many days the log group keeps the records. 365 unless you set it.
 # flow_log_retention_days = 731
+
+# Remove every rule from the default security group of the landing pad's VPC, and keep it empty.
+# Compliance scans such as AWS Security Hub's EC2.2 check expect that. A workstation that names no
+# security group carries that group and would lose its outbound traffic. Read "Optional: an empty
+# default security group" in aws/README.md before you set this.
+# restrict_default_security_group = true
