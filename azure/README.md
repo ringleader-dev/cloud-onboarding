@@ -242,10 +242,11 @@ first policy:
   only TCP 22 and 2222, and the group has no outbound rule. Such a workstation takes no other port
   from outside the VNet, even one your subnet NSG opens. Neither group admits anything the subnet
   NSG refuses, because both layers have to agree.
-- **A NIC NSG of your own is replaced, not merged.** A NIC carries at most one NSG. If you supply
-  the interface yourself (`providerConfig.azure.networkInterfaceId`) and narrowed inbound *there*,
-  Ringleader replaces that group when it creates the workstation, whether or not the workstation
-  declares `spec.egress`. With a policy, the replacement admits all inbound, so the subnet's rules
+- **A NIC NSG of your own is replaced, not merged.** A NIC carries at most one NSG. A namespace
+  admin can supply a workstation's interface as `networkInterfaceId`, on that workstation or on a
+  CloudIdentity that selects only it. If you narrowed inbound on that interface's NSG, Ringleader
+  replaces the group when it creates the workstation, whether or not the workstation declares
+  `spec.egress`. With a policy, the replacement admits all inbound, so the subnet's rules
   decide on their own, which **widens** inbound. Without one, it admits only TCP 22 and 2222 from
   outside the VNet. Move those rules onto the subnet NSG first. Ringleader adds a rule there, but
   never edits or deletes one you wrote.
@@ -414,9 +415,10 @@ ADDITIONAL_GOVERNED_SUBNETS=team-a=10.70.208.0/20,team-b=10.70.192.0/20 ./deploy
 
 Each entry becomes a subnet named `governed-<label>`, built exactly like the governed subnet above.
 The label names the subnet and keys the `additional_governed_subnet_ids` output. Ringleader never
-reads it, so use the name of the namespace that will use the subnet. Set each id as
-`providerConfig.azure.subnetId` on that namespace's workstations that carry an egress policy, and on
-no other namespace's.
+reads it, so use the name of the namespace that will use the subnet. Name each id as `spec.subnet`
+in that namespace's CloudIdentity for its workstations that carry an egress policy. That claims the
+subnet for the namespace, so Ringleader refuses another namespace's workstation in it.
+[Setting these values on a CloudIdentity](#setting-these-values-on-a-cloudidentity) shows one.
 
 These subnets have no derived prefix, so write each one out. In a first region, the six `/20`s from
 `10.70.128.0/20` to `10.70.208.0/20` are free and leave the workstations subnet room to grow. A
@@ -893,11 +895,67 @@ turn flow logs off in a shared group only when nothing else is using the zone.
 | **subscription id** | `az account show --query id -o tsv` |
 | **resource group** | the one you scoped |
 | **subnet id** (only if you created a network) | `terraform output handoff` |
-| **governed subnet id** (only if you turned it on) | `terraform output handoff` — `providerConfig.azure.subnetId` for the workstations that carry an egress policy |
+| **governed subnet id** (only if you turned it on) | `terraform output handoff`. It is the `spec.subnet` of the CloudIdentity for the workstations that carry an egress policy, where the namespace runs a proxy. See [Setting these values on a CloudIdentity](#setting-these-values-on-a-cloudidentity) |
 | **additional governed subnet ids** (only if you added them) | `terraform output handoff`, or printed by `deploy.sh`. One for each further namespace that runs a proxy, used on that namespace's workstations only. See [One governed subnet per namespace that runs a proxy](#one-governed-subnet-per-namespace-that-runs-a-proxy) |
 | **gateway subnet id** (only if you reserved one) | `terraform output handoff` — goes on the `Edge` as `spec.subnet`, not on a workstation; no gateway VM is built until it has one |
 | **`artifact_storage_grant`** (`managed` or `named`) | `terraform output handoff` — the `Storage` object's `spec.grant`, if you want payloads in a storage account of yours |
 | **`artifact_storage_account_name`** (named width only) | `terraform output handoff`, with the container Ringleader should write to. On the managed width Ringleader creates both itself |
+
+### Setting these values on a CloudIdentity
+
+A CloudIdentity is the Ringleader object a namespace admin writes to say how that namespace's
+workstations run in your subscription. Its `spec.defaultProviderConfig` fills in a value a
+workstation leaves out, and its `spec.overrideProviderConfig` sets a value that wins over the
+workstation's own. By default a namespace member cannot set the subnet on a workstation, so it goes
+here. With no `selector`, a CloudIdentity applies to every Azure workstation in its namespace:
+
+```yaml
+apiVersion: core.ringleader.dev/v1
+kind: CloudIdentity
+metadata:
+  name: azure
+  namespace: team-a
+spec:
+  provider: azure
+  cloudAccountRef: <your CloudAccount's name>
+  defaultProviderConfig:
+    azure:
+      subnetId: <subnet id>
+```
+
+`cloudAccountRef` names the CloudAccount, the Ringleader object that holds the app client id and the
+tenant id from the table above.
+
+Each workstation takes its settings from one CloudIdentity: the one with the highest `priority`
+among those that select it. Where a namespace runs a proxy, its workstations that carry an egress
+policy go in the governed subnet. For those workstations, write a second CloudIdentity with a higher
+`priority` that selects them by a label you choose. Repeat in it every value the first one sets
+apart from the subnet, because only one CloudIdentity applies:
+
+```yaml
+apiVersion: core.ringleader.dev/v1
+kind: CloudIdentity
+metadata:
+  name: azure-governed
+  namespace: team-a
+spec:
+  provider: azure
+  cloudAccountRef: <your CloudAccount's name>
+  priority: 10
+  selector:
+    matchLabels:
+      egress: governed
+  subnet: <governed subnet id>
+```
+
+`spec.subnet` puts every workstation this CloudIdentity selects in that subnet. It also claims the
+subnet for the namespace, so Ringleader refuses another namespace's workstation there. Name the
+subnet in `spec.subnet` only, because Ringleader refuses a CloudIdentity that also names one in
+`defaultProviderConfig` or `overrideProviderConfig`. Never name the shared workstations subnet
+in `spec.subnet`, since the claim would refuse any workstation another namespace places in it.
+
+A workstation labeled `egress: governed` then goes in the governed subnet, and one without the label
+takes the first CloudIdentity's subnet.
 
 ## Revoking
 
