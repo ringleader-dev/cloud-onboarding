@@ -87,8 +87,7 @@ Everything else derives from those two:
 ## Pick a path
 
 Use whichever your team already runs. They create the same OIDC provider, role, and
-optional network, with one difference: the per-workstation instance-profile option
-(`enable_workstation_identities`, below) exists only on the Terraform path.
+optional network.
 
 ### CloudFormation (`aws` CLI)
 
@@ -143,6 +142,73 @@ pad's range, and the plan fails rather than guessing if they disagree. See
 - if you took artifact storage: **`artifact_storage_grant`** (`managed` or `named`), which
   becomes the `Storage` object's `spec.grant`, and on the named width
   **`artifact_storage_bucket`**, which becomes its `spec.bucket`
+
+### Setting these values on a CloudIdentity
+
+A CloudIdentity is the Ringleader object a namespace admin writes to say how that namespace's
+workstations run in your account. Its `spec.defaultProviderConfig` fills in a value a workstation
+leaves out, and its `spec.overrideProviderConfig` sets a value that wins over the workstation's own.
+By default a namespace member cannot set the region, subnet or security groups on a workstation, so
+they go here. With no `selector`, a CloudIdentity applies to every AWS workstation in its namespace:
+
+```yaml
+apiVersion: core.ringleader.dev/v1
+kind: CloudIdentity
+metadata:
+  name: aws
+  namespace: team-a
+spec:
+  provider: aws
+  cloudAccountRef: <your CloudAccount's name>
+  defaultProviderConfig:
+    aws:
+      region: us-east-1
+      subnetId: <subnet_id>
+      securityGroupIds: [<security_group_id>]
+```
+
+`cloudAccountRef` names the CloudAccount, the Ringleader object that holds the `target_role_arn`
+above.
+
+Each workstation takes its settings from one CloudIdentity: the one with the highest `priority`
+among those that select it. A workstation that carries an egress policy needs the group with no
+egress rules (`inbound_only_security_group_id`). Where its namespace runs a proxy, it needs the
+governed subnet too. For those workstations, write a second CloudIdentity with a higher `priority`
+that selects them by a label you choose. Repeat in it every value the first one sets apart from the
+subnet and the security group, because only one CloudIdentity applies:
+
+```yaml
+apiVersion: core.ringleader.dev/v1
+kind: CloudIdentity
+metadata:
+  name: aws-governed
+  namespace: team-a
+spec:
+  provider: aws
+  cloudAccountRef: <your CloudAccount's name>
+  priority: 10
+  selector:
+    matchLabels:
+      egress: governed
+  subnet: <governed_subnet_id>
+  defaultProviderConfig:
+    aws:
+      region: us-east-1
+      securityGroupIds: [<inbound_only_security_group_id>]
+```
+
+`spec.subnet` puts every workstation this CloudIdentity selects in that subnet. It also claims the
+subnet for the namespace, so Ringleader refuses another namespace's workstation there. Name the
+subnet in `spec.subnet` only, because Ringleader refuses a CloudIdentity that also names one in
+`defaultProviderConfig` or `overrideProviderConfig`. Never name the shared `subnet_id` in
+`spec.subnet`, since the claim would refuse any workstation another namespace places in it. In a
+namespace that runs no proxy, set `subnetId: <subnet_id>` under `defaultProviderConfig.aws` in place
+of `spec.subnet`.
+
+A workstation labeled `egress: governed` then takes these values. One that carries an egress policy
+without the label takes the first CloudIdentity's group, which permits egress. Ringleader therefore
+refuses to create such a workstation, as
+[Which security group a workstation gets](#which-security-group-a-workstation-gets) describes.
 
 ## Reaching your workstations
 
@@ -391,9 +457,10 @@ ADDITIONAL_GOVERNED_SUBNETS=team-a=10.60.208.0/20,team-b=10.60.192.0/20 ./deploy
 
 Each entry becomes a subnet named `ringleader-governed-<label>`, built exactly like the governed
 subnet above. The label names the subnet and keys the `additional_governed_subnet_ids` output.
-Ringleader never reads it, so use the name of the namespace that will use the subnet. Set each id as
-`providerConfig.aws.subnetId` on that namespace's workstations that carry an egress policy, and on
-no other namespace's.
+Ringleader never reads it, so use the name of the namespace that will use the subnet. Name each id
+as `spec.subnet` in that namespace's CloudIdentity for its workstations that carry an egress policy.
+That claims the subnet for the namespace, so Ringleader refuses another namespace's workstation in
+it. [Setting these values on a CloudIdentity](#setting-these-values-on-a-cloudidentity) shows one.
 
 These subnets have no derived range, so write each CIDR out. In a first region, the six `/20`s from
 `10.60.128.0/20` to `10.60.208.0/20` are free and leave the workstations subnet room to grow to a
@@ -561,12 +628,13 @@ missing or is `None`, the subnet id or the region is wrong. The last command the
 even when something carries the group.
 
 If the last command lists nothing, nothing carries the group now. If it lists the instance of a
-workstation, that workstation has to move off the group first. Ringleader reads
-`providerConfig.aws.securityGroupIds` only when it creates a workstation. So create the workstation
-again with one of the two groups in
-[Which security group a workstation gets](#which-security-group-a-workstation-gets) in that field.
-Move anything else the command lists to a security group of its own. The commands list only what
-exists now, so make sure every workstation you create later names a security group too.
+workstation, that workstation has to move off the group first. Ringleader reads a workstation's
+`securityGroupIds` only when it creates the workstation. So name one of the two groups in
+[Which security group a workstation gets](#which-security-group-a-workstation-gets) as
+`securityGroupIds` in the CloudIdentity that selects the workstation. Then create the workstation
+again. Move anything else the command lists to a security group of its own. The commands list only
+what exists now, so make sure every CloudIdentity for workstations in this VPC names a security
+group too.
 
 To turn the switch on, set one variable and apply again:
 
@@ -773,11 +841,11 @@ default share it, so either one's role could pass the other's workstation roles.
 
 ## Workstations hold no AWS identity by default
 
-A workstation runs with **no instance profile** unless an administrator sets
-`providerConfig.aws.iamInstanceProfile`. Without that, nothing inside the workstation can act as any
-IAM principal. Attaching one needs `iam:PassRole`, which this module grants only when you
-set `enable_workstation_identities` (`EnableWorkstationIdentities` on the CloudFormation path) —
-read its warning first.
+A workstation runs with **no instance profile** unless a namespace admin names one as
+`iamInstanceProfile` in the CloudIdentity's `spec.overrideProviderConfig`. A workstation cannot name
+its own. Without one, nothing inside the workstation can act as any IAM principal. Attaching one
+needs `iam:PassRole`, which this module grants only while `enable_workstation_identities` is on, as
+it is by default (`EnableWorkstationIdentities` on the CloudFormation path).
 
 ## Notes
 

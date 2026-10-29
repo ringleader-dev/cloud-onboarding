@@ -80,7 +80,7 @@ account**. That is why the GCP module's base grant includes
 `roles/iam.serviceAccountUser`, and why it asks for a project dedicated to Ringleader
 workstations. Check what your default compute service account holds (older projects give
 it `roles/editor`), or give workstations a role-less service account of their own — see
-[`gcp/README.md`](gcp/README.md#every-workstation-runs-as-a-service-account).
+[`gcp/README.md`](gcp/README.md#every-vm-ringleader-creates-runs-as-a-service-account).
 
 Letting Ringleader **create** those per-user identities and **bind roles** to them is a
 separate switch, `enable_workstation_identities`, and it costs real permissions: on GCP the
@@ -370,11 +370,17 @@ Each cloud's README lists the exact values. In short:
   created) subnet id.
 - **AWS** — role ARN, region, and (if created) subnet id and security group id.
 
-Each module also prints a **governed subnet id** where it created one. That is the subnet you
-name on a workstation that carries an **egress policy**. Placing a box in it is what puts it
-behind the proxy. On AWS and Azure, a box with no egress policy loses its egress if it shares a
-subnet the proxy steers. On those two clouds, each Ringleader namespace that runs its own proxy also
-needs a governed subnet of its own. Set `additional_governed_subnets` (`ADDITIONAL_GOVERNED_SUBNETS`
+The subnet, region, zone, network tags and security groups go on a CloudIdentity. That is the
+Ringleader object a namespace admin writes to say how the namespace's workstations run in your
+account. By default a namespace member cannot set these values on a workstation. Each cloud's README
+shows a CloudIdentity.
+
+Each module also prints a **governed subnet id** where it created one. In a namespace that runs a
+proxy, a namespace admin names it in the CloudIdentity for the workstations that carry an **egress
+policy**. Placing a workstation in it is what puts it behind the proxy. On AWS and Azure, a
+workstation with no egress policy loses its egress if it shares a subnet the proxy steers. On those
+two clouds, each Ringleader namespace that runs its own proxy also needs a governed subnet of its
+own. Set `additional_governed_subnets` (`ADDITIONAL_GOVERNED_SUBNETS`
 for `deploy.sh`) to create one for each further namespace. Terraform keys those ids by the labels
 you gave them, the Azure `deploy.sh` prints them, and CloudFormation outputs them by slot number.
 

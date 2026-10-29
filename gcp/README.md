@@ -126,8 +126,10 @@ ssh_source_ranges = ["203.0.113.0/24"]   # the CIDRs your engineers connect from
 
 That creates one rule (`ringleader-allow-ssh`) targeting the `ringleader-workstation`
 network tag, so it applies to the VMs carrying that tag and nothing else. Ringleader puts the tag
-on a workstation that declares no `networkTags`. A workstation that declares its own list needs the
-tag in it (`providerConfig.gcp.networkTags: [ringleader-workstation]`).
+on a workstation when neither the workstation nor its CloudIdentity sets `networkTags`. A list,
+normally set on the CloudIdentity as
+[Setting these values on a CloudIdentity](#setting-these-values-on-a-cloudidentity) shows, must
+include the tag: `networkTags: [ringleader-workstation]`.
 
 Your rule keeps a workstation reachable from those CIDRs when Ringleader cannot write its own
 rule, in which case the workstation reports `SSHAdmissionMissing`. That happens, for example, when
@@ -146,16 +148,21 @@ secondary_ssh_source_ranges = ["203.0.113.0/24"]
 ```
 
 (or `SECONDARY_SSH_RANGES=203.0.113.0/24` for `network-landing-pad.sh`). That adds one rule,
-`ringleader-allow-secondary-ssh`, targeting the **`ringleader-secondary-ssh`** network tag — so it
-reaches only the workstations you tag with it. Put that tag on them **alongside** the first one:
+`ringleader-allow-secondary-ssh`, targeting the **`ringleader-secondary-ssh`** network tag, so it
+reaches only the workstations you tag with it. A namespace admin puts that tag **alongside** the
+first one, in the CloudIdentity that selects those workstations:
 
 ```yaml
-providerConfig:
-  gcp:
-    networkTags: [ringleader-workstation, ringleader-secondary-ssh]
+spec:
+  defaultProviderConfig:
+    gcp:
+      networkTags: [ringleader-workstation, ringleader-secondary-ssh]
 ```
 
-Replacing rather than adding would take TCP 22 away with it.
+A list without `ringleader-workstation` takes the workstations out of `ringleader-allow-ssh` and
+`ringleader-allow-internal`, the two rules that target that tag. When only some of a namespace's
+workstations need the port, give them a CloudIdentity of their own, as
+[Setting these values on a CloudIdentity](#setting-these-values-on-a-cloudidentity) shows.
 
 Leave `secondary_ssh_source_ranges` unset and it follows `ssh_source_ranges`, which is empty by
 default, so **no rule of your own is created**. Ringleader's own rule admits 2222 to its workstations
@@ -431,11 +438,10 @@ so the proxy has upstream egress with no further setup.
 
 ### GCP needs no subnet for the workstations that proxy governs
 
-A workstation is governed here by carrying a **network tag** — the same tag
-`providerConfig.gcp.networkTags` already sets — and an untagged workstation beside it is
-untouched. So the governed fleet needs no range of its own, and `create_governed_subnet` is
-**off by default** (it is on by default on AWS and Azure, where the steering attaches to a
-subnet instead):
+Here Ringleader governs a workstation by adding a **network tag** to it when it carries an egress
+policy. An untagged workstation beside it is untouched. So the governed fleet needs no range of its
+own, and no CloudIdentity of its own either. `create_governed_subnet` is **off by default**. It is
+on by default on AWS and Azure, where the proxy steers a whole subnet instead:
 
 ```hcl
 create_governed_subnet = true   # its range derives: the 15th /20 of network_cidr
@@ -654,9 +660,12 @@ inside whichever `/16` you gave it and clear of the two egress-control ranges at
 because both are regional and a subnet without them comes up unable to reach Ringleader.
 
 **Pin the proxy and the workstations it serves to the same zone.** Traffic between two VMs in
-one zone is free on GCP; same-region-different-zone is $0.01/GiB, charged to the sender. At 10
-TB/month that misplacement costs $100 — more than the `e2-standard-2` the proxy runs on. Zone
-is `providerConfig.gcp.zone` on the workstation.
+one zone is free on GCP, and traffic between two zones of one region costs $0.01/GiB, charged to the
+sender. At 10 TB/month that misplacement costs about $100, more than the `e2-standard-2` the proxy
+runs on. A namespace admin sets the workstations' `zone` in the CloudIdentity's
+`spec.defaultProviderConfig`, or in its `spec.overrideProviderConfig` so that it wins over a zone a
+workstation sets. [Setting these values on a CloudIdentity](#setting-these-values-on-a-cloudidentity)
+shows one.
 
 One trap worth naming: on GCP, *all* traffic to or from an **external** IPv4 address leaves the
 zone regardless of destination. So a workstation reaching its proxy by public address pays
@@ -792,6 +801,61 @@ Ringleader sets those itself, and a renamed tag is a rule that admits nobody.
 | **governed subnet self-link** (only if you turned it on) | an optional range for the governed fleet. GCP governs by network tag, so this is organizational rather than required |
 | **`artifact_storage_grant`** (`managed` or `named`) | the `Storage` object's `spec.grant`, if you want payloads in a bucket of yours |
 | **`artifact_storage_bucket`** (named width only) | that object's `spec.bucket`. On the managed width Ringleader names the bucket itself |
+
+### Setting these values on a CloudIdentity
+
+A CloudIdentity is the Ringleader object a namespace admin writes to say how that namespace's
+workstations run in your project. Its `spec.defaultProviderConfig` fills in a value a workstation
+leaves out, and its `spec.overrideProviderConfig` sets a value that wins over the workstation's own.
+By default a namespace member cannot set the subnet, zone or network tags on a workstation, so they
+go here. With no `selector`, a CloudIdentity applies to every GCP workstation in its namespace:
+
+```yaml
+apiVersion: core.ringleader.dev/v1
+kind: CloudIdentity
+metadata:
+  name: gcp
+  namespace: team-a
+spec:
+  provider: gcp
+  cloudAccountRef: <your CloudAccount's name>
+  defaultProviderConfig:
+    gcp:
+      subnetwork: <the subnet self-link>
+      zone: us-central1-a   # a zone in the subnet's region
+```
+
+`cloudAccountRef` names the CloudAccount, the Ringleader object that holds the target service
+account email and the workload identity provider from the table above.
+
+Each workstation takes its settings from one CloudIdentity: the one with the highest `priority`
+among those that select it. Some values belong on only some workstations, such as the
+`ringleader-secondary-ssh` tag. For those, write a second CloudIdentity with a higher `priority`
+that selects them by a label you choose. Repeat in it every value the first one sets, because only
+one CloudIdentity applies:
+
+```yaml
+apiVersion: core.ringleader.dev/v1
+kind: CloudIdentity
+metadata:
+  name: gcp-secondary-ssh
+  namespace: team-a
+spec:
+  provider: gcp
+  cloudAccountRef: <your CloudAccount's name>
+  priority: 10
+  selector:
+    matchLabels:
+      ssh-port: secondary
+  defaultProviderConfig:
+    gcp:
+      subnetwork: <the subnet self-link>
+      zone: us-central1-a
+      networkTags: [ringleader-workstation, ringleader-secondary-ssh]
+```
+
+A workstation labeled `ssh-port: secondary` then carries both tags. One without the label takes the
+first CloudIdentity's values.
 
 ## Revoking
 

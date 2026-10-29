@@ -9,7 +9,7 @@ and a **secondary SSH port** only if you ask for one).
 The three roles are `roles/compute.instanceAdmin.v1`, `roles/compute.networkUser` and
 `roles/iam.serviceAccountUser`. The last one is required, not optional: every workstation
 VM runs as a service account (its own, or the project default compute one) and attaching
-one needs `actAs`. See [`../README.md`](../README.md#every-workstation-runs-as-a-service-account).
+one needs `actAs`. See [`../README.md`](../README.md#every-vm-ringleader-creates-runs-as-a-service-account).
 
 It declares **no provider block**, so you can reference it from your own
 Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standalone/).
@@ -28,9 +28,9 @@ Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standal
 | `enable_workstation_identities` | **`true`** | Let Ringleader **create** a per-user SA and bind roles to it (workstations run as a service account either way). Grants `roles/resourcemanager.projectIamAdmin`, which can grant any role in the project to anyone, including `roles/owner` to itself — the broadest grant here, and the reason this onboarding wants a dedicated project. Set `false` in a shared one. |
 | `create_network` | **`true`** | Create a VPC + subnet + Cloud NAT (egress out; inbound SSH from `ssh_source_ranges`, plus Ringleader's own rule for its workstations). Cloud NAT bills per hour and per GB. Set `false` if you already have a subnet. |
 | `ssh_source_ranges` | `[]` | CIDRs allowed to reach the VMs carrying `workstation_network_tag` on **TCP 22**. Empty creates **no rule of your own**. Ringleader writes its own rule admitting TCP 22 and 2222 from any address to the workstations it creates. Set this to reach other VMs, or to keep your engineers' CIDRs working when Ringleader cannot write that rule. |
-| `workstation_network_tag` | `ringleader-workstation` | Network tag the inbound-SSH rule targets; put the same tag on your workstations. |
+| `workstation_network_tag` | `ringleader-workstation` | Network tag the inbound-SSH rule targets. Ringleader puts `ringleader-workstation` on a workstation when neither the workstation nor its CloudIdentity sets `networkTags`. If you change this tag, or set a list, put this tag in the CloudIdentity's `networkTags`, as [Setting these values on a CloudIdentity](../README.md#setting-these-values-on-a-cloudidentity) shows. |
 | `secondary_ssh_source_ranges` | `null` | CIDRs for the **secondary SSH port** (TCP 2222) that some workstation types run their own SSH daemon on. Unset **mirrors `ssh_source_ranges`**. `[]` creates no rule for the port. You do not supply the port number. |
-| `secondary_ssh_network_tag` | `ringleader-secondary-ssh` | Network tag that rule targets. Put it on the workstations that need the port **alongside** `workstation_network_tag`, never instead of it. |
+| `secondary_ssh_network_tag` | `ringleader-secondary-ssh` | Network tag that rule targets. Put it in the `networkTags` of the CloudIdentity that selects the workstations needing the port, **alongside** `workstation_network_tag`, never instead of it. |
 | `name_prefix` | `ringleader` | Prefix for the landing pad's resource names. Change it only if those names are already taken in the project; the default reproduces the names this module has always used. |
 | `allow_internal_traffic` | **`true`** | Let workstations reach **each other** (tcp/udp/icmp from the workstation subnet ranges). The one default that widens rather than grants: `false` means a compromised box cannot scan its neighbours. Never admits anything from outside the subnets. It does not reach `<name_prefix>-allow-gateway`, which admits workstations to the egress gateway VM — that rule is what keeps hostname-level egress control working rather than a posture choice, so it follows no switch. |
 | `region` | `us-central1` | Region for the optional network's first subnet, router and NAT. |
