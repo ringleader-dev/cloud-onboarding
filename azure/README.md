@@ -196,7 +196,7 @@ It adds twenty-three actions to the custom role, still scoped to your one resour
 | `Microsoft.Network/networkSecurityGroups/read` / `write` / `delete` | one NSG per distinct egress policy |
 | `.../networkSecurityGroups/securityRules/read` / `write` / `delete` | keep that NSG's rules in step with the manifest |
 | `Microsoft.Network/networkSecurityGroups/join/action` | attach the NSG to a workstation's NIC — the one people forget |
-| `Microsoft.Network/applicationSecurityGroups/read` / `write` / `delete`, plus `joinIpConfiguration/action` and `joinNetworkSecurityRule/action` | the group Ringleader will create and put each workstation's NIC in. The inbound SSH rule it writes in your subnet NSG will name that group, so one rule stays right as workstations come and go. The two `join` actions are the ones people forget: read, write and delete grant neither. Ringleader creates the group and collects it, so nothing here declares one, and the grant arrives early so the rule does not cost you a second apply. `listIpConfigurations/action` is deliberately **not** granted: Azure refuses to delete a group an interface still uses and names those interfaces in the refusal, so collecting one needs no membership read |
+| `Microsoft.Network/applicationSecurityGroups/read` / `write` / `delete`, plus `joinIpConfiguration/action` and `joinNetworkSecurityRule/action` | the group Ringleader creates and puts each workstation's NIC in. The inbound SSH rule it writes in your subnet NSG names that group, so one rule stays right as workstations come and go. The two `join` actions are the ones people forget: read, write and delete grant neither. Ringleader also collects the group, so nothing here declares one. `listIpConfigurations/action` is deliberately **not** granted: Azure refuses to delete a group an interface still uses and names those interfaces in the refusal, so collecting one needs no membership read |
 | `Microsoft.Network/routeTables/*` (with `routes/*` and `join/action`) | steer a workstation's traffic at the egress gateway when a policy names hostnames |
 | `Microsoft.Network/virtualNetworks/subnets/write` / `delete` | an Azure route table attaches **per subnet**, so steering is per subnet rather than per workstation — which is what `create_governed_subnet` below exists to give it — and a route table Ringleader creates, it must also be able to detach and collect. Not a subnet per policy: one gateway serves many policies from one subnet, telling them apart by source address |
 | `Microsoft.Network/natGateways/read` | see whether a subnet already has an outbound path before giving a machine a public address of its own |
@@ -437,10 +437,6 @@ Ringleader holds **artifact payloads** — the sealed transcript of an agent ses
 plus workflow file outputs and files a workstation publishes. By default those bytes go to a
 bucket Ringleader owns. `enable_artifact_storage` (`ARTIFACT_STORAGE` on the ARM path), **on by
 default**, lets them go to a storage account in this resource group instead.
-
-**The Azure Blob backend ships after the GCS one**, so on this cloud the grant deliberately
-arrives before the feature. That is the point: it costs an unused subscription nothing, and it is
-what stops Azure support from becoming a second apply for every customer later.
 
 ### Entra ID, never an account key
 

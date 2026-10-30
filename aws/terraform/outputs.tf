@@ -142,7 +142,11 @@ output "actions_granted" {
       local.artifact_storage_bucket_actions,
       local.artifact_storage_managed ? local.artifact_storage_manage_actions : [],
       local.artifact_storage_object_actions,
-      ["-- all of the above on ${join(", ", local.artifact_storage_bucket_arns)} and nothing else"],
+      ["-- the S3 actions above on ${join(", ", local.artifact_storage_bucket_arns)} and nothing else"],
+      local.artifact_storage_managed ? local.artifact_storage_list_actions : [],
+      local.artifact_storage_managed ? ["-- s3:ListAllMyBuckets reads the name, region and creation date of every bucket in this account, never its contents"] : [],
+      local.artifact_storage_key_actions,
+      ["-- the KMS actions above on keys in this account, only through S3, and only for ${join(", ", local.artifact_storage_key_context)}"],
     ) : [],
   )
 }
