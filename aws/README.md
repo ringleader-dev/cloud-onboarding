@@ -499,7 +499,7 @@ S3 support from becoming a second apply for every customer later.
 
 ### The two widths, and how you pick
 
-**Managed** — leave `artifact_storage_bucket` unset. Ringleader creates and converges its own
+**Managed**: leave `artifact_storage_bucket` unset. Ringleader creates and converges its own
 buckets, bounded by **ARN pattern** to `arn:aws:s3:::ringleader-*` and the objects in them, so the
 grant reaches no bucket you already have.
 
@@ -509,22 +509,29 @@ bucket has no VPC to bound it by. `s3:ResourceAccount` is not added on top eithe
 a global-namespace pattern, so it could in principle name a bucket in someone else's account, but
 reaching one needs **that bucket's own policy** to name this role as well, and nobody else's does.
 
-**Named** — set `artifact_storage_bucket` to a bucket you created. The grant is bound to that one
-ARN and drops `CreateBucket`, `DeleteBucket` and every lifecycle and public-access-block write:
-Ringleader can read and write objects in it and cannot create or reshape a bucket at all. Its
-region, its lifecycle rules and its **SSE-KMS key** stay yours, which is what makes key custody a
-decision Ringleader never touches.
+**Named**: set `artifact_storage_bucket` to a bucket you created. The grant is bound to that one
+ARN and drops `CreateBucket`, `DeleteBucket` and every write to the bucket's versioning, tags,
+lifecycle and public access block. Ringleader can read and write objects in it and cannot create or
+reshape a bucket at all. Its region, its lifecycle rules and its **SSE-KMS key** stay yours, which
+is what makes key custody a decision Ringleader never touches.
 
-`s3:GetEncryptionConfiguration` and `s3:GetBucketLocation` are granted in **both** widths: they
-are what report the bucket's encryption and region back onto the `Storage` object, and without
-them that status can only say `unknown`.
+`s3:GetEncryptionConfiguration`, `s3:GetBucketLocation` and `s3:GetBucketVersioning` are granted
+in **both** widths. They let Ringleader report the bucket's encryption, its region and its
+versioning state on the `Storage` object. Without them that status can only say `unknown`.
 
 The grant is two statements in the named width and three in the managed one. S3 checks bucket
 actions such as `s3:ListBucket` against the bucket's ARN and object actions against
 `<bucket>/*`, so the two sets name different resources and sit in separate statements.
 `s3:ListBucket` on an object ARN deploys cleanly and is refused on every call. The third
-statement, managed width only, holds `CreateBucket`, `DeleteBucket` and the public-access-block
-and lifecycle actions.
+statement, managed width only, holds `CreateBucket`, `DeleteBucket`, the reads and writes for a
+bucket's public access block, lifecycle and tags, `PutBucketVersioning` and `ListBucketVersions`.
+
+These managed-width actions let Ringleader configure a bucket it creates. With versioning on, S3
+keeps the old versions of an object, and a lifecycle rule deletes them after a set time.
+`PutBucketTagging` lets Ringleader tag a bucket with the `Storage` object it was created for, and
+`GetBucketTagging` reads that tag back. That lets Ringleader tell a bucket it created from one it
+did not. `ListBucketVersions` lets it check that a bucket holds no object versions or delete markers
+before deleting it.
 
 The multipart actions (`AbortMultipartUpload`, `ListMultipartUploadParts`,
 `ListBucketMultipartUploads`) are not extras. Any upload over the SDK's threshold becomes a
@@ -535,6 +542,10 @@ worst shape of bug to find in production.
 
 `s3:PutBucketPolicy` and every ACL write. Nothing in this onboarding may **grant** authority, and
 a bucket policy is exactly that.
+
+`s3:DeleteObjectVersion`. With versioning on, deleting an object only hides it: S3 keeps every
+version, the one just deleted included, and without this action Ringleader cannot delete one. The
+bucket's lifecycle rule decides when they go, and on a bucket you named that rule is yours.
 
 ### What you hand back
 

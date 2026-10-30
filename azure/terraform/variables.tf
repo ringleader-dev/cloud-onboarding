@@ -180,16 +180,17 @@ variable "enable_artifact_storage" {
     Nothing degrades and nothing fails; what you cannot then answer is "which of our data is in
     whose account, under whose key".
 
-    It adds the Microsoft.Storage read actions plus the four blob DATA actions -- read, write,
-    delete and add -- so access is by Entra ID and a short-lived token. It deliberately does NOT
-    add listKeys or listAccountSas: an account key is a long-lived static credential, and this
+    It adds the Microsoft.Storage read actions, generateUserDelegationKey and the four blob DATA
+    actions (read, write, delete and add). Access is by Entra ID: a short-lived token, or a SAS
+    signed with a user delegation key that lasts at most seven days. It deliberately does NOT add
+    listKeys or listAccountSas: an account key is a long-lived static credential, and this
     onboarding is keyless throughout.
 
     Two widths, and artifact_storage_account_name picks between them:
 
-      - MANAGED (leave it unset). Ringleader also creates and converges the storage account and
-        its containers, so their names, lifecycle rules and layout can change without asking you
-        to re-apply.
+      - MANAGED (leave it unset). Ringleader also creates and converges the storage account, its
+        containers and its lifecycle management policy, so their names, lifecycle rules and layout
+        can change without asking you to re-apply.
       - NAMED (set it). Every account and container write and delete is dropped: Ringleader may
         put blobs in containers you made and may neither create, reshape nor delete an account or
         a container.

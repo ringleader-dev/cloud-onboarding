@@ -128,8 +128,10 @@ skips it.
 `ARTIFACT_STORAGE` goes on the role too, and it is the only switch here that adds **dataActions**:
 the four blob actions (read, write, delete, add) that let Ringleader hold artifact payloads in a
 storage account in this resource group rather than in its own cloud. Access is by Entra ID and a
-short-lived token — `listKeys` and `listAccountSas` are deliberately **not** granted, because an
-account key is a long-lived static credential. On by default; `ARTIFACT_STORAGE=0` skips it, and
+short-lived token. The switch also grants `generateUserDelegationKey`, so Ringleader can sign a
+shared access signature (SAS) with a user delegation key instead of an account key. `listKeys` and
+`listAccountSas` are deliberately **not** granted, because an account key is a long-lived static
+credential. It is on by default. `ARTIFACT_STORAGE=0` skips it, and
 `ARTIFACT_STORAGE_ACCOUNT=<name>` takes the narrower width, dropping every account and container
 write and delete so Ringleader may only put blobs in containers you made.
 

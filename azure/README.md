@@ -444,9 +444,10 @@ what stops Azure support from becoming a second apply for every customer later.
 
 ### Entra ID, never an account key
 
-This is the only switch here that adds **`dataActions`** to the custom role — the four blob
-actions `read`, `write`, `delete` and `add`. Access is therefore by Entra ID and a short-lived
-token, exactly like every other action Ringleader takes in your subscription.
+This is the only switch here that adds **`dataActions`** to the custom role: the four blob
+actions `read`, `write`, `delete` and `add`. Access is therefore by Entra ID. It takes one of two
+forms: a short-lived token, as for every other action Ringleader takes in your subscription, or a
+shared access signature (SAS) signed with a user delegation key, described below.
 
 `Microsoft.Storage/storageAccounts/listKeys/action` and `listAccountSas/action` are **not**
 granted, and that is a decision rather than an omission. An account key is a long-lived static
@@ -454,16 +455,38 @@ credential with full data-plane access; handing one over would undo the keyless 
 whole onboarding is built on. If you are comparing this role against a hand-written one, that is
 the line to check.
 
+`Microsoft.Storage/storageAccounts/blobServices/generateUserDelegationKey/action` is granted in
+both widths. It lets Ringleader request a user delegation key, which signs a SAS. With it,
+Ringleader can give one of its own processes a SAS for a single container instead of its Entra
+token. The key can only be requested with an Entra token, and it lasts at most seven days. A SAS
+signed with it grants no more than Ringleader's own permissions, which this role limits to the four
+blob actions above.
+
+Removing the role assignment revokes every SAS signed this way. Azure Storage caches role
+assignments and keys, so an existing SAS can keep working for a while. Revoking the account's user
+delegation keys is the quickest way to stop it, though doing so also stops every other user
+delegation SAS on that account.
+
 ### The two widths, and what "named" does and does not narrow
 
 **Managed** — leave `artifact_storage_account_name` unset. Ringleader creates and converges the
 storage account and its containers, so their names, layout and lifecycle rules can change without
 you re-applying anything.
 
+The managed width also grants `managementPolicies/read` and `managementPolicies/write` on every
+storage account in this resource group. An account's lifecycle management policy holds rules such
+as how long to keep previous versions of a blob, so Ringleader can limit how long an account it
+created keeps them.
+
 **Named** — set it to an account you created. Every account and container **write** and
 **delete** is dropped: Ringleader may put blobs in containers you made and may neither create,
 reshape nor delete an account or a container. Its location, its lifecycle rules and its
 customer-managed key stay yours.
+
+In both widths, `Microsoft.Storage/storageAccounts/blobServices/containers/blobs/deleteBlobVersion/action`
+is not granted. With versioning on, deleting a blob turns it into a previous version, and without
+this action Ringleader cannot delete one. The lifecycle management policy decides when they go, and
+on the named width that policy is yours.
 
 Read the bound carefully, because Azure differs from the other two clouds here. The custom role
 is scoped to **this resource group**, as every other action in it is, and Azure offers no
