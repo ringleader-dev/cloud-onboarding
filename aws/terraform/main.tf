@@ -130,28 +130,38 @@ locals {
   # denies rather than allows, so adding it buys nothing and can break a create.
   managed_bucket_prefix = "ringleader-"
 
-  # Reading the bucket's own configuration is in BOTH widths, and GetEncryptionConfiguration is
-  # the one easy to leave out: it is what reports the bucket's default encryption back onto the
-  # Storage object. Without it the destination still works and the status can only say "unknown",
-  # which is the answer this feature exists to stop having to give.
+  # Reading the bucket's own configuration is in BOTH widths. GetEncryptionConfiguration and
+  # GetBucketVersioning let Ringleader report the bucket's default encryption and its versioning
+  # state on the Storage object. Without them the destination still works and the status can only
+  # say "unknown", which is the answer this feature exists to stop having to give.
   artifact_storage_bucket_actions = [
     "s3:ListBucket",
     "s3:GetBucketLocation",
     "s3:GetEncryptionConfiguration",
+    "s3:GetBucketVersioning",
     "s3:ListBucketMultipartUploads",
   ]
 
   # Making and shaping a bucket is the managed width's alone. On a bucket you own, these would let
   # Ringleader delete or re-shape something of yours, which is the opposite of what that width is
   # for. PutBucketPublicAccessBlock is here because a bucket Ringleader creates is one Ringleader
-  # is responsible for locking down.
+  # is responsible for locking down. PutBucketVersioning turns versioning on, so S3 keeps the old
+  # versions of an object, and the lifecycle actions let Ringleader set a rule under which S3
+  # deletes them after a set time. The tagging actions let it tag a bucket with the Storage object
+  # it was created for and read that tag back, so Ringleader can tell a bucket it created from one
+  # it did not. ListBucketVersions lets it check that a bucket holds no object versions or delete
+  # markers before deleting it.
   artifact_storage_manage_actions = [
     "s3:CreateBucket",
     "s3:DeleteBucket",
     "s3:GetBucketPublicAccessBlock",
     "s3:PutBucketPublicAccessBlock",
+    "s3:PutBucketVersioning",
     "s3:GetLifecycleConfiguration",
     "s3:PutLifecycleConfiguration",
+    "s3:GetBucketTagging",
+    "s3:PutBucketTagging",
+    "s3:ListBucketVersions",
   ]
 
   # The object path itself. The multipart actions are not optional extras: any upload over the

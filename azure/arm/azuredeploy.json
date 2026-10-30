@@ -33,7 +33,7 @@
       "type": "Bool",
       "defaultValue": true,
       "metadata": {
-        "description": "Let Ringleader hold artifact payloads -- sealed agent-session transcripts, workflow file outputs, files a workstation publishes -- in a storage account in THIS resource group rather than in Ringleader's own cloud. On by default. With it off those bytes go to a bucket Ringleader owns, which is where they go today; nothing degrades and nothing fails, but you cannot then answer \"which of our data is in whose account, under whose key\". Adds the Microsoft.Storage read actions plus the four blob DATA actions -- read, write, delete and add -- so access is by Entra ID and short-lived token. It deliberately does NOT add listKeys or listAccountSas: an account key is a long-lived static credential and this onboarding is keyless throughout. Leave artifactStorageAccountName empty for the managed width, where Ringleader also creates and converges the account and its containers. Granting it does nothing on its own -- no payload is written here until a Ringleader namespace declares a Storage object naming a destination. Set false to opt out."
+        "description": "Let Ringleader hold artifact payloads (sealed agent-session transcripts, workflow file outputs, files a workstation publishes) in a storage account in THIS resource group rather than in Ringleader's own cloud. On by default. With it off those bytes go to a bucket Ringleader owns, which is where they go today. Nothing degrades and nothing fails, but you cannot then answer \"which of our data is in whose account, under whose key\". Adds the Microsoft.Storage read actions, generateUserDelegationKey and the four blob DATA actions (read, write, delete and add). Access is by Entra ID: a short-lived token, or a SAS signed with a user delegation key that lasts at most seven days. It deliberately does NOT add listKeys or listAccountSas: an account key is a long-lived static credential and this onboarding is keyless throughout. Leave artifactStorageAccountName empty for the managed width, where Ringleader also creates and converges the account, its containers and its lifecycle management policy. Granting it does nothing on its own: no payload is written here until a Ringleader namespace declares a Storage object naming a destination. Set false to opt out."
       }
     },
     "artifactStorageAccountName": {
@@ -113,11 +113,14 @@
     "storageActions": [
       "Microsoft.Storage/storageAccounts/read",
       "Microsoft.Storage/storageAccounts/blobServices/read",
-      "Microsoft.Storage/storageAccounts/blobServices/containers/read"
+      "Microsoft.Storage/storageAccounts/blobServices/containers/read",
+      "Microsoft.Storage/storageAccounts/blobServices/generateUserDelegationKey/action"
     ],
     "storageManagedActions": [
       "Microsoft.Storage/storageAccounts/write",
       "Microsoft.Storage/storageAccounts/delete",
+      "Microsoft.Storage/storageAccounts/managementPolicies/read",
+      "Microsoft.Storage/storageAccounts/managementPolicies/write",
       "Microsoft.Storage/storageAccounts/blobServices/write",
       "Microsoft.Storage/storageAccounts/blobServices/containers/write",
       "Microsoft.Storage/storageAccounts/blobServices/containers/delete"

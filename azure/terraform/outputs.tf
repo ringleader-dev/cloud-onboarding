@@ -79,8 +79,8 @@ output "role_extras_granted" {
     # with its public IP if it had taken one. Built-in Contributor covers it; a narrower role must
     # name it. See ../README.md, "Optional: egress control".
     var.enable_egress_control ? ["Microsoft.Resources/subscriptions/resourcegroups/resources/read -- the leaked-gateway sweep's object listing"] : [],
-    var.enable_artifact_storage ? ["Microsoft.Storage/storageAccounts (+ blobServices, + containers) read, and the four blobs DATA actions read/write/delete/add -- artifact storage. NOT listKeys and NOT listAccountSas: an account key is a long-lived static credential and nothing here issues one."] : [],
-    var.enable_artifact_storage && var.artifact_storage_account_name == "" ? ["Microsoft.Storage storageAccounts write/delete and blobServices (+ containers) write/delete -- artifact storage, MANAGED width only"] : [],
+    var.enable_artifact_storage ? ["Microsoft.Storage/storageAccounts (+ blobServices, + containers) read, blobServices/generateUserDelegationKey/action, and the four blobs DATA actions read/write/delete/add -- artifact storage. NOT listKeys and NOT listAccountSas: an account key is a long-lived static credential and nothing here issues one."] : [],
+    var.enable_artifact_storage && var.artifact_storage_account_name == "" ? ["Microsoft.Storage storageAccounts write/delete, managementPolicies read/write, blobServices write, and containers write/delete -- artifact storage, MANAGED width only"] : [],
   )
 }
 
