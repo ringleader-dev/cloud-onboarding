@@ -56,7 +56,7 @@ The permissions policy's **base** is exactly these four statements — no wildca
   AWS-owned public AMI parameters.
 
 Three features that are **on by default** add statements beside those four, so a role applied on
-the defaults carries thirteen, not four, and both supported paths carry the same thirteen. All are
+the defaults carries fifteen, not four, and both supported paths carry the same fifteen. All are
 one variable away from off, and each is enumerated where it is described rather than here:
 *[egress control](#optional-egress-control)* adds the security-group, subnet and route-table
 writes, two security-group reads, the Elastic-IP actions and
@@ -64,8 +64,9 @@ writes, two security-group reads, the Elastic-IP actions and
 adds one `iam:PassRole`, bounded to roles under `workstation_identity_path` and to
 `ec2.amazonaws.com`; *[artifact storage](#optional-artifact-storage-in-a-bucket-of-yours)* adds
 the S3 bucket and object actions, bounded by ARN to buckets named `ringleader-*` or to the one
-bucket you name. The `actions_granted` output is read from the same lists the policy is built
-from, so it is the authority on what your role actually holds.
+bucket you name, plus the bucket listing on the managed width and the use of this account's KMS
+keys through S3 for those buckets. The `actions_granted` output is read from the same lists the
+policy is built from, so it is the authority on what your role actually holds.
 
 No `iam:*` unless you opt into per-workstation instance profiles
 (`enable_workstation_identities` / `EnableWorkstationIdentities`, on by default and scoped to
@@ -493,15 +494,11 @@ plus workflow file outputs and files a workstation publishes. By default those b
 bucket Ringleader owns. `enable_artifact_storage` (`ARTIFACT_STORAGE` on the CloudFormation
 path), **on by default**, lets them go to an S3 bucket in this account instead.
 
-**The S3 backend ships after the GCS one**, so on this cloud the grant deliberately arrives
-before the feature. That is the point: it costs an unused account nothing, and it is what stops
-S3 support from becoming a second apply for every customer later.
-
 ### The two widths, and how you pick
 
 **Managed**: leave `artifact_storage_bucket` unset. Ringleader creates and converges its own
-buckets, bounded by **ARN pattern** to `arn:aws:s3:::ringleader-*` and the objects in them, so the
-grant reaches no bucket you already have.
+buckets, bounded by **ARN pattern** to `arn:aws:s3:::ringleader-*` and the objects in them, so its
+bucket and object actions reach no bucket you already have. It can list them, as described below.
 
 The bound is a name prefix rather than a region, on purpose twice over: S3 is global, so a
 region condition would break a bucket you deliberately placed elsewhere for residency, and a
@@ -519,24 +516,54 @@ is what makes key custody a decision Ringleader never touches.
 in **both** widths. They let Ringleader report the bucket's encryption, its region and its
 versioning state on the `Storage` object. Without them that status can only say `unknown`.
 
-The grant is two statements in the named width and three in the managed one. S3 checks bucket
+The grant is three statements in the named width and five in the managed one. S3 checks bucket
 actions such as `s3:ListBucket` against the bucket's ARN and object actions against
 `<bucket>/*`, so the two sets name different resources and sit in separate statements.
-`s3:ListBucket` on an object ARN deploys cleanly and is refused on every call. The third
-statement, managed width only, holds `CreateBucket`, `DeleteBucket`, the reads and writes for a
-bucket's public access block, lifecycle and tags, `PutBucketVersioning` and `ListBucketVersions`.
+`s3:ListBucket` on an object ARN deploys cleanly and is refused on every call. The third statement
+in both widths is the KMS one described below. The other two are managed width only. One holds
+`CreateBucket`, `DeleteBucket`, the reads and writes for a bucket's public access block, lifecycle
+and tags, `PutBucketVersioning` and `ListBucketVersions`. The other holds `s3:ListAllMyBuckets`.
 
-These managed-width actions let Ringleader configure a bucket it creates. With versioning on, S3
+The provisioning actions let Ringleader configure a bucket it creates. With versioning on, S3
 keeps the old versions of an object, and a lifecycle rule deletes them after a set time.
 `PutBucketTagging` lets Ringleader tag a bucket with the `Storage` object it was created for, and
 `GetBucketTagging` reads that tag back. That lets Ringleader tell a bucket it created from one it
 did not. `ListBucketVersions` lets it check that a bucket holds no object versions or delete markers
 before deleting it.
 
+`s3:ListAllMyBuckets` lets Ringleader read the creation date of a bucket it created, so it can tell
+that bucket from a new one with the same name that someone else creates after the first is deleted.
+S3 reports a bucket's creation date in this listing and cannot limit the action to one bucket name.
+So the action sits in a statement of its own on `*`, and it lists every bucket in the account. For
+each bucket it returns the name, region and creation date, and never anything inside the bucket. It
+is granted on the managed width alone, where you already let Ringleader create buckets.
+
 The multipart actions (`AbortMultipartUpload`, `ListMultipartUploadParts`,
 `ListBucketMultipartUploads`) are not extras. Any upload over the SDK's threshold becomes a
 multipart upload, so a grant without them fails on a large transcript and on nothing else — the
 worst shape of bug to find in production.
+
+### A bucket encrypted with a KMS key of yours
+
+S3 calls KMS with the caller's own permissions whenever it reads or writes an object encrypted with
+a KMS key. So in **both** widths the role holds `kms:Decrypt` and `kms:GenerateDataKey` on KMS keys
+in this account, under two conditions that must both hold:
+
+- `kms:ViaService` matches `s3.*.amazonaws.com`, so the call comes through S3.
+- The `aws:s3:arn` value in the encryption context S3 sends (condition key
+  `kms:EncryptionContext:aws:s3:arn`) names an artifact bucket the grant covers, or an object in one.
+
+Through this grant, the role can use a key only by asking S3, and only for those buckets.
+
+If your key has AWS's default key policy, which lets IAM policies in this account grant access to
+it, your bucket needs nothing more. Switching the bucket to another key in this account does not
+need a re-apply either.
+
+If your key's policy does not let IAM grant access, add a statement to it that allows this role
+`kms:Decrypt` and `kms:GenerateDataKey` under the same two conditions. A key policy statement needs
+no IAM policy behind it, so without the conditions the role could use that key directly and for any
+bucket. A key in another account is not covered: using one takes that key's policy and a policy of
+your own on this role.
 
 ### What is deliberately withheld
 

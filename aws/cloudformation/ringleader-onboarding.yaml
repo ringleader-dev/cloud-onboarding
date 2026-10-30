@@ -162,11 +162,12 @@ Parameters:
     Default: ""
     Description: >-
       The one S3 bucket Ringleader may write artifact payloads to, when you would rather own it
-      than let Ringleader create one. Empty -- the default -- takes the managed width instead.
+      than let Ringleader create one. Empty (the default) takes the managed width instead.
       Set it to a bucket that already exists in this account: the grant is then bound to that
       bucket's ARN alone and carries no CreateBucket, DeleteBucket or lifecycle write, so its
-      region, its lifecycle rules and its default encryption stay yours. Hand the same name back
-      to Ringleader as the Storage object's spec.bucket.
+      region, its lifecycle rules and its default encryption stay yours. A KMS key in this account
+      works through S3 unless its key policy bars IAM (see aws/README.md). Hand the same name
+      back to Ringleader as the Storage object's spec.bucket.
 
   EnableEgressControl:
     Type: String
@@ -705,6 +706,34 @@ Resources:
                     - ArtifactStorageIsManaged
                     - !Sub "arn:${AWS::Partition}:s3:::ringleader-${ArtifactStorageBucketPrefix}*/*"
                     - !Sub "arn:${AWS::Partition}:s3:::${ArtifactStorageBucket}/*"
+                - !Ref AWS::NoValue
+
+              - !If
+                - WantArtifactStorageManaged
+                - Sid: ArtifactStorageBucketListing
+                  Effect: Allow
+                  Action:
+                    - "s3:ListAllMyBuckets"
+                  Resource: "*"
+                - !Ref AWS::NoValue
+
+              - !If
+                - WantArtifactStorage
+                - Sid: ArtifactStorageKeys
+                  Effect: Allow
+                  Action:
+                    - "kms:Decrypt"
+                    - "kms:GenerateDataKey"
+                  Resource: !Sub "arn:${AWS::Partition}:kms:*:${AWS::AccountId}:key/*"
+                  Condition:
+                    StringLike:
+                      "kms:ViaService": "s3.*.amazonaws.com"
+                      "kms:EncryptionContext:aws:s3:arn": !If
+                        - ArtifactStorageIsManaged
+                        - !Sub "arn:${AWS::Partition}:s3:::ringleader-${ArtifactStorageBucketPrefix}*"
+                        -
+                          - !Sub "arn:${AWS::Partition}:s3:::${ArtifactStorageBucket}"
+                          - !Sub "arn:${AWS::Partition}:s3:::${ArtifactStorageBucket}/*"
                 - !Ref AWS::NoValue
 
   Vpc:

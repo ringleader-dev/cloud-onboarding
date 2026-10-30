@@ -175,6 +175,25 @@ locals {
     "s3:ListMultipartUploadParts",
   ]
 
+  # Listing the account's buckets, managed width only. A bucket's creation date is what lets
+  # Ringleader tell a bucket it created from a new one with the same name that someone else created
+  # after the first was deleted, and S3 reports a bucket's creation date in this listing. S3 cannot
+  # bind the action to a bucket name, so it is granted on every bucket in the account, and its
+  # statement names `*`. It returns each bucket's name, region and creation date, and never
+  # anything inside a bucket.
+  artifact_storage_list_actions = [
+    "s3:ListAllMyBuckets",
+  ]
+
+  # Using a bucket's KMS key, in BOTH widths. S3 calls KMS with the caller's own permissions to read
+  # or write an object encrypted with a KMS key, so without these an artifact bucket whose default
+  # encryption is a key of yours refuses every read and write. GenerateDataKey encrypts a new
+  # object; Decrypt reads one, lists the parts of a multipart upload and completes it.
+  artifact_storage_key_actions = [
+    "kms:Decrypt",
+    "kms:GenerateDataKey",
+  ]
+
   artifact_storage_managed = var.enable_artifact_storage && var.artifact_storage_bucket == ""
 
   # The bucket ARNs each width reaches: every `ringleader-*` bucket, or exactly the one named.
@@ -185,6 +204,13 @@ locals {
   ]
 
   artifact_storage_object_arns = [for arn in local.artifact_storage_bucket_arns : "${arn}/*"]
+
+  # What S3 names in the encryption context of a KMS call: the object's ARN, or the bucket's when
+  # the bucket uses an S3 Bucket Key. The managed pattern ends in `*`, so it already matches both.
+  artifact_storage_key_context = local.artifact_storage_managed ? local.artifact_storage_bucket_arns : concat(
+    local.artifact_storage_bucket_arns,
+    local.artifact_storage_object_arns,
+  )
 
   # Creating the three objects egress control makes: one security group per compiled policy, and the
   # route table and subnet that steering uses. They get a list, and a statement, of their own
@@ -677,6 +703,45 @@ data "aws_iam_policy_document" "permissions" {
       effect    = "Allow"
       actions   = local.artifact_storage_object_actions
       resources = local.artifact_storage_object_arns
+    }
+  }
+
+  # A statement of its own because the listing cannot name a bucket, and an action with no
+  # resource type placed beside a bucket ARN is refused on every call.
+  dynamic "statement" {
+    for_each = local.artifact_storage_managed ? [1] : []
+    content {
+      sid       = "ArtifactStorageBucketListing"
+      effect    = "Allow"
+      actions   = local.artifact_storage_list_actions
+      resources = ["*"]
+    }
+  }
+
+  # KMS keys in this account, used only through S3 and only for the artifact buckets above. Both
+  # conditions are needed. Without kms:ViaService the role could call KMS directly. Without the
+  # encryption context it could use a key through S3 for a bucket the statements above do not
+  # cover. A key in another account is not covered: IAM needs both that key's policy and a policy
+  # on this role to allow it, and this statement names only keys in this account.
+  dynamic "statement" {
+    for_each = var.enable_artifact_storage ? [1] : []
+    content {
+      sid       = "ArtifactStorageKeys"
+      effect    = "Allow"
+      actions   = local.artifact_storage_key_actions
+      resources = ["arn:${data.aws_partition.current.partition}:kms:*:${data.aws_caller_identity.current.account_id}:key/*"]
+
+      condition {
+        test     = "StringLike"
+        variable = "kms:ViaService"
+        values   = ["s3.*.amazonaws.com"]
+      }
+
+      condition {
+        test     = "StringLike"
+        variable = "kms:EncryptionContext:aws:s3:arn"
+        values   = local.artifact_storage_key_context
+      }
     }
   }
 }

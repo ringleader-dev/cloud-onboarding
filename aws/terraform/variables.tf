@@ -152,19 +152,29 @@ variable "enable_artifact_storage" {
 
       - MANAGED (leave artifact_storage_bucket unset). Ringleader creates and converges its own
         buckets here, so their names, lifecycle rules and layout can change without asking you to
-        re-apply. Confined by ARN pattern to buckets named ringleader-*, so it reaches no bucket
-        you already have.
+        re-apply. Confined by ARN pattern to buckets named ringleader-*, so its bucket and object
+        actions reach no bucket you already have. It may also list this account's buckets, which
+        shows each bucket's name, region and creation date and nothing inside it.
       - NAMED (set artifact_storage_bucket). You create one bucket, keep its lifecycle and its
         SSE-KMS key yours, and Ringleader gets object access to that one bucket -- with no
         ability to create, reshape or delete a bucket at all.
+
+    In both widths the role may use a KMS key in this account through S3, for the artifact buckets
+    alone, so a bucket encrypted with a key of yours works with nothing more to set.
+
+    If the key's policy does not let IAM policies grant access to it, add a statement to the key
+    policy that allows this role kms:Decrypt and kms:GenerateDataKey. Give it two conditions:
+    kms:ViaService matching s3.*.amazonaws.com, and kms:EncryptionContext:aws:s3:arn matching the
+    bucket's ARN or an object in it (arn:aws:s3:::<bucket> and arn:aws:s3:::<bucket>/*). A key
+    policy statement needs no IAM policy behind it, so without those conditions the role could use
+    the key directly and for any bucket. A key in another account is not covered: using one takes
+    that key's policy and a policy of your own on this role.
 
     Neither width grants s3:PutBucketPolicy or any ACL write, so Ringleader cannot widen its own
     access to this account's storage.
 
     Granting it does nothing on its own: until a Ringleader namespace declares a Storage object
-    naming a bucket, no payload is written here. The S3 backend itself ships after the GCS one,
-    so on this cloud the grant deliberately arrives before the feature -- that is what stops S3
-    support from costing every customer a second apply.
+    naming a bucket, no payload is written here.
   EOT
 }
 
@@ -209,7 +219,8 @@ variable "artifact_storage_bucket" {
     Set it to a bucket that already exists in this account. The grant is then bound to that
     bucket's ARN alone and carries no CreateBucket, DeleteBucket or lifecycle write: its region,
     its lifecycle rules and its default encryption stay yours to set, which is the point of this
-    width. Hand the same name back to Ringleader as the Storage object's spec.bucket.
+    width. If that encryption is a KMS key, see enable_artifact_storage for what its key policy
+    needs. Hand the same name back to Ringleader as the Storage object's spec.bucket.
   EOT
 }
 

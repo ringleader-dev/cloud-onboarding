@@ -141,12 +141,10 @@ variable "enable_egress_control" {
       - NSG read/write/delete on the group and its security rules, plus join/action, which is
         what lets Ringleader attach a group to a workstation's NIC;
       - application-security-group read/write/delete, plus joinIpConfiguration/action and
-        joinNetworkSecurityRule/action. Ringleader will put each workstation's NIC in a group it
-        made and name that group as the destination of the inbound SSH rule it writes in your
-        subnet NSG, so that one rule holds steady as workstations come and go. The
-        two join actions are the ones people forget: read,
-        write and delete grant neither. The rule ships in Ringleader, and the grant arrives early
-        so it does not cost you a second apply; and
+        joinNetworkSecurityRule/action. Ringleader puts each workstation's NIC in a group it made
+        and names that group as the destination of the inbound SSH rule it writes in your subnet
+        NSG, so that one rule holds steady as workstations come and go. The two join actions are
+        the ones people forget: read, write and delete grant neither; and
       - route-table read/write/delete (with its routes and join/action) plus subnet write and
         delete, which is how a workstation's traffic is steered to the DNS / HTTPS proxy when a
         policy names hostnames. An Azure route table attaches per subnet, so per-policy
@@ -196,9 +194,7 @@ variable "enable_artifact_storage" {
         a container.
 
     Granting it does nothing on its own: until a Ringleader namespace declares a Storage object
-    naming a destination, no payload is written here. The Azure Blob backend itself ships after
-    the GCS one, so on this cloud the grant deliberately arrives before the feature -- that is
-    what stops Azure support from costing every customer a second apply.
+    naming a destination, no payload is written here.
   EOT
 }
 

@@ -317,12 +317,15 @@ Two of these deserve a deliberate decision rather than a default:
 
 **Artifact storage has two widths, and you pick between them by naming a bucket or not.** Leave
 `artifact_storage_bucket` (Azure: `artifact_storage_account_name`) empty and Ringleader creates
-and converges its own — confined on GCP and AWS to names beginning `ringleader-`, so the grant
-reaches nothing you already have. Name one you created and the grant narrows to object access on
-it, with no ability to create, reshape or delete a bucket at all: its location, its lifecycle
-rules and its encryption key stay yours. That second width is the one to take if you have a
-data-residency or key-custody position to defend — set the bucket's default encryption to a key
-in your own KMS and every payload lands under it, with nothing on our side to configure.
+and converges its own. On GCP and AWS those are confined to names beginning `ringleader-`, so the
+grant reaches no bucket you already have (on AWS it can still list your buckets' names, regions
+and creation dates). Name one you created and the grant narrows to object access on it, with no
+ability to create, reshape or delete a bucket at all: its location, its lifecycle rules and its
+encryption key stay yours. That second width is the one to take if you have a data-residency or
+key-custody position to defend: set the bucket's default encryption to a key in your own KMS and
+every payload lands under it, with nothing on our side to configure. On AWS that holds for a key in
+the same account, and [the AWS README](aws/README.md#a-bucket-encrypted-with-a-kms-key-of-yours)
+says what a stricter key policy needs.
 
 With the switch off, payloads go to a bucket Ringleader owns, which is where they go today.
 Nothing degrades and nothing fails.

@@ -66,10 +66,15 @@ Two more grant capabilities on the role rather than on the network. `EnableWorks
 account rather than in its own; `ArtifactStorageBucket` (empty) takes the managed width, where
 Ringleader creates and converges its own buckets bounded by ARN to names beginning
 `ringleader-`, and naming a bucket you made narrows the grant to that one ARN with no
-`CreateBucket`, `DeleteBucket` or lifecycle write. On the managed width
-`ArtifactStorageBucketPrefix` (empty) takes a short label of yours that those buckets must carry in
-their name, bounding the ARNs to `ringleader-<label>*` instead of every `ringleader-*` bucket in
-the account; set it when one account serves several Ringleader organizations. `deploy.sh` exposes
+`CreateBucket`, `DeleteBucket` or lifecycle write. On the managed width the role may also list the
+account's buckets (`s3:ListAllMyBuckets`), which shows each one's name, region and creation date and
+nothing inside it. In both widths it may use a KMS key in this account through S3, for the artifact
+buckets alone, so a bucket encrypted with a key of yours needs nothing more unless that key's policy
+does not let IAM grant access. `aws/README.md` says what to add to such a key's policy. On the
+managed width `ArtifactStorageBucketPrefix` (empty) takes a short label of yours that those
+buckets must carry in their name, bounding the ARNs to `ringleader-<label>*` instead of every
+`ringleader-*` bucket in the account; set it when one account serves several Ringleader
+organizations. `deploy.sh` exposes
 all five as `WORKSTATION_IDENTITIES`, `WORKSTATION_IDENTITY_PATH`, `ARTIFACT_STORAGE`,
 `ARTIFACT_STORAGE_BUCKET` and `ARTIFACT_STORAGE_BUCKET_PREFIX`. The last is passed only when set,
 like the flow-log parameters, so a run that does not mention it keeps the stack's rather than
