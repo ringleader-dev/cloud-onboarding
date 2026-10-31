@@ -50,7 +50,8 @@ network_cidr = "10.80.0.0/16"
 # gateway_management_source_ranges = []
 
 # Let Ringleader CREATE a service account per workstation user and bind roles to it. Not needed
-# to run workstations as an identity -- every workstation already runs as one. This grants
+# to run workstations as an identity -- a workstation whose CloudIdentity names none already
+# runs as the role-less rl-box-noroles. This grants
 # roles/resourcemanager.projectIamAdmin, which can grant any role in this project to any
 # principal, including roles/owner to itself. It is the broadest grant here: set it false in a
 # project that holds anything besides Ringleader workstations.

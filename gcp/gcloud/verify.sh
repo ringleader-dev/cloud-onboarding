@@ -10,8 +10,8 @@
 #   PROVIDER  provider id                    (default: oidc)
 #   EGRESS_ROLE  custom egress-control role id, if you enabled it
 #                                            (default: ringleaderEgressControl)
-#   IDENTITY_ROLE          custom role for the identities Ringleader's own appliances
-#                enrol with, always granted  (default: ringleaderManagedIdentities)
+#   IDENTITY_ROLE          custom role for the role-less service accounts Ringleader
+#                creates, always granted     (default: ringleaderManagedIdentities)
 #   ARTIFACT_STORAGE_ROLE  custom artifact-storage role id, if you enabled it
 #                                            (default: ringleaderArtifactStorage)
 #
@@ -36,16 +36,17 @@ ROLES="$(gcloud projects get-iam-policy "$PROJECT" \
 printf '%s\n' "$ROLES" | sed 's/^/   /'
 
 # The three the workstation lifecycle needs. serviceAccountUser is the one people miss: a GCE
-# workstation always runs AS a service account (its own, or the project default compute one), and
-# attaching one needs actAs -- so without this role every create fails with a 403 and no
-# workstation in this project can boot.
+# workstation runs AS a service account (the one its CloudIdentity names, a role-less one
+# Ringleader creates, or the project default compute one), and attaching one needs actAs -- so
+# without this role the first create of a VM that needs an account fails with a 403.
 MISSING=""
 for ROLE in roles/compute.instanceAdmin.v1 roles/compute.networkUser roles/iam.serviceAccountUser; do
   printf '%s\n' "$ROLES" | grep -qx "$ROLE" || MISSING="${MISSING} ${ROLE}"
 done
-# The custom role Ringleader's own appliances need, granted unconditionally by onboard.sh. An
-# onboarding that predates it looks perfectly healthy: workstations boot, the trust federates,
-# and the first egress gateway 403s at service-account create and never comes up.
+# The custom role for the role-less service accounts, granted unconditionally by onboard.sh. An
+# onboarding that predates it looks perfectly healthy: workstations and the egress gateway boot
+# and the trust federates, but the gateway and every workstation whose CloudIdentity names no
+# account run as the project's default compute service account instead of a role-less one.
 printf '%s\n' "$ROLES" | grep -qx "projects/${PROJECT}/roles/${IDENTITY_ROLE}" \
   || MISSING="${MISSING} projects/${PROJECT}/roles/${IDENTITY_ROLE}"
 

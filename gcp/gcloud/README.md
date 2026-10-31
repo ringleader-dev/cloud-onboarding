@@ -34,9 +34,11 @@ bound beside the first. `network-landing-pad.sh` takes `NAME_PREFIX` for the sam
 [`../README.md`](../README.md#serving-a-second-organization).
 
 A fourth grant is **always** made and has no switch: the custom role that lets Ringleader create
-and delete the role-less service accounts its own appliances enrol with. GCE mints an instance
-identity assertion only for a VM that has a service account attached, so without it an egress
-gateway boots, bills, and can never come up. It carries no permission to bind a role, so
+role-less service accounts. It creates one for each egress gateway and deletes it with the
+gateway. It also creates `rl-box-noroles`, the one a workstation runs as when its CloudIdentity
+names none, and never deletes it. GCE issues an instance identity assertion
+only for a VM that has a service account attached, so without this role those VMs run as the
+project's default compute service account instead. It carries no permission to bind a role, so
 everything Ringleader creates with it is role-less by construction.
 
 **Artifact storage narrows in one direction only.** Re-running with `ARTIFACT_STORAGE_BUCKET` set
