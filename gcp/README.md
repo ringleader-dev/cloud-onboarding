@@ -29,36 +29,53 @@ creates / manages / deletes workstation VMs in YOUR project
 - **Least privilege.** The onboarding service account holds only
   `roles/compute.instanceAdmin.v1` (instances and disks), `roles/compute.networkUser`
   (attach a NIC to your subnets) and `roles/iam.serviceAccountUser` (attach a service
-  account to a VM it creates — see the next section). No `owner`, `editor`, project-IAM,
+  account to a VM it creates; see the next section). No `owner`, `editor`, project-IAM,
   billing, or storage access.
 
-## Every VM Ringleader creates runs as a service account
+## Which service account each VM runs as
 
 A GCE VM proves who it is to Ringleader with a **Google-signed instance identity
-assertion**, and the metadata server mints one only for a VM that **has an attached
-service account**. So Ringleader attaches one to everything it creates here: the
-service account a workstation declares, or — when it declares none — this project's
-**default compute service account**. Attaching one requires `iam.serviceAccounts.actAs`
-on it, which is why `roles/iam.serviceAccountUser` is in the base grant above and not
-optional: without it the very first create fails with a `403` and no workstation in this
-project can boot.
+assertion**, and the metadata server issues one only for a VM that **has an attached
+service account**. So Ringleader attaches one to every VM here that proves its identity
+this way:
 
-**The egress gateway is one of those VMs**, and it takes the default compute service
-account — it declares none of its own, and it enrols the same way a workstation does. So
-the second consequence below applies to it too, and the one grant it needs is the `actAs`
-already in the base grant.
+- **A workstation whose CloudIdentity names a service account** runs as that account. The
+  name goes in the CloudIdentity's `spec.serviceAccount.accountId`. Ringleader refuses a workstation
+  that sets a service account in its own `providerConfig`.
+- **A workstation whose CloudIdentity names none** runs as `rl-box-noroles`, one service
+  account in this project with **no roles at all**. Ringleader creates it the first time a
+  workstation needs it, every such workstation shares it, and Ringleader never deletes it.
+- **The egress gateway** runs as a service account of its own, also with no roles, which
+  Ringleader creates with the gateway VM and deletes with it.
+
+A workstation whose configuration Ringleader pushes over SSH (`configDelivery: push`, which a
+Ringleader deployment has to allow) does not need one, and runs as no service account unless
+its CloudIdentity names one.
+
+Attaching any of these requires `iam.serviceAccounts.actAs` on it, which is why
+`roles/iam.serviceAccountUser` is in the base grant above and not optional. Without it, the
+first create of a VM that needs an account fails with a `403`. Ringleader creates the
+role-less accounts with a custom role this onboarding always grants
+(`ringleaderManagedIdentities` by default).
+
+**The default compute service account is the fallback.** This project can refuse to create a
+service account: an organization policy enforces `iam.disableServiceAccountCreation`, or that
+custom role is missing. Then the egress gateway and every workstation whose CloudIdentity names
+none run as the project's **default compute service account** instead. Their status says so.
 
 Two consequences worth acting on, both reasons to give Ringleader a **project of its own**:
 
 - **`roles/iam.serviceAccountUser` is project-scoped**, so it permits acting as any
   service account in this project. In a project that also holds a powerful service
   account, this reaches it.
-- **Check what your default compute service account holds.** Projects created before
-  Google changed the default have `roles/editor` on it, so a workstation that declares no
-  identity of its own would run with project editor. Remove that binding if you do not
-  want it, or give workstations a purpose-made service account with **no roles at all**
-  and name it on the workstation (`providerConfig.gcp.serviceAccount`) — Ringleader
-  attaches that one instead, and needs nothing beyond the `actAs` it already has.
+- **Check what your default compute service account holds.** Unless your organization enforces the policy
+  `iam.automaticIamGrantsForDefaultServiceAccounts` (on by default for organizations created
+  on or after May 3, 2024), Google grants that account `roles/editor` on the project, so a VM
+  that falls back to it runs with project editor.
+  Remove that binding if you do not want it. To choose the account yourself, create one and
+  name it in the CloudIdentity's `spec.serviceAccount`, with `autoCreate: false` and
+  `autoDelete: false` so Ringleader attaches it without creating or deleting it. Attaching
+  it needs nothing beyond the `actAs` Ringleader already has.
 
 ## Before you start
 
@@ -172,9 +189,9 @@ supply the port number: the module carries it, so it cannot drift from the port 
 ## Optional: let Ringleader create the per-user identities
 
 Ringleader can **provision** a dedicated service account per workstation user and **bind
-roles** to it, so one workstation can (say) read one bucket. Every workstation already
-runs as a service account without this (above) — what this adds is Ringleader creating
-those accounts and granting them roles for you. It is **on by default**, and it is the one
+roles** to it, so one workstation can (say) read one bucket. A workstation runs as a service
+account without this (above). What this adds is Ringleader creating an account per user and
+granting it roles for you. It is **on by default**, and it is the one
 default here most worth a deliberate decision, because it is not free:
 
 | capability | role it needs |
@@ -190,9 +207,9 @@ Ringleader workstations**. In a project that holds anything else, set
 fails closed with a `403` and nothing else changes.
 
 You can get the same end result without granting either: create the service accounts and
-their role bindings yourself, and name one on the workstation
-(`providerConfig.gcp.serviceAccount`). Ringleader attaches an account it did not create
-using the `actAs` it already holds.
+their role bindings yourself, and name one in the CloudIdentity's `spec.serviceAccount`,
+with `autoCreate: false` and `autoDelete: false`. Ringleader attaches an account it did not
+create using the `actAs` it already holds.
 
 ## Optional: egress control
 
@@ -534,7 +551,8 @@ policy — so it is worth doing at the time rather than discovering later.
 
 - `storage.buckets.setIamPolicy` and `storage.objects.setIamPolicy` — nothing in this onboarding
   may **grant** authority. It is the same rule that keeps the service accounts Ringleader creates
-  for its own appliances role-less by construction.
+  with its always-granted role, the egress gateway's and `rl-box-noroles`, role-less by
+  construction.
 - `storage.hmacKeys.*` — an HMAC key is a long-lived static credential, and this onboarding is
   keyless throughout.
 - `storage.buckets.list` — Ringleader addresses buckets it already knows the name of. Listing
@@ -681,8 +699,9 @@ for one is refused by the other's provider.
 > onboarding grants Ringleader the authority to manage workstations throughout the project, and
 > that authority is not divided per organization. Every role it binds is project-wide:
 > `roles/compute.instanceAdmin.v1` and `roles/iam.serviceAccountUser` have no switch at all, the
-> second because a GCE workstation cannot come up without an attached service account and the
-> `actAs` it gives reaches *any* service account in the project. So one organization's Ringleader
+> second because a GCE workstation that proves its identity with an instance identity assertion cannot come up
+> without an attached service account, and the `actAs` it gives reaches *any* service account in
+> the project. So one organization's Ringleader
 > can delete or stop the other's workstations, or attach the other's onboarding account to a
 > workstation of its own and use everything that account can.
 >
@@ -725,7 +744,7 @@ Set these on the second and later applies:
 |---|---|---|---|
 | The onboarding service account | `sa_account_id` | `SA` | a service account id is unique per project |
 | The workload identity pool | `pool_id` | `POOL` | a pool id is unique per project |
-| The role for the identities Ringleader's own appliances enrol with | `identity_role_id` | `IDENTITY_ROLE` | a custom role id is unique per project. Always granted, and separate from `enable_workstation_identities` |
+| The role for the role-less service accounts Ringleader creates | `identity_role_id` | `IDENTITY_ROLE` | a custom role id is unique per project. Always granted, and separate from `enable_workstation_identities` |
 | The egress control role | `egress_role_id` | `EGRESS_ROLE` | as above |
 | The artifact storage roles | `artifact_storage_role_id` | `ARTIFACT_STORAGE_ROLE` | as above. It names both roles: the second is that id with `Provision` appended |
 | The landing pad's resources | `name_prefix` | `NAME_PREFIX` | the VPC, its subnets, the router, the NAT and the firewall rules are all unique per project |

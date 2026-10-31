@@ -7,9 +7,11 @@ network landing pad (egress via Cloud NAT; inbound SSH only from the CIDRs you n
 and a **secondary SSH port** only if you ask for one).
 
 The three roles are `roles/compute.instanceAdmin.v1`, `roles/compute.networkUser` and
-`roles/iam.serviceAccountUser`. The last one is required, not optional: every workstation
-VM runs as a service account (its own, or the project default compute one) and attaching
-one needs `actAs`. See [`../README.md`](../README.md#every-vm-ringleader-creates-runs-as-a-service-account).
+`roles/iam.serviceAccountUser`. The last one is required, not optional: a workstation VM
+runs as a service account (the one its CloudIdentity names, a role-less one Ringleader
+creates, or the project's default compute one when the project refuses that create) and
+attaching one needs `actAs`. See
+[`../README.md`](../README.md#which-service-account-each-vm-runs-as).
 
 It declares **no provider block**, so you can reference it from your own
 Terraform. A ready-to-apply root is in [`examples/standalone/`](examples/standalone/).

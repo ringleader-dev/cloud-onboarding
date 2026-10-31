@@ -114,25 +114,26 @@ resource "google_service_account" "onboarding" {
 # instanceAdmin.v1 and networkUser are the VM lifecycle itself: create, boot, stop, start
 # and delete instances and their disks, and attach a NIC to your subnets.
 #
-# serviceAccountUser is the third because every workstation VM runs as some service
-# account, and attaching one needs iam.serviceAccounts.actAs, which neither Compute role
-# carries. This is not the runtime-identity feature below: a GCE workstation
-# proves its identity to Ringleader with a Google-signed instance identity assertion, and
-# the metadata server mints that only for a VM that has an attached service account. So
-# Ringleader attaches one on every create -- the workstation's own, or this project's
-# default compute service account. Without this role the first create fails with a 403.
+# serviceAccountUser is the third because a workstation VM runs as a service account, and
+# attaching one needs iam.serviceAccounts.actAs, which neither Compute role carries. This is
+# not the runtime-identity feature below: a GCE workstation proves its identity to Ringleader
+# with a Google-signed instance identity assertion, and the metadata server issues that only
+# for a VM that has an attached service account. So Ringleader attaches one on create -- the
+# one the workstation's CloudIdentity names, or, when it names none, the role-less
+# rl-box-noroles from 2a-bis. Without this role the first create fails with a 403.
 #
 # It is project-scoped, so it permits acting as any service account in this project, and a
 # VM running as a service account can use everything that account can. That is why this
 # onboarding asks for a project dedicated to Ringleader workstations. Two things worth
 # doing there:
 #
-#   - Check what your default compute service account holds. Projects created before
-#     Google changed the default get roles/editor on it, so a workstation that declares no
-#     identity would inherit project editor. Remove that binding if you do not want it.
-#   - Or give workstations a purpose-made service account with no roles, per workstation or
-#     fleet-wide (providerConfig.gcp.serviceAccount). Ringleader attaches it instead of the
-#     default; it still needs actAs, which this role grants.
+#   - Check what your default compute service account holds. A VM falls back to it when
+#     this project refuses to create a service account, and Google grants it roles/editor
+#     unless your organization enforces iam.automaticIamGrantsForDefaultServiceAccounts, so
+#     that VM would inherit project editor. Remove that binding if you do not want it.
+#   - Or choose the account yourself: create one and name it in the CloudIdentity's
+#     serviceAccount block, with autoCreate and autoDelete false. Ringleader attaches it;
+#     it still needs actAs, which this role grants.
 resource "google_project_iam_member" "instance_admin" {
   project = var.project_id
   role    = "roles/compute.instanceAdmin.v1"
@@ -167,19 +168,21 @@ moved {
   to   = google_project_iam_member.service_account_user
 }
 
-# 2a-bis. The identities RINGLEADER creates for its OWN appliances -- unconditional, and
-# deliberately unable to grant anything.
+# 2a-bis. The role-less identities RINGLEADER creates -- unconditional, and deliberately
+# unable to grant anything.
 #
-# Some machines Ringleader runs in this project are not workstations: the egress gateway is
-# one. They still need an attached service account, because on GCE the metadata server mints
-# the instance identity assertion a machine enrols with ONLY for a VM that has one -- so
-# without this the appliance boots, bills, and can never come up.
+# The egress gateway runs as an account of its own, and a workstation whose CloudIdentity
+# names none runs as one shared account, rl-box-noroles. Each needs an attached service
+# account, because on GCE the metadata server issues the instance identity assertion a machine
+# enrolls with ONLY for a VM that has one -- so without this role those VMs run as the
+# project's default compute service account instead.
 #
-# Ringleader creates and deletes those accounts itself rather than asking you to declare them,
-# which is what keeps this module from needing an edit every time Ringleader gains a machine.
-# The role below is exactly that capability and nothing more: create, read, list, update and
-# delete a service account. It carries NO permission to BIND a role, on the project or on the
-# account, so anything Ringleader creates with it is role-less by construction -- it can prove
+# Ringleader creates those accounts itself rather than asking you to declare them, and deletes
+# the gateway's with its VM, which is what keeps this module from needing an edit every time
+# Ringleader gains a machine. The role below is exactly that capability and nothing more:
+# create, read, list, update and delete a service account. It carries NO permission to BIND a
+# role, on the project or on the account, so anything Ringleader creates with it is role-less
+# by construction -- it can prove
 # which machine it is and do nothing else. Granting a role is 2b's projectIamAdmin, which is a
 # separate, optional decision.
 resource "google_project_iam_custom_role" "identity" {
@@ -209,7 +212,7 @@ resource "google_project_iam_member" "identity" {
 
 # 2b. Per-workstation runtime identities (on by default; enable_workstation_identities).
 #
-# Every workstation already runs as a service account (see 2). What this adds is letting
+# A workstation already runs as a service account (see 2). What this adds is letting
 # Ringleader provision one per workstation user and bind roles to it, so a workstation can,
 # say, read one bucket. It needs two capabilities the roles above do not carry:
 #
@@ -224,10 +227,10 @@ resource "google_project_iam_member" "identity" {
 # enable_workstation_identities = false.
 #
 # You can also get runtime identities without it: create the service accounts and their role
-# bindings yourself and name one on the workstation (providerConfig.gcp.serviceAccount). The
-# VM still runs as it, and the actAs grant above is all Ringleader needs to attach one it did
-# not create. With the variable false the feature fails closed with a 403; nothing else is
-# affected.
+# bindings yourself and name one in the CloudIdentity's serviceAccount block, with autoCreate
+# and autoDelete false. The VM still runs as it, and the actAs grant above is all Ringleader
+# needs to attach one it did not create. With the variable false the feature fails closed with
+# a 403; nothing else is affected.
 resource "google_project_iam_member" "workstation_sa_admin" {
   count   = var.enable_workstation_identities ? 1 : 0
   project = var.project_id

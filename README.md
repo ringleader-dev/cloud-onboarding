@@ -74,13 +74,15 @@ principal.
 
 **GCP is different, and by necessity.** A GCE workstation proves its identity to
 Ringleader with a Google-signed instance identity assertion, which the metadata server
-mints only for a VM that has an **attached service account** — so every GCP workstation
-runs as one: the account it declares, or the project's **default compute service
-account**. That is why the GCP module's base grant includes
-`roles/iam.serviceAccountUser`, and why it asks for a project dedicated to Ringleader
-workstations. Check what your default compute service account holds (older projects give
-it `roles/editor`), or give workstations a role-less service account of their own — see
-[`gcp/README.md`](gcp/README.md#every-vm-ringleader-creates-runs-as-a-service-account).
+issues only for a VM that has an **attached service account**. So a GCP workstation runs as
+one: the account its CloudIdentity names, or, when it names none, `rl-box-noroles`, a
+service account with no roles that Ringleader creates in the project. That is why the GCP
+module's base grant includes `roles/iam.serviceAccountUser`, and why it asks for a project
+dedicated to Ringleader workstations. When the project refuses to create that account, a
+workstation runs as the project's **default compute service account** instead, so check what
+that account holds (Google grants it `roles/editor` unless your organization enforces
+`iam.automaticIamGrantsForDefaultServiceAccounts`). See
+[`gcp/README.md`](gcp/README.md#which-service-account-each-vm-runs-as).
 
 Letting Ringleader **create** those per-user identities and **bind roles** to them is a
 separate switch, `enable_workstation_identities`, and it costs real permissions: on GCP the
