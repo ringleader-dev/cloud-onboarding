@@ -395,11 +395,10 @@ resource "google_project_iam_member" "egress" {
 #   - storage.buckets.list -- Ringleader addresses buckets it already knows the name of. Listing
 #     them would enumerate the names of every bucket in the project for no feature.
 locals {
-  # The prefix every bucket Ringleader creates under the MANAGED width is named with, and the
-  # bound the IAM condition below is written against. Ringleader compiles the same string
-  # (`storagekind.ManagedBucketPrefix`); a landing pad that admits a different one grants an
-  # authority that matches no bucket, and every bucket create fails with a 403 that looks like a
-  # Ringleader bug. Not a variable, on purpose: it is not the operator's to choose.
+  # The prefix every bucket Ringleader creates under the managed width is named with, and the
+  # bound the IAM condition below is written against. A pad that admitted a different prefix would
+  # match no bucket, and every bucket create would fail with a 403 that looks like a Ringleader bug.
+  # It is not a variable, because the prefix is not the operator's to choose.
   managed_bucket_prefix = "ringleader-"
 
   # Reading a bucket's own configuration is in BOTH widths, and it is the one easy to leave out:
