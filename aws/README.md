@@ -500,11 +500,22 @@ path), **on by default**, lets them go to an S3 bucket in this account instead.
 buckets, bounded by **ARN pattern** to `arn:aws:s3:::ringleader-*` and the objects in them, so its
 bucket and object actions reach no bucket you already have. It can list them, as described below.
 
-The bound is a name prefix rather than a region, on purpose twice over: S3 is global, so a
-region condition would break a bucket you deliberately placed elsewhere for residency, and a
-bucket has no VPC to bound it by. `s3:ResourceAccount` is not added on top either — the prefix is
-a global-namespace pattern, so it could in principle name a bucket in someone else's account, but
-reaching one needs **that bucket's own policy** to name this role as well, and nobody else's does.
+The bound is a name prefix rather than a region, for two reasons. S3 is global, so a region
+condition would break a bucket you deliberately placed in another region for residency. And a
+bucket has no VPC to bound it by.
+
+The grant has no `s3:ResourceAccount` condition either. Bucket names are global, so
+`ringleader-*` can match a bucket in another AWS account, and that account's bucket policy can name
+this role. Ringleader refuses such a bucket itself. Every request it sends to these buckets,
+except `CreateBucket` and `ListBuckets` (the `s3:ListAllMyBuckets` permission), names this account
+in the `x-amz-expected-bucket-owner` header. S3 answers `Access Denied` when another account owns
+the bucket.
+
+AWS does not offer the header on `CreateBucket` or `ListBuckets`, and those two need none. A
+create fails on a name another account already holds, and a listing returns only this account's
+buckets. AWS does not document what value `s3:ResourceAccount` has for a bucket that does not exist
+yet, so the condition could refuse bucket creation. On every other request, Ringleader's header
+already makes the same check.
 
 **Named**: set `artifact_storage_bucket` to a bucket you created. The grant is bound to that one
 ARN and drops `CreateBucket`, `DeleteBucket` and every write to the bucket's versioning, tags,

@@ -116,18 +116,23 @@ locals {
   # The ingress pair is here for the DNS / HTTPS proxy VM, whose own group has to admit
   # workstation traffic. If you want the strict minimum for IP-level egress alone and no
   # proxy, drop those two -- the actions_granted output will show what you kept.
-  # Artifact storage. The bound here is a NAME PREFIX rather than a region or a VPC, and that is
-  # deliberate on both counts: S3 is global, so a region condition would break a bucket a customer
-  # deliberately placed elsewhere for residency, and a bucket has no VPC. Ringleader compiles the
-  # same prefix (`storagekind.ManagedBucketPrefix`); a landing pad admitting a different one
-  # grants an authority that matches no bucket, and every create fails with a 403 that looks like
-  # a Ringleader bug. Not a variable, on purpose -- it is not the operator's to choose.
+  # Artifact storage. The bound here is a name prefix rather than a region or a VPC, for two
+  # reasons. S3 is global, so a region condition would break a bucket a customer deliberately placed
+  # in another region for residency. And a bucket has no VPC. Ringleader names every bucket it
+  # creates with this same prefix, so a pad that admitted a different one would match no bucket, and
+  # every create would fail with a 403 that looks like a Ringleader bug. It is not a variable,
+  # because the prefix is not the operator's to choose.
   #
-  # `s3:ResourceAccount` is deliberately NOT added on top. The prefix is a global-namespace
-  # pattern, so it could in principle match a bucket in someone else's account -- but reaching one
-  # needs that bucket's OWN policy to name this role as well, which nobody else's does. The
-  # condition key is also not populated uniformly across every S3 call, and one that is absent
-  # denies rather than allows, so adding it buys nothing and can break a create.
+  # `s3:ResourceAccount` is not added on top. Bucket names are global, so the prefix can match a
+  # bucket in another account, and that account's bucket policy can name this role. Ringleader
+  # refuses such a bucket itself. Every request it sends to these buckets, except CreateBucket and
+  # ListBuckets (the s3:ListAllMyBuckets permission), names this account in the
+  # x-amz-expected-bucket-owner header. S3 answers Access Denied when another account owns the
+  # bucket. AWS does not offer the header on those two requests, and they need none. A create fails
+  # on a name another account already holds, and a listing returns only this account's buckets. AWS
+  # does not document what value the condition key has for a bucket that does not exist yet, so the
+  # condition could refuse a create. On every other request, the header already makes the same
+  # check.
   managed_bucket_prefix = "ringleader-"
 
   # Reading the bucket's own configuration is in BOTH widths. GetEncryptionConfiguration and
