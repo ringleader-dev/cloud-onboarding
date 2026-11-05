@@ -75,23 +75,26 @@ variable "enable_workstation_identities" {
   type        = bool
   default     = true
   description = <<-EOT
-    Let Ringleader attach an EC2 instance profile to a workstation, so the workstation runs
-    as an IAM role (to read one bucket, say). On by default; set false to opt out.
+    Let a workstation run as an IAM role (to read one bucket, say). On by default; set false
+    to opt out.
 
-    It grants the onboarding role iam:PassRole, scoped to roles under
-    workstation_identity_path and to ec2.amazonaws.com only. That is the minimum the feature
-    needs -- RunInstances with an IamInstanceProfile requires the caller to be able to pass
-    that role -- and nothing more; the passable roles are still ones you create under that
-    path, so with no roles there it grants reach over nothing.
+    It grants the onboarding role iam:PassRole on roles under workstation_identity_path, to
+    ec2.amazonaws.com only, so Ringleader can launch a workstation with an instance profile.
+    It also lets Ringleader create, tag and delete roles and instance profiles under that
+    path, attach managed policies to those roles and detach them, and put an instance profile
+    on an existing instance, change it or take it off. It may attach ANY existing managed
+    policy, AdministratorAccess included, so this switch can reach anything in the account.
+    Use an AWS account dedicated to Ringleader, and in a shared account set this to false.
 
-    Set false and the feature fails closed with an AccessDenied; nothing else is affected.
+    Set false and a workstation that runs as a role fails closed with an AccessDenied;
+    nothing else is affected.
   EOT
 }
 
 variable "workstation_identity_path" {
   type        = string
   default     = "/ringleader-workstations/"
-  description = "IAM path the onboarding role may iam:PassRole from, when enable_workstation_identities is set. Put per-workstation roles under this path so nothing else in the account is passable."
+  description = "IAM path of the roles and instance profiles workstations run as, when enable_workstation_identities is set. The onboarding role may pass, create, change and delete roles and instance profiles under this path and nowhere else, so keep roles you do not want Ringleader to change off it."
 }
 
 # --- Egress control (on by default) -------------------------------------------

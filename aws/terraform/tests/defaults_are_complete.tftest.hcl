@@ -190,6 +190,39 @@ run "the_default_role_can_grow_a_root_volume_and_read_its_state" {
   }
 }
 
+# Workstation identities, asserted on the output a customer reads to audit what the role holds. On
+# the defaults the role may create and delete the roles and instance profiles workstations run as,
+# attach managed policies to them, list them, and put a profile on an existing instance. Switched off,
+# it holds no IAM action at all.
+run "the_default_role_can_manage_workstation_identities" {
+  command = plan
+
+  assert {
+    condition = alltrue([for a in [
+      "iam:PassRole -- roles under /ringleader-workstations/, to ec2.amazonaws.com only",
+      "iam:CreateRole", "iam:DeleteRole", "iam:AttachRolePolicy", "iam:DetachRolePolicy",
+      "iam:CreateInstanceProfile", "iam:DeleteInstanceProfile", "iam:AddRoleToInstanceProfile",
+      "iam:RemoveRoleFromInstanceProfile", "iam:ListRoles", "iam:ListInstanceProfiles",
+      "ec2:AssociateIamInstanceProfile", "ec2:ReplaceIamInstanceProfileAssociation",
+      "ec2:DisassociateIamInstanceProfile", "ec2:DescribeIamInstanceProfileAssociations",
+    ] : contains(output.actions_granted, a)])
+    error_message = "actions_granted on the defaults lacks one of the actions that create, attach, list or delete a workstation's IAM role and instance profile, or that put the profile on an instance."
+  }
+}
+
+run "workstation_identities_off_grants_no_iam_action" {
+  command = plan
+
+  variables {
+    enable_workstation_identities = false
+  }
+
+  assert {
+    condition     = length([for a in output.actions_granted : a if startswith(a, "iam:") || strcontains(a, "IamInstanceProfile")]) == 0
+    error_message = "enable_workstation_identities = false still grants an IAM or instance-profile action, so a customer who opted out of workstation identities still lets Ringleader change IAM in their account."
+  }
+}
+
 # Flow logs are the one network piece that is OFF by default, and on purpose: they bill for every GB
 # CloudWatch Logs ingests and stores, and they grant Ringleader nothing, so a customer who never asked
 # for them must not start paying. Asserted on the resources as well as the variable, so a count that
@@ -249,7 +282,7 @@ run "flow_logs_record_every_connection_for_a_year" {
 
   assert {
     condition     = aws_iam_role.flow_logs[0].path == null || aws_iam_role.flow_logs[0].path == "/"
-    error_message = "The delivery role is not at the default path. Under workstation_identity_path the iam:PassRole grant for workstation identities would reach it."
+    error_message = "The delivery role is not at the default path. Under workstation_identity_path the workstation identity grants would reach it, and Ringleader could pass, change or delete it."
   }
 }
 

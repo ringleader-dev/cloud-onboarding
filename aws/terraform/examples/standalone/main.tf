@@ -126,7 +126,7 @@ variable "flow_log_group_name" {
 variable "workstation_identity_path" {
   type        = string
   default     = "/ringleader-workstations/"
-  description = "The IAM path Ringleader may pass workstation roles under."
+  description = "The IAM path Ringleader may create, change, delete and pass workstation roles under."
 }
 
 variable "artifact_storage_bucket" {

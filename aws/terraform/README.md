@@ -35,7 +35,7 @@ output "handoff" { value = module.ringleader_onboarding.handoff }
 | `org_uid` | — | your Ringleader organization id (a UUID) |
 | `role_name` | `ringleader-workstations` | IAM role name (its ARN is the handoff) |
 | `allowed_regions` | `[]` | if non-empty, restrict EC2 actions to these regions |
-| `enable_workstation_identities` | **`true`** | grant `iam:PassRole`, scoped to roles under `workstation_identity_path` and to `ec2.amazonaws.com`, for instance profiles |
+| `enable_workstation_identities` | **`true`** | let Ringleader create and delete IAM roles and instance profiles under `workstation_identity_path`, pass those roles to EC2, and attach any managed policy to them, `AdministratorAccess` included. That can reach anything in the account, so use one dedicated to Ringleader, or `false` in a shared one: [why](../README.md#workstation-identities-need-an-account-of-their-own) |
 | `create_network` | **`true`** | create VPC + public subnet + IGW + security group. All free; the NAT gateway is not |
 | `ssh_source_ranges` | `[]` | inbound-SSH CIDRs. Empty creates **no rule of your own**. Ringleader attaches its own security group admitting TCP 22 and 2222 from any address to the workstations it creates. Set this to reach other instances, or to keep your engineers' CIDRs working when Ringleader cannot create that group |
 | `secondary_ssh_source_ranges` | `null` | CIDRs for the **secondary SSH port** (TCP 2222) that some workstation types run their own SSH daemon on. Unset **mirrors `ssh_source_ranges`**. `[]` creates no rule for the port. You do not supply the port number |

@@ -2,8 +2,10 @@
 
 Run this **once, in your own AWS account**, to let a Ringleader control plane create,
 manage, and tear down **workstation EC2 instances** in your account — your account, your
-bill, your VPC — with only the permissions the workstation lifecycle needs and never
-account admin.
+bill, your VPC. One switch, on by default, lets Ringleader create IAM roles for workstations
+to run as and attach any managed policy to them, which can reach anything in the account. So
+give Ringleader an **AWS account of its own**, or turn that switch off. See
+[workstation identities](#workstation-identities-need-an-account-of-their-own).
 
 Keyless: no IAM user, no access key. Ringleader authenticates with a short-lived,
 Ringleader-signed **OIDC token** whose subject is **your org id**, which your account's
@@ -15,7 +17,7 @@ OIDC provider (or the role).
 | Resource | Purpose |
 |---|---|
 | **IAM OIDC identity provider** | trusts Ringleader's per-org issuer (`<issuer>/org/<org-id>`) with client id `<issuer>/org/<org-id>/aws` |
-| **IAM role** (`ringleader-workstations`) | assumed via `sts:AssumeRoleWithWebIdentity`; trust pins **both** `aud` and `sub` to your org; permissions cover only the EC2 workstation lifecycle + the SSM public-parameter read that resolves an AMI |
+| **IAM role** (`ringleader-workstations`) | assumed via `sts:AssumeRoleWithWebIdentity`; trust pins **both** `aud` and `sub` to your org; permissions cover the EC2 workstation lifecycle, the SSM public-parameter read that resolves an AMI, and the on-by-default features listed below |
 | _optional_ **VPC + public subnet + internet gateway + security group** | a landing pad: egress out (so a workstation can come up), inbound SSH from the CIDRs you name, and — only if you ask — a secondary SSH port |
 | _optional, off by default_ **VPC flow log + CloudWatch Logs group + delivery role** | a record of all traffic in that VPC, kept for 365 days by default. See [flow logs](#optional-flow-logs-for-the-vpc) |
 | _optional, off by default_ **that VPC's default security group, with every rule removed** | AWS creates the group with the VPC, and compliance scans expect it to allow no traffic. See [an empty default security group](#optional-an-empty-default-security-group) |
@@ -56,21 +58,28 @@ The permissions policy's **base** is exactly these four statements — no wildca
   AWS-owned public AMI parameters.
 
 Three features that are **on by default** add statements beside those four, so a role applied on
-the defaults carries fifteen, not four, and both supported paths carry the same fifteen. All are
-one variable away from off, and each is enumerated where it is described rather than here:
-*[egress control](#optional-egress-control)* adds the security-group, subnet and route-table
-writes, two security-group reads, the Elastic-IP actions and
-`ec2:ModifyNetworkInterfaceAttribute`, bounded to your VPC and region; *workstation identities*
-adds one `iam:PassRole`, bounded to roles under `workstation_identity_path` and to
-`ec2.amazonaws.com`; *[artifact storage](#optional-artifact-storage-in-a-bucket-of-yours)* adds
-the S3 bucket and object actions, bounded by ARN to buckets named `ringleader-*` or to the one
-bucket you name, plus the bucket listing on the managed width and the use of this account's KMS
-keys through S3 for those buckets. The `actions_granted` output is read from the same lists the
-policy is built from, so it is the authority on what your role actually holds.
+the defaults carries eighteen, not four, and both supported paths carry the same eighteen. Each is
+one variable away from off, and each is described in its own section:
 
-No `iam:*` unless you opt into per-workstation instance profiles
-(`enable_workstation_identities` / `EnableWorkstationIdentities`, on by default and scoped to
-`iam:PassRole` under one path).
+- *[Egress control](#optional-egress-control)* adds five statements, covering the
+  security-group, subnet and route-table writes, two reads (security-group rules and route
+  tables), the Elastic-IP actions and `ec2:ModifyNetworkInterfaceAttribute`. Where AWS allows it
+  they are bounded to your VPC, the one this module created or the ones you name, and to
+  `allowed_regions` when you set it.
+- *[Workstation identities](#workstation-identities-need-an-account-of-their-own)* adds four
+  statements: `iam:PassRole` to `ec2.amazonaws.com` and the role and instance-profile actions, all
+  bounded to `workstation_identity_path`; two IAM list actions on `*`; and the instance-profile
+  association actions, bounded to `allowed_regions` when you set it.
+- *[Artifact storage](#optional-artifact-storage-in-a-bucket-of-yours)* adds five statements on
+  the default managed width, covering the S3 bucket and object actions, bounded by ARN to buckets
+  named `ringleader-*`, the bucket listing, and the use of this account's KMS keys through S3 for
+  those buckets. Name a bucket of your own and it adds three, bounded to that one bucket.
+
+The `actions_granted` output is read from the same lists the policy is built from, so it is the
+authority on what your role actually holds.
+
+No IAM action is granted except by `enable_workstation_identities` /
+`EnableWorkstationIdentities`, and no action anywhere is a wildcard.
 
 ## Values Ringleader gives you
 
@@ -883,18 +892,54 @@ onboards; retrofitting one means renaming buckets, and `Storage.spec.bucket` can
 the object is created.
 
 **`workstation_identity_path` is not a collision, but give each organization its own.** It is the
-IAM path under which Ringleader may pass roles to workstations, and two organizations left on the
-default share it, so either one's role could pass the other's workstation roles. It is
+IAM path under which Ringleader may create, change, delete and pass workstation roles. Two
+organizations left on the default share it, so either organization's grant could change or delete
+the other's roles. A path of their own stops that, but it does not make the account a boundary
+between them: either one may still attach a policy that reaches all of IAM, as
+[workstation identities](#workstation-identities-need-an-account-of-their-own) says. It is
 `workstation_identity_path` on Terraform, defaulting to `/ringleader-workstations/`, and
 `WORKSTATION_IDENTITY_PATH` on `deploy.sh`, defaulting to `/ringleader/`.
 
 ## Workstations hold no AWS identity by default
 
-A workstation runs with **no instance profile** unless a namespace admin names one as
-`iamInstanceProfile` in the CloudIdentity's `spec.overrideProviderConfig`. A workstation cannot name
-its own. Without one, nothing inside the workstation can act as any IAM principal. Attaching one
-needs `iam:PassRole`, which this module grants only while `enable_workstation_identities` is on, as
-it is by default (`EnableWorkstationIdentities` on the CloudFormation path).
+A workstation runs with **no instance profile** unless a namespace admin gives it one. A workstation
+cannot give itself one. Without one, nothing inside the workstation can act as any IAM principal.
+Attaching one needs `iam:PassRole`, which this module grants only while
+`enable_workstation_identities` is on, as it is by default (`EnableWorkstationIdentities` on the
+CloudFormation path).
+
+### Workstation identities need an account of their own
+
+With `enable_workstation_identities` on, Ringleader's role may do more than pass a role you made.
+It may also:
+
+- create, tag and delete IAM roles and instance profiles under `workstation_identity_path` in this
+  account, and add a role to an instance profile or remove it.
+- attach a managed policy to one of those roles and detach it.
+- list every role and instance profile in the account (`iam:ListRoles`, `iam:ListInstanceProfiles`).
+  IAM does not let a policy limit these two to a path. A listing shows each role's trust policy, not
+  its permissions.
+- put an instance profile on an instance, running or stopped, change it and take it off, and read
+  which one an instance carries. Like the mutating lifecycle actions, these reach every instance in
+  the account, bounded to `allowed_regions` (`AllowedRegion`) when you set it.
+
+Ringleader does not create these roles yet. The grant is for a feature that will create a
+workstation's role for a namespace admin, instead of the admin creating it by hand and naming its
+instance profile as `iamInstanceProfile` in the CloudIdentity's `spec.overrideProviderConfig`. That
+override keeps working. The actions are granted now so that using them later does not ask you to
+apply this again.
+
+**Nothing limits which managed policy is attached, `AdministratorAccess` included**, and IAM has no
+condition key that limits the trust policy a new role is created with. So this switch can reach
+anything in the account. That is deliberate. A permissions boundary or a list of allowed policies
+would cap what a namespace admin may give a workstation, and in an account dedicated to Ringleader
+the account is already the cap. It matches the other clouds, where the same switch lets Ringleader grant
+any role in the project or resource group. Roles you created under the path by hand are within reach
+too.
+
+**Use an AWS account dedicated to Ringleader.** In an account that holds anything else, set
+`enable_workstation_identities = false` (`WORKSTATION_IDENTITIES=false` on `deploy.sh`). Then no
+workstation can run as a role at all, because `iam:PassRole` is behind the same switch.
 
 ## Notes
 

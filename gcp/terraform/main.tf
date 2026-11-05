@@ -221,9 +221,10 @@ resource "google_project_iam_member" "identity" {
 #
 # This is the broadest grant the module makes, and the one default most worth a deliberate
 # decision. roles/resourcemanager.projectIamAdmin lets the holder grant any role in this
-# project to any principal, including roles/owner to itself -- inherent, since setting a role
-# binding on a project is project-IAM administration. It is why this onboarding asks for a
-# project dedicated to Ringleader workstations, and in a shared project you should set
+# project to any principal, including roles/owner to itself. An IAM condition on
+# iam.googleapis.com/modifiedGrantsByRole could cap which roles it grants, but the cap would also
+# limit what a workstation may be given. So this onboarding asks for a project dedicated to
+# Ringleader workstations, and in a shared project you should set
 # enable_workstation_identities = false.
 #
 # You can also get runtime identities without it: create the service accounts and their role

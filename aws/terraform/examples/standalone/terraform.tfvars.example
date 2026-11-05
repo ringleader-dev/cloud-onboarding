@@ -68,9 +68,10 @@ ssh_source_ranges = []
 # also what lets Ringleader create the security group that admits SSH to its workstations.
 # enable_egress_control = false
 
-# Let Ringleader attach an instance profile to a workstation, so it runs as an IAM role.
-# Grants iam:PassRole scoped to roles under /ringleader-workstations/ and to ec2 only -- with
-# no roles under that path it reaches nothing.
+# Let a workstation run as an IAM role. Lets Ringleader create and delete roles and instance
+# profiles under /ringleader-workstations/ and attach ANY managed policy to them,
+# AdministratorAccess included, so use an AWS account dedicated to Ringleader. In a shared
+# account, uncomment this.
 # enable_workstation_identities = false
 
 # WHICH RANGE THIS REGION TAKES. Required whenever the landing pad is created (above) and you

@@ -67,9 +67,10 @@ variable "enable_workstation_identities" {
 
     This is the one default worth a deliberate decision, because it is the broadest grant
     this module makes: roles/resourcemanager.projectIamAdmin can grant any role in this
-    project to any principal, including roles/owner to itself. That is inherent -- setting a
-    role binding is project-IAM administration -- and it is why this onboarding asks for a
-    project dedicated to Ringleader workstations. In a shared project, set this to false.
+    project to any principal, including roles/owner to itself. An IAM condition on
+    iam.googleapis.com/modifiedGrantsByRole could cap which roles it grants, but the cap would
+    also limit what a workstation may be given, so this onboarding asks for a project
+    dedicated to Ringleader workstations instead. In a shared project, set this to false.
 
     Set false and the feature fails closed with a 403; nothing else is affected.
   EOT
