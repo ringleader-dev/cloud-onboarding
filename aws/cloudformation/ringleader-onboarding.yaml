@@ -102,47 +102,36 @@ Parameters:
     Type: String
     Default: ""
     Description: >-
-      A single CIDR allowed to reach the secondary SSH port (TCP 2222) on the workstations
-      security group. Empty creates no rule of your own. deploy.sh defaults it to SshSourceCidr,
-      so the two ports open to the same people unless you say otherwise. Set
-      SECONDARY_SSH_SOURCE_CIDR to "none" there to create no rule for it, or pass this parameter
-      directly when deploying by hand. Ringleader's own security group admits the port either
-      way. Some Ringleader workstation types run their own SSH daemon on that port inside the
-      instance, beside the instance's own sshd on 22, and rl shell dials it instead of 22 for
-      those. Others never use it, and for those the rule is harmless.
+      A single CIDR allowed to reach the secondary SSH port (TCP 2222), which some workstation
+      types run their own SSH daemon on. Empty creates no rule of your own. deploy.sh defaults it
+      to SshSourceCidr. See aws/cloudformation/README.md.
 
   EnableWorkstationIdentities:
     Type: String
     Default: "true"
     AllowedValues: ["true", "false"]
     Description: >-
-      Let a workstation run as an IAM role of yours, by letting Ringleader pass an instance
-      profile to it at launch. On by default. It grants iam:PassRole on roles under
-      WorkstationIdentityPath, to ec2.amazonaws.com only -- with no roles on that path it
-      reaches nothing. Set false and a workstation that names an instance profile fails to
-      launch; nothing else is affected.
+      Let a workstation run as an IAM role. On by default. Ringleader may create, change and
+      delete roles and instance profiles under WorkstationIdentityPath and attach ANY managed
+      policy to them, AdministratorAccess included, so use an AWS account dedicated to
+      Ringleader and set false in a shared one. False: no workstation can run as a role.
 
   WorkstationIdentityPath:
     Type: String
     Default: "/ringleader/"
     Description: >-
-      IAM path the roles a workstation may run as live under. The PassRole grant is bounded to
-      it, so a role outside this path cannot be attached to a workstation whatever it is named.
-      Create the roles you want workstations to use with this Path.
+      IAM path of the roles and instance profiles workstations run as. Every IAM grant but the
+      account-wide listing is bounded to it. Keep roles you do not want Ringleader to change off it.
 
   EnableArtifactStorage:
     Type: String
     Default: "true"
     AllowedValues: ["true", "false"]
     Description: >-
-      Let Ringleader hold artifact payloads -- sealed agent-session transcripts, workflow file
-      outputs, files a workstation publishes -- in an S3 bucket in THIS account rather than in
-      Ringleader's own. On by default. With it off those bytes go to a bucket Ringleader owns,
-      and nothing degrades. Leave ArtifactStorageBucket empty for the managed width (Ringleader
-      creates its own buckets, confined by ARN to names starting ringleader-), or name a bucket
-      of yours for the narrower one. Granting it does nothing on
-      its own -- no payload is written here until a Ringleader namespace declares a Storage
-      object naming a bucket.
+      Let Ringleader hold artifact payloads in an S3 bucket in THIS account rather than its own.
+      On by default. Leave ArtifactStorageBucket empty for buckets Ringleader creates, named
+      ringleader-*, or name one of yours. Writes nothing until a Storage object names a bucket.
+      See aws/README.md.
 
   ArtifactStorageBucketPrefix:
     Type: String
@@ -174,15 +163,10 @@ Parameters:
     Default: "true"
     AllowedValues: ["true", "false"]
     Description: >-
-      Let Ringleader manage the security groups that restrict where your workstations may
-      connect. On by default; set false to opt out. It grants seven security-group actions,
-      nine route-table and subnet writes and ec2:ModifyNetworkInterfaceAttribute, all bounded
-      to EgressVpcId (and to AllowedRegion, if set), plus five Elastic IP actions and two
-      reads that take the region bound alone -- an Elastic IP belongs to no VPC, and EC2
-      Describe actions support no resource-level scoping. Granting it restricts nothing on its own:
-      until you declare an egress policy on a workstation, the places it can connect to do not
-      change. The same security-group actions let Ringleader create the group that admits SSH to
-      its workstations (see SshSourceCidr).
+      Let Ringleader manage the security groups, subnets and route tables that restrict where
+      your workstations may connect, bounded to EgressVpcId where AWS allows it and to
+      AllowedRegion if set. On by default.
+      Restricts nothing until you declare an egress policy. See aws/README.md for every action.
 
   EgressVpcId:
     Type: String
@@ -211,15 +195,9 @@ Parameters:
     Default: "true"
     AllowedValues: ["true", "false"]
     Description: >-
-      Reserve the subnet the DNS / HTTPS proxy VM for Ringleader's hostname-level egress
-      control runs in. On by default; set false to opt out. This creates nothing but an empty
-      subnet and its route table, neither of which AWS bills for; Ringleader builds the VM
-      itself once you declare an Edge naming this subnet as spec.subnet -- and it
-      builds none until you do, because a proxy placed in a subnet it steers would route its
-      own egress into itself. Hand the GatewaySubnetId output back, NOT GovernedSubnetId,
-      which is the workstations'. It is public and in the workstations AZ, both of which are
-      cost decisions: internet ingress is free, while the same bytes through a NAT gateway
-      meter at $0.045/GB, and AWS charges cross-AZ traffic in both directions.
+      Reserve an empty, unbilled public subnet for the egress gateway VM, which Ringleader builds
+      only once an Edge names it as spec.subnet. On by default. Hand back GatewaySubnetId, NOT
+      GovernedSubnetId. See aws/README.md.
 
   GatewaySubnetCidr:
     Type: String
@@ -234,14 +212,9 @@ Parameters:
     Default: "true"
     AllowedValues: ["true", "false"]
     Description: >-
-      Reserve a second subnet -- the one you put the WORKSTATIONS a gateway governs in. On by
-      default; set false to opt out. A gateway steers a whole subnet and serves only the boxes
-      it holds a policy for, so a steered subnet must hold governed boxes and nothing else; the
-      workstations subnet is where every workstation in the VPC goes, governed or not. This
-      subnet is created empty, with NO route table and NO public IPs -- Ringleader claims it by
-      creating its own table, and it refuses a subnet that already carries one. Until a gateway
-      steers it, a box in here has no egress at all, which is the fail-safe direction. AWS does
-      not bill for a subnet.
+      Reserve an empty, unbilled subnet with no route table and no public IPs, for the
+      workstations a gateway governs and nothing else. On by default. A box in it has no egress
+      until a gateway steers it. See aws/README.md.
 
   GovernedSubnetCidr:
     Type: String
@@ -527,6 +500,62 @@ Resources:
                   Condition:
                     StringEquals:
                       "iam:PassedToService": "ec2.amazonaws.com"
+                - !Ref AWS::NoValue
+
+              - !If
+                - WantWorkstationIdentities
+                - Sid: ManageWorkstationIdentities
+                  Effect: Allow
+                  Action:
+                    - "iam:CreateRole"
+                    - "iam:GetRole"
+                    - "iam:DeleteRole"
+                    - "iam:TagRole"
+                    - "iam:UntagRole"
+                    - "iam:ListRoleTags"
+                    - "iam:AttachRolePolicy"
+                    - "iam:DetachRolePolicy"
+                    - "iam:ListAttachedRolePolicies"
+                    - "iam:ListRolePolicies"
+                    - "iam:ListInstanceProfilesForRole"
+                    - "iam:CreateInstanceProfile"
+                    - "iam:GetInstanceProfile"
+                    - "iam:DeleteInstanceProfile"
+                    - "iam:AddRoleToInstanceProfile"
+                    - "iam:RemoveRoleFromInstanceProfile"
+                    - "iam:TagInstanceProfile"
+                    - "iam:UntagInstanceProfile"
+                    - "iam:ListInstanceProfileTags"
+                  Resource:
+                    - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role${WorkstationIdentityPath}*"
+                    - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile${WorkstationIdentityPath}*"
+                - !Ref AWS::NoValue
+
+              - !If
+                - WantWorkstationIdentities
+                - Sid: ListWorkstationIdentities
+                  Effect: Allow
+                  Action:
+                    - "iam:ListRoles"
+                    - "iam:ListInstanceProfiles"
+                  Resource: "*"
+                - !Ref AWS::NoValue
+
+              - !If
+                - WantWorkstationIdentities
+                - Sid: AssociateWorkstationInstanceProfile
+                  Effect: Allow
+                  Action:
+                    - "ec2:AssociateIamInstanceProfile"
+                    - "ec2:ReplaceIamInstanceProfileAssociation"
+                    - "ec2:DisassociateIamInstanceProfile"
+                    - "ec2:DescribeIamInstanceProfileAssociations"
+                  Resource: "*"
+                  Condition: !If
+                    - HasRegionCondition
+                    - StringEquals:
+                        "aws:RequestedRegion": !Ref AllowedRegion
+                    - !Ref AWS::NoValue
                 - !Ref AWS::NoValue
 
               - !If

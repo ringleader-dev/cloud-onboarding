@@ -129,7 +129,15 @@ output "actions_granted" {
     local.region_condition ? ["-- the user-data read above is bounded to ${join(", ", var.allowed_regions)}; the other reads are not"] : [],
     local.lifecycle_actions,
     ["ssm:GetParameter / ssm:GetParameters -- AWS's public image-alias parameters only"],
-    var.enable_workstation_identities ? ["iam:PassRole -- roles under ${var.workstation_identity_path}, to ec2.amazonaws.com only"] : [],
+    var.enable_workstation_identities ? concat(
+      ["iam:PassRole -- roles under ${var.workstation_identity_path}, to ec2.amazonaws.com only"],
+      local.workstation_identity_actions,
+      ["-- the IAM actions above on roles and instance profiles under ${var.workstation_identity_path} in this account, attaching any managed policy, AdministratorAccess included"],
+      local.workstation_identity_list_actions,
+      ["-- the two IAM list actions above read every role and instance profile in this account"],
+      local.workstation_profile_association_actions,
+      local.region_condition ? ["-- the instance-profile association actions above are bounded to ${join(", ", var.allowed_regions)}"] : [],
+    ) : [],
     var.enable_egress_control ? concat(
       local.egress_create_actions,
       local.egress_group_actions,

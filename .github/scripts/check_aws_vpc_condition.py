@@ -53,13 +53,15 @@ KEY = "ec2:Vpc"
 # Each action's own listing in the service reference gives `ec2:Vpc` for none of its resource types,
 # so a condition on it can never match them. Read from that file, not inferred.
 NO_VPC_KEY = frozenset({
-    "AllocateAddress", "CreateRouteTable", "CreateSecurityGroup", "CreateSubnet", "DeleteTags",
-    "DescribeAddresses", "DescribeAvailabilityZones", "DescribeImages", "DescribeInstanceAttribute",
+    "AllocateAddress", "AssociateIamInstanceProfile", "CreateRouteTable", "CreateSecurityGroup",
+    "CreateSubnet", "DeleteTags", "DescribeAddresses", "DescribeAvailabilityZones",
+    "DescribeIamInstanceProfileAssociations", "DescribeImages", "DescribeInstanceAttribute",
     "DescribeInstanceStatus", "DescribeInstanceTypes", "DescribeInstances",
     "DescribeNetworkInterfaces", "DescribeRouteTables", "DescribeSecurityGroupRules",
     "DescribeSecurityGroups", "DescribeSubnets", "DescribeTags", "DescribeVolumes",
-    "DescribeVolumesModifications", "DescribeVpcs", "ModifyVolume", "ReleaseAddress", "StartInstances",
-    "StopInstances", "TerminateInstances",
+    "DescribeVolumesModifications", "DescribeVpcs", "DisassociateIamInstanceProfile", "ModifyVolume",
+    "ReleaseAddress", "ReplaceIamInstanceProfileAssociation", "StartInstances", "StopInstances",
+    "TerminateInstances",
 })
 
 # Each action's own listing gives `ec2:Vpc` for at least one of its resource types.

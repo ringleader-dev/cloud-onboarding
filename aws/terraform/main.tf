@@ -11,11 +11,11 @@
 # All on by default, and each one a variable you can set to false: the landing pad, a NAT
 # gateway and private route table, the public subnet the DNS / HTTPS proxy VM for
 # hostname-level egress control runs in, egress control itself (letting Ringleader manage
-# the security groups that restrict where workstations may connect), and instance profiles
-# for workstations that run as an IAM role.
+# the security groups that restrict where workstations may connect), and workstation IAM
+# roles, which Ringleader does not create yet.
 #
-# The defaults grant what Ringleader needs for the features available today, so turning one
-# on later does not mean a second onboarding pass. Only the NAT gateway costs money; see
+# The defaults grant what Ringleader needs today, and a few actions it will use soon, so turning
+# one on later does not mean a second onboarding pass. Only the NAT gateway costs money; see
 # variables.tf for what each one does and the README for how to switch any of them off.
 #
 # Keyless throughout: no IAM user, no access key. Revoke by removing the OIDC provider
@@ -107,6 +107,66 @@ locals {
     "ec2:ModifyVolume",
     "ec2:CreateTags",
     "ec2:DeleteTags",
+  ]
+
+  # Workstation identities: these let Ringleader create the IAM role a workstation runs as, attach
+  # the managed policies named for it, wrap the role in an instance profile, put that profile on
+  # the instance, and delete all of it when the workstation goes. Granted only when
+  # enable_workstation_identities is set, on roles and instance profiles under
+  # workstation_identity_path in this account. Roles you created there by hand are within reach
+  # too.
+  #
+  # Ringleader does not make these calls yet. They are granted now because a landing pad is
+  # applied once, in your own account, and an action added later would ask you to apply it again.
+  #
+  # Nothing limits which managed policy Ringleader attaches, AdministratorAccess included, and IAM
+  # has no condition key that limits the trust policy a new role is created with. So this grant
+  # can reach anything in the account. That is why this onboarding asks for an AWS account
+  # dedicated to Ringleader, and why a shared account should set enable_workstation_identities to
+  # false. Ringleader deliberately does not get a permissions boundary or an allow-list of
+  # policies. Either would cap what a namespace admin may give a workstation, and in a dedicated
+  # account the account boundary already is the cap.
+  #
+  # AWS checks iam:PassRole on the role for AddRoleToInstanceProfile too, as a pass to EC2. The
+  # PassWorkstationInstanceProfileRole statement below grants exactly that.
+  workstation_identity_actions = [
+    "iam:CreateRole",
+    "iam:GetRole",
+    "iam:DeleteRole",
+    "iam:TagRole",
+    "iam:UntagRole",
+    "iam:ListRoleTags",
+    "iam:AttachRolePolicy",
+    "iam:DetachRolePolicy",
+    "iam:ListAttachedRolePolicies",
+    "iam:ListRolePolicies",
+    "iam:ListInstanceProfilesForRole",
+    "iam:CreateInstanceProfile",
+    "iam:GetInstanceProfile",
+    "iam:DeleteInstanceProfile",
+    "iam:AddRoleToInstanceProfile",
+    "iam:RemoveRoleFromInstanceProfile",
+    "iam:TagInstanceProfile",
+    "iam:UntagInstanceProfile",
+    "iam:ListInstanceProfileTags",
+  ]
+
+  # These let Ringleader find the roles and instance profiles it made, to delete any left behind.
+  # IAM does not let a policy limit these two to a path. They list every role and instance profile
+  # in the account, each role with its trust policy, and never a role's permissions.
+  workstation_identity_list_actions = [
+    "iam:ListRoles",
+    "iam:ListInstanceProfiles",
+  ]
+
+  # Putting an instance profile on an existing instance, changing it, and taking it off. Like the
+  # lifecycle actions above they reach every instance and take the same region bound, and so does
+  # the read that reports which profile an instance carries.
+  workstation_profile_association_actions = [
+    "ec2:AssociateIamInstanceProfile",
+    "ec2:ReplaceIamInstanceProfileAssociation",
+    "ec2:DisassociateIamInstanceProfile",
+    "ec2:DescribeIamInstanceProfileAssociations",
   ]
 
   # Egress control: creating and maintaining the security groups that carry a workstation's
@@ -510,7 +570,7 @@ data "aws_iam_policy_document" "permissions" {
   }
 
   # Pass an instance-profile role to a workstation (runtime identities). On by default, and
-  # scoped to roles under workstation_identity_path -- with no roles there it reaches nothing.
+  # scoped to roles under workstation_identity_path.
   dynamic "statement" {
     for_each = var.enable_workstation_identities ? [1] : []
     content {
@@ -522,6 +582,50 @@ data "aws_iam_policy_document" "permissions" {
         test     = "StringEquals"
         variable = "iam:PassedToService"
         values   = ["ec2.amazonaws.com"]
+      }
+    }
+  }
+
+  # Create, change and delete the roles and instance profiles workstations run as. See
+  # workstation_identity_actions for what this can reach.
+  dynamic "statement" {
+    for_each = var.enable_workstation_identities ? [1] : []
+    content {
+      sid     = "ManageWorkstationIdentities"
+      effect  = "Allow"
+      actions = local.workstation_identity_actions
+      resources = [
+        "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role${var.workstation_identity_path}*",
+        "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:instance-profile${var.workstation_identity_path}*",
+      ]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.enable_workstation_identities ? [1] : []
+    content {
+      sid       = "ListWorkstationIdentities"
+      effect    = "Allow"
+      actions   = local.workstation_identity_list_actions
+      resources = ["*"]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.enable_workstation_identities ? [1] : []
+    content {
+      sid       = "AssociateWorkstationInstanceProfile"
+      effect    = "Allow"
+      actions   = local.workstation_profile_association_actions
+      resources = ["*"]
+
+      dynamic "condition" {
+        for_each = local.region_condition ? [1] : []
+        content {
+          test     = "StringEquals"
+          variable = "aws:RequestedRegion"
+          values   = var.allowed_regions
+        }
       }
     }
   }

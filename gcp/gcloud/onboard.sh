@@ -183,9 +183,10 @@ echo ">> granted $IDENTITY_ROLE  (identities for Ringleader's own appliances)"
 # the broadest grant here:
 #
 #   Worth knowing before you enable it: roles/resourcemanager.projectIamAdmin can grant any role
-#   in this project to any principal, including roles/owner to itself. That is inherent --
-#   setting a role binding is project-IAM administration -- so use it only in a project
-#   dedicated to Ringleader workstations.
+#   in this project to any principal, including roles/owner to itself. An IAM condition on
+#   iam.googleapis.com/modifiedGrantsByRole could cap which roles it grants, but the cap would
+#   also limit what a workstation may be given, so use it only in a project dedicated to
+#   Ringleader workstations.
 #
 # Set WORKSTATION_IDENTITIES=0 and the feature fails closed with a 403. To run workstations as
 # your own service accounts without it, create them yourself and name one in the CloudIdentity's

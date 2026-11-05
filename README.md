@@ -2,8 +2,10 @@
 
 Infrastructure-as-Code you run **once, in your own cloud account**, so a Ringleader
 control plane can create, manage, and tear down **workstation VMs** inside your
-account — your subscription, your project, your bill, your network — with only the
-**minimum permissions** it needs and never broad account admin.
+account: your subscription, your project, your bill, your network. It grants the
+permissions those workstations need and not account admin, except through one switch
+that is on by default. See
+[what a workstation itself can do](#what-a-workstation-itself-can-do-in-your-cloud).
 
 You apply a small set of assets, then hand a few identifiers back to Ringleader. You
 never operate Ringleader's control plane yourself.
@@ -43,8 +45,11 @@ account. More on the trust model: <https://docs.ringleader.dev/cloud-onboarding/
 | **[AWS](aws/)** | one **account** (optionally one **region**) | an **IAM OIDC provider** + a least-privilege **IAM role**, assumed keyless via `AssumeRoleWithWebIdentity` | [`terraform/`](aws/terraform/), [`cloudformation/`](aws/cloudformation/) |
 
 Each onboarding grants Ringleader a scoped identity inside **one billing/RBAC
-boundary** and nothing else — no `owner`/`editor` on GCP, narrower than **Contributor**
-on Azure, no account admin on AWS. All three are **keyless**.
+boundary** and nothing else: no `owner`/`editor` on GCP, narrower than **Contributor**
+on Azure, no account admin on AWS. On all three clouds one switch, on by default, lets
+Ringleader grant more than that inside the boundary; see
+[what a workstation itself can do](#what-a-workstation-itself-can-do-in-your-cloud). All three
+are **keyless**.
 
 Nothing you hand back is a secret: a service-account email, a workload identity
 provider's resource name, an application client id, a tenant id are all public
@@ -86,12 +91,14 @@ that account holds (Google grants it `roles/editor` unless your organization enf
 
 Letting Ringleader **create** those per-user identities and **bind roles** to them is a
 separate switch, `enable_workstation_identities`, and it costs real permissions: on GCP the
-power to administer project IAM, on Azure the power to create role assignments, on AWS
-`iam:PassRole` under one path. It is **on by default**, along with everything else — see
-*What is on by default* below. **On GCP it is the one to think hardest about**, because
-`roles/resourcemanager.projectIamAdmin` can grant any role in the project to any principal;
-that is why this onboarding asks for a project dedicated to Ringleader workstations, and why
-you should set it to `false` in a project that holds anything else.
+power to administer project IAM, on Azure the power to create role assignments, on AWS the
+power to create IAM roles under one path and attach any managed policy to them. It is **on by
+default**, along with everything else: see *What is on by default* below. **On GCP and AWS it
+is the one to think hardest about.** On GCP, `roles/resourcemanager.projectIamAdmin` can grant
+any role in the project to any principal. On AWS, a role Ringleader may create can carry
+`AdministratorAccess`. That is why this onboarding asks for a project or AWS account dedicated
+to Ringleader workstations, and why you should set it to `false` in one that holds anything
+else.
 
 ## Reaching your workstations
 
@@ -309,10 +316,13 @@ Everything else is on.
 
 Two of these deserve a deliberate decision rather than a default:
 
-- **`enable_workstation_identities` on GCP** grants `roles/resourcemanager.projectIamAdmin`,
-  which can grant any role in the project to any principal — including `roles/owner` to
-  itself. That is inherent to binding roles, not an artifact of how this is written. It is why
-  the onboarding asks for a **dedicated project**; in a shared one, set it to `false`.
+- **`enable_workstation_identities` on GCP and AWS.** On GCP it grants
+  `roles/resourcemanager.projectIamAdmin`, which can grant any role in the project to any
+  principal, including `roles/owner` to itself. On AWS it lets Ringleader create IAM roles
+  under one path and attach any managed policy to them, `AdministratorAccess` included. On
+  either cloud a condition could cap that, but the cap would also limit what a workstation may
+  be given, so the onboarding asks for a **dedicated project or AWS account** instead. In a
+  shared one, set it to `false`.
 - **`allow_internal_traffic` on GCP** widens rather than grants. Off, two workstations cannot
   reach each other at all and a compromised box cannot scan its neighbours. On, they can —
   matching what Azure's default NSG rules already allow.

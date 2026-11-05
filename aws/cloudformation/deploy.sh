@@ -76,8 +76,10 @@
 #   SUBNET_CIDR  override the workstations subnet; empty derives
 #                the first /20 of the VPC range                  (default: empty)
 #   WORKSTATION_IDENTITIES  true|false: let a workstation run as an
-#                IAM role of yours (iam:PassRole, bounded to the
-#                path below)                                     (default: true)
+#                IAM role that Ringleader may create, attach any
+#                managed policy to and delete, under the path
+#                below. Use a dedicated account; false in a
+#                shared one                                      (default: true)
 #   WORKSTATION_IDENTITY_PATH  the IAM path those roles live under (default: /ringleader/)
 #   ARTIFACT_STORAGE  true|false: let Ringleader hold artifact
 #                payloads in an S3 bucket in THIS account         (default: true)

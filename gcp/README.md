@@ -200,11 +200,11 @@ default here most worth a deliberate decision, because it is not free:
 | bind roles to it on the project | `roles/resourcemanager.projectIamAdmin` |
 
 `roles/resourcemanager.projectIamAdmin` can grant any role in the project to any principal,
-including `roles/owner` to itself. That is inherent — setting a role binding *is* project-IAM
-administration — and it is exactly why this onboarding asks for a **project dedicated to
-Ringleader workstations**. In a project that holds anything else, set
-`enable_workstation_identities = false` (or `WORKSTATION_IDENTITIES=0`); the feature then
-fails closed with a `403` and nothing else changes.
+including `roles/owner` to itself. An IAM condition on `iam.googleapis.com/modifiedGrantsByRole`
+could cap which roles it grants, but the cap would also limit what a workstation may be given.
+That is why this onboarding asks for a **project dedicated to Ringleader workstations** instead.
+In a project that holds anything else, set `enable_workstation_identities = false` (or
+`WORKSTATION_IDENTITIES=0`). The feature then fails closed with a `403` and nothing else changes.
 
 You can get the same end result without granting either: create the service accounts and
 their role bindings yourself, and name one in the CloudIdentity's `spec.serviceAccount`,

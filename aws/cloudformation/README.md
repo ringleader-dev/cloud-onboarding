@@ -60,8 +60,13 @@ required when `CreateNetwork=true`), `VpcCidr` and `SubnetCidr` (both empty — 
 derived from `RegionIndex` when unset), `SshSourceCidr`, `SecondarySshSourceCidr`.
 
 Two more grant capabilities on the role rather than on the network. `EnableWorkstationIdentities`
-(`true`) grants `iam:PassRole` on roles under `WorkstationIdentityPath` (`/ringleader/`), to
-`ec2.amazonaws.com` only, so a workstation can run as an IAM role of yours.
+(`true`) lets a workstation run as an IAM role. It grants `iam:PassRole` on roles under
+`WorkstationIdentityPath` (`/ringleader/`), to `ec2.amazonaws.com` only. It also lets Ringleader
+create, change and delete roles and instance profiles under that path, and attach any managed
+policy to those roles, `AdministratorAccess` included. It may list every role and instance
+profile in the account, and put an instance profile on an existing instance. That can reach
+anything in the account, so deploy this stack into an AWS account dedicated to Ringleader, or set
+it `false` in a shared one. `aws/README.md` lists the actions and what they are for.
 `EnableArtifactStorage` (`true`) lets Ringleader hold artifact payloads in an S3 bucket in this
 account rather than in its own; `ArtifactStorageBucket` (empty) takes the managed width, where
 Ringleader creates and converges its own buckets bounded by ARN to names beginning
