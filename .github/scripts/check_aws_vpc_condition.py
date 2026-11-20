@@ -59,9 +59,9 @@ NO_VPC_KEY = frozenset({
     "DescribeInstanceStatus", "DescribeInstanceTypes", "DescribeInstances",
     "DescribeNetworkInterfaces", "DescribeRouteTables", "DescribeSecurityGroupRules",
     "DescribeSecurityGroups", "DescribeSubnets", "DescribeTags", "DescribeVolumes",
-    "DescribeVolumesModifications", "DescribeVpcs", "DisassociateIamInstanceProfile", "ModifyVolume",
-    "ReleaseAddress", "ReplaceIamInstanceProfileAssociation", "StartInstances", "StopInstances",
-    "TerminateInstances",
+    "DescribeVolumesModifications", "DescribeVpcs", "DisassociateIamInstanceProfile",
+    "ModifyInstanceCpuOptions", "ModifyVolume", "ReleaseAddress",
+    "ReplaceIamInstanceProfileAssociation", "StartInstances", "StopInstances", "TerminateInstances",
 })
 
 # Each action's own listing gives `ec2:Vpc` for at least one of its resource types.

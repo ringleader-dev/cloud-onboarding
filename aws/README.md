@@ -41,19 +41,28 @@ The permissions policy's **base** is exactly these four statements — no wildca
   this grant did not already permit. **Leave `allowed_regions` empty and there is no bound**, on
   this read or on the mutating statement below,
 - `ec2:RunInstances` / `TerminateInstances` / `StartInstances` / `StopInstances` /
-  `ModifyInstanceAttribute` / `ModifyVolume` / `CreateTags` / `DeleteTags`, optionally bounded to
-  one region via `aws:RequestedRegion`. `ModifyInstanceAttribute` is what a machine **resize**
-  issues on the stopped instance; the same API also sets user-data and IAM has no condition key
-  telling the two apart, but the role already holds `RunInstances`, which can launch an instance
-  with any user-data at all, so it widens nothing this grant did not already permit. `ModifyVolume`
-  grows a workstation's **root volume** without replacing it, and EC2 refuses to make a volume
-  smaller. It can also change a volume's type, IOPS, throughput and Multi-Attach setting, and so
-  what the volume costs. `RunInstances` can already launch a volume of any type, IOPS or throughput.
-  The role holds no `ec2:AttachVolume`, so a Multi-Attach volume cannot be attached to a second
-  instance. Ringleader calls `ModifyVolume` when you raise a workstation's `rootVolumeGiB`, and
-  without it EC2 refuses the grow. Ringleader does not call `DescribeVolumesModifications` yet. It
-  reports a grow's state, including `completed`, and it is granted now so that using it later does
-  not ask you to apply this again,
+  `ModifyInstanceAttribute` / `ModifyVolume` / `ModifyInstanceCpuOptions` / `CreateTags` /
+  `DeleteTags`, optionally bounded to one region via `aws:RequestedRegion`.
+  `ModifyInstanceAttribute` is what a machine **resize** issues on the stopped instance. The same
+  API also sets user-data, and IAM has no condition key telling the two apart. The role already
+  holds `RunInstances`, which can launch an instance with any user-data at all, so it widens nothing
+  this grant did not already permit. `ModifyVolume` grows a workstation's **root volume** without
+  replacing it, and EC2 refuses to make a volume smaller. It can also change a volume's type, IOPS,
+  throughput and Multi-Attach setting, and so what the volume costs. `RunInstances` can already
+  launch a volume of any type, IOPS or throughput. The role holds no `ec2:AttachVolume`, so a
+  Multi-Attach volume cannot be attached to a second instance. Ringleader calls `ModifyVolume` when
+  you raise a workstation's `rootVolumeGiB`, and without it EC2 refuses the grow. Ringleader does
+  not call `DescribeVolumesModifications` yet. It reports a grow's state, including `completed`, and
+  it is granted now so that using it later does not ask you to apply this again.
+  `ModifyInstanceCpuOptions` turns **nested virtualization** on or off for an existing workstation,
+  and EC2 accepts it only on a stopped instance. It can also change how many CPU cores and threads
+  per core are active, never above the instance type's default. EC2 charges the same for the
+  instance either way. The exception is Windows or SQL Server from a license-included image, whose
+  license can be billed per active vCPU. `RunInstances` can already launch an instance with any of
+  these CPU options. The role can also stop, terminate or rewrite the user-data of any instance this
+  action reaches, so `ModifyInstanceCpuOptions` widens nothing this grant did not permit. Ringleader
+  does not call it yet, so changing `nestedVirtualization` on an existing workstation still means
+  recreating it. It is granted now so that using it later does not ask you to apply this again,
 - `ssm:GetParameters` / `GetParameter` on `arn:aws:ssm:*::parameter/aws/service/*` — the
   AWS-owned public AMI parameters.
 

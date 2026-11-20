@@ -98,6 +98,20 @@ locals {
   # describe_actions above and reports a modification's state, and EC2 accepts no second change to a
   # volume until the first reaches completed. It is granted now because a landing pad is applied
   # once, in your own account, and an action added later would ask you to apply it again.
+  #
+  # ModifyInstanceCpuOptions turns NESTED VIRTUALIZATION on or off for an existing workstation. EC2
+  # accepts it only on a stopped instance, so using it means stopping the workstation, turning
+  # nested virtualization on or off and starting it again. The same call can also change how many
+  # CPU cores and threads per core are active, never above the instance type's default. EC2 charges
+  # the same for the instance either way. The exception is Windows or SQL Server from a
+  # license-included image, whose license can be billed per active vCPU. RunInstances can already
+  # launch an instance with any of these CPU options. The role can also stop, terminate or rewrite
+  # the user-data of any instance this action reaches, so ModifyInstanceCpuOptions widens nothing
+  # this grant did not permit. It takes the same region bound as the actions around it.
+  #
+  # Ringleader does not call ModifyInstanceCpuOptions yet, so changing nestedVirtualization on an
+  # existing workstation still means recreating it. It is granted now because a landing pad is
+  # applied once, in your own account, and an action added later would ask you to apply it again.
   lifecycle_actions = [
     "ec2:RunInstances",
     "ec2:TerminateInstances",
@@ -105,6 +119,7 @@ locals {
     "ec2:StopInstances",
     "ec2:ModifyInstanceAttribute",
     "ec2:ModifyVolume",
+    "ec2:ModifyInstanceCpuOptions",
     "ec2:CreateTags",
     "ec2:DeleteTags",
   ]

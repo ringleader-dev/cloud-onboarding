@@ -190,6 +190,17 @@ run "the_default_role_can_grow_a_root_volume_and_read_its_state" {
   }
 }
 
+# Turning nested virtualization on or off for an existing workstation, asserted on the same output.
+# The action reaches it through lifecycle_actions, the list the policy is built from.
+run "the_default_role_can_change_nested_virtualization" {
+  command = plan
+
+  assert {
+    condition     = contains(output.actions_granted, "ec2:ModifyInstanceCpuOptions")
+    error_message = "actions_granted does not list ec2:ModifyInstanceCpuOptions on the defaults, so a later Ringleader that turns nestedVirtualization on or off for an existing workstation would ask every customer to apply this module again."
+  }
+}
+
 # Workstation identities, asserted on the output a customer reads to audit what the role holds. On
 # the defaults the role may create and delete the roles and instance profiles workstations run as,
 # attach managed policies to them, list them, and put a profile on an existing instance. Switched off,
