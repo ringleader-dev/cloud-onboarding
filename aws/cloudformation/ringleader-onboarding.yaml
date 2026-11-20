@@ -476,6 +476,7 @@ Resources:
                   - "ec2:StopInstances"
                   - "ec2:ModifyInstanceAttribute"
                   - "ec2:ModifyVolume"
+                  - "ec2:ModifyInstanceCpuOptions"
                   - "ec2:CreateTags"
                   - "ec2:DeleteTags"
                 Resource: "*"
